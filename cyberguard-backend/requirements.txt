@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+pydantic
+tldextract
+requests
+python-multipart
+scikit-learn
+joblib
+PyJWT
+Pillow
+numpy
+opencv-python-headless

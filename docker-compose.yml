@@ -1,0 +1,21 @@
+services:
+  backend:
+    build: ./cyberguard-backend
+    ports:
+      - "8000:8000"
+    environment:
+      CYBERGUARD_JWT_SECRET: ${CYBERGUARD_JWT_SECRET:-change-this-in-production}
+      CYBERGUARD_FRONTEND_ORIGINS: http://localhost:5173
+      CYBERGUARD_DB_PATH: /data/cyberguard.db
+    volumes:
+      - cyberguard-data:/data
+
+  frontend:
+    build: ./cyberguard-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+volumes:
+  cyberguard-data:
