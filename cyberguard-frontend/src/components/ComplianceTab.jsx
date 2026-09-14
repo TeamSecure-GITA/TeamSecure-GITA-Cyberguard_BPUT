@@ -32,10 +32,11 @@ export default function ComplianceTab({ accessToken }) {
   const [mitreMappings, setMitreMappings] = useState([]);
 
   useEffect(() => {
+    const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
     const config = { headers: { Authorization: `Bearer ${accessToken}` } };
     Promise.all([
-      axios.get('http://127.0.0.1:8000/api/v1/compliance/controls', config),
-      axios.get('http://127.0.0.1:8000/api/v1/compliance/mitre', config),
+      axios.get(`${apiBaseUrl}/api/v1/compliance/controls`, config),
+      axios.get(`${apiBaseUrl}/api/v1/compliance/mitre`, config),
     ]).then(([controls, mitre]) => {
       setComplianceData(controls.data.controls.map((item) => ({ ...item, description: item.evidence, icon: item.status === 'Compliant' ? CheckCircle2 : AlertTriangle, color: item.status === 'Compliant' ? 'text-emerald-400' : 'text-amber-400' })));
       setMitreMappings(mitre.data.mappings);

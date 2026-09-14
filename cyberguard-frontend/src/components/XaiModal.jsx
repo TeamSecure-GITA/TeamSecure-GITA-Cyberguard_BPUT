@@ -65,7 +65,7 @@ export default function XaiModal({ incident, onClose, userRole, accessToken }) {
 
   const executeAction = async (actionId, label) => {
     try {
-      await axios.post('http://127.0.0.1:8000/api/v1/response/execute', {
+      await axios.post(`${apiBaseUrl}/api/v1/response/execute`, {
         incident_id: incident.id,
         action_id: actionId,
         target: incident.target,

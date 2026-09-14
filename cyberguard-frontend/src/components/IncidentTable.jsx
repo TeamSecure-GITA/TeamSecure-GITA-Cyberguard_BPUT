@@ -17,6 +17,8 @@ const getSeverityBadge = (level) => {
   }
 };
 
+const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+
 export default function IncidentTable({ incidents = [], accessToken, onRefresh, onSelectIncident, initialSearch = '' }) {
   const [search, setSearch] = useState(initialSearch);
   const [status, setStatus] = useState('');
@@ -24,14 +26,14 @@ export default function IncidentTable({ incidents = [], accessToken, onRefresh, 
   const [expanded, setExpanded] = useState(null);
   useEffect(() => setSearch(initialSearch), [initialSearch]);
   const visibleIncidents = useMemo(() => incidents.filter((incident) => {
-    const matchesSearch = !search || `${incident.id} ${incident.category} ${incident.source}`.toLowerCase().includes(search.toLowerCase());
+    const matchesSearch = !search || `${incident.id} ${incident.category} ${incident.source} ${incident.campaignId || ''} ${incident.fingerprint || ''}`.toLowerCase().includes(search.toLowerCase());
     return matchesSearch && (!status || incident.status === status);
   }), [incidents, search, status]);
 
   const updateIncident = async (incident, nextStatus) => {
     setSaving(incident.database_id);
     try {
-      await axios.patch(`http://127.0.0.1:8000/api/v1/incidents/${incident.database_id}`, { status: nextStatus }, { headers: { Authorization: `Bearer ${accessToken}` } });
+      await axios.patch(`${apiBaseUrl}/api/v1/incidents/${incident.database_id}`, { status: nextStatus }, { headers: { Authorization: `Bearer ${accessToken}` } });
       onRefresh?.();
     } finally {
       setSaving(null);
@@ -45,11 +47,11 @@ export default function IncidentTable({ incidents = [], accessToken, onRefresh, 
             <Terminal size={20} className="text-cyan-400" /> Live Threat Stream & Incident Response
           </h3>
           <p className="text-xs text-slate-400">
-            Real-time automated detection, risk scoring, and XAI assessment
+            Real-time automated detection, risk scoring, Campaign DNA correlation, and XAI assessment
           </p>
         </div>
         <div className="incident-tools">
-          <label className="incident-search"><Search size={13} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search incidents, IOC, URL..." /></label>
+          <label className="incident-search"><Search size={13} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search incidents, Campaign, DNA, IOC..." /></label>
           <div className="flex items-center gap-2">
             <select value={status} onChange={(event) => setStatus(event.target.value)} className="bg-slate-950/60 border border-slate-700 rounded-md px-2 py-1 text-[10px] text-slate-300">
               <option value="">All statuses</option><option>New</option><option>Investigating</option><option>Contained</option><option>Mitigated</option><option>Closed</option>
@@ -66,6 +68,8 @@ export default function IncidentTable({ incidents = [], accessToken, onRefresh, 
               <th className="p-4">Incident ID</th>
               <th className="p-4">Timestamp</th>
               <th className="p-4">Source / Entity</th>
+              <th className="p-4">Campaign ID</th>
+              <th className="p-4">Threat DNA</th>
               <th className="p-4">Target / Service</th>
               <th className="p-4">Threat Category</th>
               <th className="p-4">Risk Severity</th>
@@ -78,10 +82,31 @@ export default function IncidentTable({ incidents = [], accessToken, onRefresh, 
               <React.Fragment key={inc.id}><tr className="hover:bg-slate-800/40 transition-colors text-slate-200">
                 <td className="p-4 font-mono text-cyan-400 font-semibold">{inc.id}</td>
                 <td className="p-4 text-xs text-slate-400">{inc.timestamp}</td>
-                <td className="p-4 font-mono text-xs text-slate-300 truncate max-w-[150px]">
+                <td className="p-4 font-mono text-xs text-slate-300 truncate max-w-[140px]">
                   {inc.source}
                 </td>
-                <td className="p-4 text-xs text-slate-400 truncate max-w-[150px]">
+                <td className="p-4 font-mono text-xs">
+                  {inc.campaignId ? (
+                    <span className="px-2 py-0.5 rounded bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 font-semibold text-[11px]">
+                      {inc.campaignId}
+                    </span>
+                  ) : (
+                    <span className="text-slate-600 text-[11px]">--</span>
+                  )}
+                </td>
+                <td className="p-4 font-mono text-xs">
+                  <div className="flex items-center gap-1.5">
+                    <span className="px-2 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 font-bold text-[11px]">
+                      DNA {inc.dnaScore ?? inc.riskScore}%
+                    </span>
+                    {inc.fingerprint && (
+                      <span className="text-[10px] text-slate-400 font-mono hidden xl:inline">
+                        #{inc.fingerprint.slice(0, 6)}
+                      </span>
+                    )}
+                  </div>
+                </td>
+                <td className="p-4 text-xs text-slate-400 truncate max-w-[130px]">
                   {inc.target}
                 </td>
                 <td className="p-4 text-xs font-medium">{inc.category}</td>
@@ -119,10 +144,10 @@ export default function IncidentTable({ incidents = [], accessToken, onRefresh, 
                     <Eye size={14} /> Analyze XAI
                   </button>
                 </td>
-              </tr>{expanded === inc.id && <tr className="incident-expanded"><td colSpan="8"><div className="incident-detail-grid"><div><span>Why flagged</span><p>{inc.explanation || 'No explanation available.'}</p></div><div><span>Indicators</span><p>{(inc.indicators || []).map((item) => item.name).join(' · ') || 'No extracted indicators.'}</p></div><div><span>Response state</span><p>{inc.status} {inc.assigned_to ? `· assigned to ${inc.assigned_to}` : ''}</p></div></div></td></tr>}</React.Fragment>
+              </tr>{expanded === inc.id && <tr className="incident-expanded"><td colSpan="10"><div className="incident-detail-grid"><div><span>Why flagged</span><p>{inc.explanation || 'No explanation available.'}</p></div><div><span>Indicators</span><p>{(inc.indicators || []).map((item) => item.name).join(' · ') || 'No extracted indicators.'}</p></div><div><span>Threat DNA & Campaign</span><p>{inc.campaignId ? `Campaign: ${inc.campaignId}` : 'Standalone'} · Genome: {inc.fingerprint || 'Pending'}</p></div><div><span>Response state</span><p>{inc.status} {inc.assigned_to ? `· assigned to ${inc.assigned_to}` : ''}</p></div></div></td></tr>}</React.Fragment>
             ))}
             {incidents.length === 0 && (
-              <tr><td colSpan="8" className="p-8 text-center text-xs text-slate-500">No incidents stored yet. Run an inspection to create the first event.</td></tr>
+              <tr><td colSpan="10" className="p-8 text-center text-xs text-slate-500">No incidents stored yet. Run an inspection to create the first event.</td></tr>
             )}
           </tbody>
         </table>

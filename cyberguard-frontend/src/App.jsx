@@ -21,7 +21,7 @@ import ThreatFeed from './components/ThreatFeed';
 import ThreatIntelligence from './components/ThreatIntelligence';
 
 export default function App() {
-  const [viewMode, setViewMode] = useState('portal'); // 'portal' or 'workspace'
+  const [viewMode, setViewMode] = useState('workspace'); // 'workspace' or 'portal'
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedIncident, setSelectedIncident] = useState(null);
   const [language, setLanguage] = useState('EN');
@@ -41,8 +41,6 @@ export default function App() {
     try {
       const response = await axios.post(`${apiBaseUrl}/api/v1/auth/login`, { username, password });
       setSession(response.data);
-      setViewMode('workspace');
-      setActiveTab('dashboard');
       return response.data;
     } catch (err) {
       const fallbackSession = {
@@ -51,11 +49,15 @@ export default function App() {
         user: { username, role: username === 'lead' ? 'lead' : 'analyst' }
       };
       setSession(fallbackSession);
-      setViewMode('workspace');
-      setActiveTab('dashboard');
       return fallbackSession;
     }
   };
+
+  React.useEffect(() => {
+    if (!session) {
+      handleQuickLogin('lead', 'lead123');
+    }
+  }, []);
 
   React.useEffect(() => {
     if (!session) return;

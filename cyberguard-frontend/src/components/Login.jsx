@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import axios from 'axios';
 import { LockKeyhole, LogIn, Shield } from 'lucide-react';
 
+const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+
 export default function Login({ onLogin }) {
   const [username, setUsername] = useState('lead');
   const [password, setPassword] = useState('lead123');
@@ -13,7 +15,7 @@ export default function Login({ onLogin }) {
     setLoading(true);
     setError(null);
     try {
-      const response = await axios.post('http://127.0.0.1:8000/api/v1/auth/login', { username, password });
+      const response = await axios.post(`${apiBaseUrl}/api/v1/auth/login`, { username, password });
       onLogin(response.data);
     } catch (requestError) {
       if (requestError.response?.data?.detail) {

@@ -2,12 +2,14 @@ import React, { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { Bell, Check } from 'lucide-react';
 
+const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+
 export default function NotificationsPanel({ accessToken }) {
   const [items, setItems] = useState([]);
   const [error, setError] = useState(null);
-  const load = useCallback(() => axios.get('http://127.0.0.1:8000/api/v1/notifications', { headers: { Authorization: `Bearer ${accessToken}` } }).then((response) => setItems(response.data.notifications || [])).catch(() => setError('Unable to load notifications.')), [accessToken]);
+  const load = useCallback(() => axios.get(`${apiBaseUrl}/api/v1/notifications`, { headers: { Authorization: `Bearer ${accessToken}` } }).then((response) => setItems(response.data.notifications || [])).catch(() => setError('Unable to load notifications.')), [accessToken]);
   useEffect(() => { load(); }, [load]);
-  const markRead = async (id) => { await axios.patch(`http://127.0.0.1:8000/api/v1/notifications/${id}`, { read: true }, { headers: { Authorization: `Bearer ${accessToken}` } }); load(); };
+  const markRead = async (id) => { await axios.patch(`${apiBaseUrl}/api/v1/notifications/${id}`, { read: true }, { headers: { Authorization: `Bearer ${accessToken}` } }); load(); };
 
   return <section className="bg-cardBg border border-slate-700/60 rounded-xl p-6 shadow-lg">
     <div className="flex items-center justify-between mb-5"><div><p className="eyebrow">Operator inbox</p><h2 className="text-xl font-bold text-white mt-1">Threat Notifications</h2></div><Bell className="text-cyan-400" size={22} /></div>

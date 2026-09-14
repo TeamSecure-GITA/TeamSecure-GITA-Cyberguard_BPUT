@@ -67,3 +67,66 @@ class PsychologyRequest(BaseModel):
 
 class BattleRequest(BaseModel):
     defender_actions: List[str] = []
+
+# New Response Models for Threat Intelligence & Engines
+class DNAVectors(BaseModel):
+    initial_access: str
+    techniques: List[str] = []
+    ioc_types: List[str] = []
+    signals: int = 0
+
+class DNAGenome(BaseModel):
+    fingerprint: str
+    hash: str
+    vectors: DNAVectors
+    similarity_score: int
+
+class DNAResponse(BaseModel):
+    incident_id: int
+    genome: DNAGenome
+
+class CorrelationMatch(BaseModel):
+    incident_id: int
+    score: int
+    reason: str
+
+class CorrelationResponse(BaseModel):
+    campaign_id: str
+    confidence: int
+    related_incidents: List[CorrelationMatch]
+    stage: str
+
+class TimelineEvent(BaseModel):
+    id: str
+    timestamp: str
+    label: str
+    detail: str
+    status: str
+
+class AttackChainResponse(BaseModel):
+    incident_id: int
+    events: List[TimelineEvent]
+
+class ForecastPoint(BaseModel):
+    step: int
+    label: str
+    risk: int
+    confidence: int
+
+class ForecastResponse(BaseModel):
+    baseline: int
+    trend: str
+    forecast: List[ForecastPoint]
+    drivers: List[str]
+
+class ActionImpact(BaseModel):
+    id: str
+    label: str
+    reduction: int
+
+class SimulationResponse(BaseModel):
+    actions: List[ActionImpact]
+    current_risk: int
+    projected_risk: int
+    risk_reduction: int
+    outcome: str
