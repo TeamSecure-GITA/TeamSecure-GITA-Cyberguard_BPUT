@@ -4,6 +4,23 @@ import json
 import os
 import secrets
 import sqlite3
+import sys
+
+# Auto-detect and switch to local .venv if run with system python lacking fastapi/uvicorn
+try:
+    import fastapi  # noqa: F401
+    import uvicorn  # noqa: F401
+except ImportError:
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(backend_dir, ".venv", "bin", "python3"),
+        os.path.join(backend_dir, "venv", "bin", "python3"),
+        os.path.join(os.path.dirname(backend_dir), ".venv", "bin", "python3"),
+    ]
+    venv_python = next((p for p in candidates if os.path.exists(p)), None)
+    if venv_python and sys.executable != venv_python:
+        os.execv(venv_python, [venv_python] + sys.argv)
+
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional

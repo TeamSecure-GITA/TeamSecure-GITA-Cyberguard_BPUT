@@ -253,3 +253,83 @@ textarea:focus, input:focus { box-shadow: 0 0 0 2px rgba(94, 215, 255, .12); }
   .scan-progress-row { flex-direction: column; }
   .intel-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }.intel-select { width: 100%; }.brain-strip { grid-template-columns: 1fr; }.genome-mark { height: 125px; }
 }
+
+/* ==========================================================================
+   CYBERGUARD AI - CYBER RADAR PORTAL & GYROSCOPE ANIMATIONS
+   ========================================================================== */
+
+.cyber-matrix-grid {
+  background-image: 
+    linear-gradient(rgba(6, 182, 212, 0.18) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(6, 182, 212, 0.18) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(circle at 65% 50%, black 20%, transparent 80%);
+}
+
+@keyframes radar-sweep {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes gyro-spin-1 {
+  0% { transform: rotateX(68deg) rotateY(18deg) rotateZ(0deg); }
+  100% { transform: rotateX(68deg) rotateY(18deg) rotateZ(360deg); }
+}
+
+@keyframes gyro-spin-2 {
+  0% { transform: rotateX(68deg) rotateY(-28deg) rotateZ(360deg); }
+  100% { transform: rotateX(68deg) rotateY(-28deg) rotateZ(0deg); }
+}
+
+@keyframes gyro-spin-3 {
+  0% { transform: rotateX(74deg) rotateY(42deg) rotateZ(-30deg); }
+  50% { transform: rotateX(62deg) rotateY(48deg) rotateZ(150deg); }
+  100% { transform: rotateX(74deg) rotateY(42deg) rotateZ(330deg); }
+}
+
+.gyro-ring-1 {
+  animation: gyro-spin-1 16s linear infinite;
+  transform-style: preserve-3d;
+}
+
+.gyro-ring-2 {
+  animation: gyro-spin-2 22s linear infinite;
+  transform-style: preserve-3d;
+}
+
+.gyro-ring-3 {
+  animation: gyro-spin-3 28s ease-in-out infinite;
+  transform-style: preserve-3d;
+}
+
+.gyro-photon-node {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #34d399;
+  box-shadow: 0 0 14px #34d399, 0 0 28px #10b981;
+  top: -4px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.photon-1 {
+  background: #34d399;
+  box-shadow: 0 0 16px #34d399, 0 0 30px #10b981;
+}
+
+.photon-2 {
+  background: #38bdf8;
+  box-shadow: 0 0 16px #38bdf8, 0 0 30px #06b6d4;
+}
+
+.hud-badge {
+  backdrop-filter: blur(12px);
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.hud-badge:hover {
+  transform: scale(1.08) translateY(-2px);
+  box-shadow: 0 0 20px rgba(6, 182, 212, 0.45);
+}

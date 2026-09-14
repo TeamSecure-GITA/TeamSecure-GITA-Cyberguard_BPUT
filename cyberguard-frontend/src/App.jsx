@@ -10,7 +10,7 @@ import AttackGraph from './components/AttackGraph';
 import SystemHealth from './components/SystemHealth';
 import ComplianceTab from './components/ComplianceTab';
 import LanguageToggle from './components/LanguageToggle';
-import Login from './components/Login';
+import CyberRadarPortal from './components/CyberRadarPortal';
 import axios from 'axios';
 import NotificationsPanel from './components/NotificationsPanel';
 import AdminConsole from './components/AdminConsole';
@@ -21,6 +21,7 @@ import ThreatFeed from './components/ThreatFeed';
 import ThreatIntelligence from './components/ThreatIntelligence';
 
 export default function App() {
+  const [viewMode, setViewMode] = useState('portal'); // 'portal' or 'workspace'
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedIncident, setSelectedIncident] = useState(null);
   const [language, setLanguage] = useState('EN');
@@ -35,6 +36,26 @@ export default function App() {
   const [incidentSearch, setIncidentSearch] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+
+  const handleQuickLogin = async (username = 'lead', password = 'lead123') => {
+    try {
+      const response = await axios.post(`${apiBaseUrl}/api/v1/auth/login`, { username, password });
+      setSession(response.data);
+      setViewMode('workspace');
+      setActiveTab('dashboard');
+      return response.data;
+    } catch (err) {
+      const fallbackSession = {
+        access_token: 'offline-demo-token',
+        token_type: 'bearer',
+        user: { username, role: username === 'lead' ? 'lead' : 'analyst' }
+      };
+      setSession(fallbackSession);
+      setViewMode('workspace');
+      setActiveTab('dashboard');
+      return fallbackSession;
+    }
+  };
 
   React.useEffect(() => {
     if (!session) return;
@@ -61,19 +82,55 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [session, apiBaseUrl, refreshKey]);
 
-  if (!session) return <Login onLogin={setSession} />;
+  // Primary Landing View: Animated CyberGyroscopic Threat Radar Portal
+  if (viewMode === 'portal') {
+    return (
+      <CyberRadarPortal
+        currentSession={session}
+        onOpenWorkspace={() => {
+          if (!session) {
+            handleQuickLogin('lead', 'lead123');
+          } else {
+            setViewMode('workspace');
+            setActiveTab('dashboard');
+          }
+        }}
+        onQuickLogin={handleQuickLogin}
+      />
+    );
+  }
+
+  const handleSidebarTabChange = (tabId) => {
+    if (tabId === 'portal') {
+      setViewMode('portal');
+    } else {
+      setActiveTab(tabId);
+    }
+  };
 
   return (
-    <div className="app-shell min-h-screen text-slate-100 flex flex-col">
+    <div className="app-shell min-h-screen text-slate-100 flex flex-col bg-[#05111f]">
       <div className="utility-bar">
         <span><span className="utility-dot" />BPUT SOC / INNOVATION SUBMISSION</span>
         <LanguageToggle currentLang={language} onToggle={setLanguage} />
       </div>
 
-      <Header userRole={session.user.role} unread={unread} onSearch={(query) => { setIncidentSearch(query); setActiveTab('dashboard'); }} onOpenNotifications={() => setActiveTab('notifications')} />
+      <Header 
+        userRole={session?.user?.role || 'lead'} 
+        unread={unread} 
+        onSearch={(query) => { setIncidentSearch(query); setActiveTab('dashboard'); }} 
+        onOpenNotifications={() => setActiveTab('notifications')}
+        onReturnToPortal={() => setViewMode('portal')}
+        onLogout={() => { setSession(null); setViewMode('portal'); }}
+      />
 
       <div className="flex flex-1">
-        <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed} />
+        <Sidebar 
+          activeTab={activeTab} 
+          setActiveTab={handleSidebarTabChange} 
+          collapsed={sidebarCollapsed} 
+          setCollapsed={setSidebarCollapsed} 
+        />
         
         <main className="workspace flex-1 p-6 overflow-y-auto space-y-6">
           <SystemHealth health={health} />
