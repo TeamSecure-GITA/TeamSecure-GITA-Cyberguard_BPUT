@@ -15,7 +15,7 @@ export default function SystemHealth({ health }) {
         <Cpu className="text-emerald-400" size={24} />
         <div>
           <p className="text-[10px] text-slate-400 uppercase font-bold">Model Confidence</p>
-          <p className="text-sm font-bold text-white">{health?.model_loaded ? 'Loaded' : 'Checking...'}</p>
+          <p className="text-sm font-bold text-white">{health ? (health.model_loaded ? 'Loaded' : 'Heuristics active') : 'Checking...'}</p>
         </div>
       </div>
       <div className="health-card">

@@ -49,6 +49,9 @@ class UserCreate(BaseModel):
     password: str
     role: str = "analyst"
 
+class PermissionRequest(BaseModel):
+    permission: str
+
 class NotificationUpdate(BaseModel):
     read: bool = True
 
@@ -67,6 +70,67 @@ class PsychologyRequest(BaseModel):
 
 class BattleRequest(BaseModel):
     defender_actions: List[str] = []
+
+class ScannerRequest(BaseModel):
+    payload: str
+    indicator_type: Optional[str] = None
+
+class ThreatPhysicsRequest(BaseModel):
+    nodes: List[Dict[str, Any]] = []
+    edges: List[Dict[str, Any]] = []
+
+class DeceptionRequest(BaseModel):
+    message: str
+    replies: List[str] = []
+
+class TopologyMorphRequest(BaseModel):
+    nodes: List[Dict[str, Any]] = []
+    edges: List[Dict[str, Any]] = []
+    trigger: str = "reconnaissance"
+
+class AgentConsensusRequest(BaseModel):
+    telemetry: List[Dict[str, Any]] = []
+    
+class AnalystLoadRequest(BaseModel):
+    telemetry: Dict[str, Any] = {}
+
+class QStateRequest(BaseModel):
+    telemetry: Dict[str, Any] = {}
+
+class SatelliteRequest(BaseModel):
+    telemetry: Dict[str, Any] = {}
+
+class CognitiveEchoRequest(BaseModel):
+    query: str
+
+class NeuromorphicRequest(BaseModel):
+    telemetry: Dict[str, Any] = {}
+
+class AdvancedTelemetryRequest(BaseModel):
+    telemetry: Dict[str, Any] = {}
+
+class QuantumDecoyRequest(BaseModel):
+    probe: str = "unknown"
+    tool: str = "unclassified"
+
+class TemporalHealingRequest(BaseModel):
+    state: Dict[str, Any] = {}
+
+class PolymorphismRequest(BaseModel):
+    binary: Dict[str, Any] = {}
+
+class InfrastructureEchoRequest(BaseModel):
+    query: str
+
+class DarkMeshRequest(BaseModel):
+    nodes: List[str] = []
+    epoch: int = 1
+
+class VaccineRequest(BaseModel):
+    indicators: List[str] = []
+
+class SpeculativeTelemetryRequest(BaseModel):
+    telemetry: Dict[str, Any] = {}
 
 # New Response Models for Threat Intelligence & Engines
 class DNAVectors(BaseModel):
@@ -129,4 +193,4 @@ class SimulationResponse(BaseModel):
     current_risk: int
     projected_risk: int
     risk_reduction: int
-    outcome: str
+    outcome: str

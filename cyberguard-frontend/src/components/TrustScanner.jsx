@@ -1,0 +1,14 @@
+import React, { useState } from 'react';
+import axios from 'axios';
+import { ScanLine, Upload } from 'lucide-react';
+
+export default function TrustScanner({ apiBaseUrl, accessToken }) {
+  const [payload, setPayload] = useState('');
+  const [result, setResult] = useState(null);
+  const [mediaResult, setMediaResult] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const headers = { Authorization: `Bearer ${accessToken}` };
+  const scan = async () => { if (!payload.trim()) return; setBusy(true); try { const response = await axios.post(`${apiBaseUrl}/api/v1/scanner/scan`, { payload }, { headers }); setResult(response.data); } finally { setBusy(false); } };
+  const inspectMedia = async (event) => { const file = event.target.files?.[0]; if (!file) return; setBusy(true); try { const form = new FormData(); form.append('file', file); const response = await axios.post(`${apiBaseUrl}/api/v1/media/trust`, form, { headers }); setMediaResult(response.data); } finally { setBusy(false); } };
+  return <section className="glass-panel p-5"><div className="panel-heading"><div><div className="eyebrow">QR / link / media scanner</div><h3>Instant trust analysis</h3></div><ScanLine size={18} className="text-cyan-300" /></div><textarea value={payload} onChange={(event) => setPayload(event.target.value)} placeholder="Paste a URL, email, or QR-decoded text" className="w-full mt-4 min-h-20 rounded-xl bg-slate-950 border border-slate-700 p-3 text-xs text-slate-200" /><div className="flex flex-wrap gap-2 mt-3"><button type="button" onClick={scan} disabled={busy || !payload.trim()} className="px-3 py-2 rounded-lg bg-cyan-600 text-xs font-semibold disabled:opacity-50">{busy ? 'Scanning...' : 'Scan payload'}</button><label className="px-3 py-2 rounded-lg border border-slate-700 text-xs text-slate-300 cursor-pointer"><Upload size={13} className="inline mr-1" /> Voice / video trust<input type="file" accept="audio/*,video/*" onChange={inspectMedia} className="hidden" /></label></div>{result && <div className="mt-4 p-3 rounded-xl border border-slate-800 bg-slate-900/70 text-xs"><strong className={result.safe ? 'text-emerald-300' : 'text-rose-300'}>{result.safe ? 'LOW RISK' : 'THREAT SIGNAL DETECTED'} / {result.risk_score}%</strong><p className="text-slate-400 mt-1">Threat genome: {result.genome}</p>{result.results.map((item) => <p key={item.value} className="text-slate-300 mt-1">{item.value} - {item.reputation} ({item.risk_score}%)</p>)}</div>}{mediaResult && <div className="mt-4 p-3 rounded-xl border border-slate-800 bg-slate-900/70 text-xs"><strong className="text-cyan-300">{mediaResult.media_type.toUpperCase()} TRUST SCORE: {mediaResult.trust_score}%</strong><p className="text-slate-400 mt-1">Voice {mediaResult.voice_authenticity}% / Face {mediaResult.face_authenticity || '--'}% / Lip sync {mediaResult.lip_sync_match || '--'}%</p></div>}</section>;
+}

@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: cyberguard-backend
+    runtime: python
+    rootDir: cyberguard-backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    envVars:
+      - key: CYBERGUARD_JWT_SECRET
+        generateValue: true
+      - key: CYBERGUARD_FRONTEND_ORIGINS
+        sync: false
+      - key: CYBERGUARD_DB_PATH
+        value: /var/data/cyberguard.db
+      - key: CYBERGUARD_ALLOW_ANONYMOUS_EVAL
+        value: "false"
+    disk:
+      name: cyberguard-data
+      mountPath: /var/data
+      sizeGB: 1

@@ -88,14 +88,19 @@ export default function ThreatInspector({ accessToken }) {
   ];
 
   return (
-    <div className="bg-cardBg border border-slate-700/60 rounded-xl p-6 shadow-lg">
+    <div className="threat-inspector bg-cardBg border border-slate-700/60 rounded-xl p-6 shadow-lg">
       <div className="inspector-heading mb-6">
-        <h2 className="text-xl font-bold text-white">Multi-Source Threat Inspector</h2>
-        <p className="text-xs text-slate-400">
-          Submit digital artifacts for real-time FastAPI engine processing and XAI assessment.
-        </p>
+        <div className="inspector-title-block">
+          <div className="inspector-kicker"><span className="live-pulse" /> MULTI-SOURCE ANALYSIS DESK</div>
+          <h2 className="text-xl font-bold text-white">Threat Inspector</h2>
+          <p className="text-xs text-slate-400">
+            Select an artifact channel, submit evidence, and receive a scored XAI assessment from the live engine.
+          </p>
+        </div>
+        <div className="inspector-status"><span className="status-orb" /> ENGINE READY<strong>FastAPI / XAI</strong></div>
       </div>
 
+      <div className="inspector-source-label"><span>01</span> Choose an analysis channel <small>{tabs.length} sources available</small></div>
       <div className="inspector-source-grid">
         {[
           ['email', 'Email', Mail], ['url', 'URL', Link], ['image', 'Image', Upload],
@@ -103,7 +108,7 @@ export default function ThreatInspector({ accessToken }) {
         ].map(([id, label, Icon]) => <button key={id} type="button" onClick={() => { setActiveSubTab(id); setAnalysisResult(null); setSelectedFile(null); setInputText(''); }} className={`source-card ${activeSubTab === id ? 'source-card-active' : ''}`}><Icon size={17} /><span>{label}</span><small>{activeSubTab === id ? 'selected' : 'inspect'}</small></button>)}
       </div>
 
-      <div className="mb-6 p-3 rounded-xl border border-amber-500/20 bg-amber-500/5">
+      <div className="inspector-demo mb-6 p-3 rounded-xl border border-amber-500/20 bg-amber-500/5">
         <div className="flex items-center gap-2 text-[10px] font-bold uppercase text-amber-300"><PlayCircle size={14} /> Three-minute demo scenarios</div>
         <div className="mt-2 flex flex-wrap gap-2">
           {demoScenarios.map((scenario) => <button key={scenario.category} type="button" onClick={() => { setActiveSubTab(scenario.category); setInputText(scenario.payload); setSelectedFile(null); setAnalysisResult(null); setError(null); }} className="px-2.5 py-1.5 rounded-lg border border-amber-500/20 bg-slate-900/60 text-[10px] text-slate-200 hover:border-amber-400/60">{scenario.name}</button>)}
@@ -138,7 +143,8 @@ export default function ThreatInspector({ accessToken }) {
       </div>
 
       {/* Input Form */}
-      <form onSubmit={handleAnalyze} className="space-y-4">
+      <div className="inspector-source-label"><span>02</span> Submit evidence <small>{activeSubTab.replace('_', ' ')} channel selected</small></div>
+      <form onSubmit={handleAnalyze} className="inspector-form space-y-4">
         {['image', 'audio', 'video', 'deepfake'].includes(activeSubTab) ? (
           <div className={`dropzone border-2 border-dashed rounded-xl p-8 text-center ${dragActive ? 'dropzone-active' : ''}`} onDragOver={(event) => { event.preventDefault(); setDragActive(true); }} onDragLeave={() => setDragActive(false)} onDrop={(event) => { event.preventDefault(); acceptFile(event.dataTransfer.files?.[0]); }}>
             <Upload size={32} className="mx-auto text-slate-500 mb-2" />
@@ -162,8 +168,8 @@ export default function ThreatInspector({ accessToken }) {
           </div>
         ) : (
           <div>
-            <label className="block text-xs font-semibold text-slate-400 mb-2">
-              Artifact Content Payload
+            <label className="inspector-input-label block text-xs font-semibold text-slate-400 mb-2">
+              <span>Artifact content payload</span><small>Text, URL, email headers, or JSON telemetry</small>
             </label>
             <textarea
               rows={5}
@@ -204,7 +210,8 @@ export default function ThreatInspector({ accessToken }) {
 
       {/* Live Results */}
       {analysisResult && (
-        <div className="mt-6 p-4 bg-slate-900/80 border border-slate-700 rounded-xl space-y-3 animate-in fade-in">
+        <div className="inspector-results mt-6 p-4 bg-slate-900/80 border border-slate-700 rounded-xl space-y-3 animate-in fade-in">
+          <div className="inspector-source-label"><span>03</span> Assessment result <small>Explainable evidence returned</small></div>
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-slate-400">FASTAPI ENGINE ASSESSMENT</span>
             <span

@@ -17,8 +17,9 @@ import {
   Sparkles,
   ExternalLink
 } from 'lucide-react';
+import LanguageToggle from './LanguageToggle';
 
-export default function CyberRadarPortal({ onOpenWorkspace, onQuickLogin, currentSession }) {
+export default function CyberRadarPortal({ onOpenWorkspace, onQuickLogin, currentSession, currentLang, onLanguageChange }) {
   const [telemetry, setTelemetry] = useState({
     lat: 12.44,
     freq: 4.82,
@@ -29,8 +30,8 @@ export default function CyberRadarPortal({ onOpenWorkspace, onQuickLogin, curren
 
   const [activeBlip, setActiveBlip] = useState(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [loginUsername, setLoginUsername] = useState('lead');
-  const [loginPassword, setLoginPassword] = useState('lead123');
+  const [loginUsername, setLoginUsername] = useState('teamsecure.project@gmail.com');
+  const [loginPassword, setLoginPassword] = useState('Secure@9040');
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState(null);
 
@@ -52,7 +53,7 @@ export default function CyberRadarPortal({ onOpenWorkspace, onQuickLogin, curren
     } else {
       // Auto-authenticate as Senior SOC Lead or open workspace
       if (onQuickLogin) {
-        onQuickLogin('lead', 'lead123');
+        onQuickLogin('teamsecure.project@gmail.com', 'Secure@9040');
       } else {
         onOpenWorkspace();
       }
@@ -119,6 +120,7 @@ export default function CyberRadarPortal({ onOpenWorkspace, onQuickLogin, curren
 
         {/* Real-time Status Badge & Controls */}
         <div className="flex items-center gap-4">
+          <LanguageToggle currentLang={currentLang} onToggle={onLanguageChange} />
           <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-emerald-500/30 bg-emerald-950/30 text-emerald-400 font-mono text-xs tracking-wider shadow-[0_0_15px_rgba(16,185,129,0.15)]">
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -424,7 +426,7 @@ export default function CyberRadarPortal({ onOpenWorkspace, onQuickLogin, curren
                 <p className="text-cyan-400 font-semibold">PRESET SOC ACCOUNTS:</p>
                 <div className="flex justify-between">
                   <span>Lead SOC (Full Access):</span>
-                  <span className="text-slate-300">lead / lead123</span>
+                  <span className="text-slate-300">Head admin / teamsecure.project@gmail.com</span>
                 </div>
                 <div className="flex justify-between">
                   <span>Tier 1 Analyst (Read-only):</span>

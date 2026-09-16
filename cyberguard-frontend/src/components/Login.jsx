@@ -6,7 +6,7 @@ const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
 export default function Login({ onLogin }) {
   const [username, setUsername] = useState('lead');
-  const [password, setPassword] = useState('lead123');
+  const [password, setPassword] = useState('Secure@9040');
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
 
@@ -45,7 +45,7 @@ export default function Login({ onLogin }) {
         </label>
         {error && <p className="text-xs text-red-400">{error}</p>}
         <button disabled={loading} className="w-full py-3 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-sm font-semibold flex items-center justify-center gap-2"><LockKeyhole size={16} />{loading ? 'Signing in...' : <><LogIn size={16} />Sign in</>}</button>
-        <p className="text-[11px] text-slate-500">Demo accounts: analyst / analyst123, lead / lead123</p>
+        <p className="text-[11px] text-slate-500">Head administrator: teamsecure.project@gmail.com</p>
       </form>
     </main>
   );

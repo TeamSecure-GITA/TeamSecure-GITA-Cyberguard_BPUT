@@ -5,6 +5,9 @@ import os
 import secrets
 import sqlite3
 import sys
+import smtplib
+import time
+from email.message import EmailMessage
 
 # Auto-detect and switch to local .venv if run with system python lacking fastapi/uvicorn
 try:
@@ -28,8 +31,10 @@ from typing import Optional
 
 import requests
 import jwt
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from detection_engine import TEXT_MODEL, evaluate_threat_payload
 from battle_simulator import run_battle
@@ -37,17 +42,28 @@ from campaign_engine import correlate_incident
 from digital_twin import build_twin
 from forecast_engine import forecast_risk
 from media_engine import analyze_media
-from models import AlertRequest, BattleRequest, ForecastRequest, IncidentComment, IncidentUpdate, LoginRequest, NotificationUpdate, PsychologyRequest, ResponseExecutionRequest, SimulationRequest, ThreatAnalysisRequest, ThreatIntelLookup, UserCreate
+from models import AgentConsensusRequest, AlertRequest, BattleRequest, DeceptionRequest, ForecastRequest, IncidentComment, IncidentUpdate, LoginRequest, NotificationUpdate, PsychologyRequest, ResponseExecutionRequest, ScannerRequest, SimulationRequest, ThreatAnalysisRequest, ThreatIntelLookup, TopologyMorphRequest, ThreatPhysicsRequest, UserCreate
 from psychology_detector import analyze_psychology
 from response_simulator import simulate_response
 from self_healing import recommend_healing
 from threat_intel import enrich_iocs, extract_iocs
 from threat_fusion import build_genome, serialize_genome
 from timeline_engine import build_timeline
+from extended_intel import analyze_trust_media, build_global_threat_map, build_identity_heatmap, inspect_indicator, scan_payload
+from frontier_engine import agent_consensus, cognitive_deception_session, frontier_overview, morph_topology, predict_threat_physics, static_artifact_analysis
+from frontier_engine import agent_consensus, assess_analyst_load, assess_neuromorphic_telemetry, assess_q_state, assess_satellite_link, build_cognitive_echo, cognitive_deception_session, frontier_overview, morph_topology, predict_threat_physics, static_artifact_analysis
+from advanced_defense_engine import acoustic_channel, counter_agent_proxy, dark_mesh_schedule, hallucinated_infrastructure, heartbeat_keying, polymorphism_plan, quantum_decoy, space_weather_correlation, temporal_healing, vaccine_recommendations
+from speculative_defense_engine import chrono_causal_trap, cognitive_poisoning, holographic_memory, hyperbolic_network, phase_change_zeroization, photonic_bus, plasma_channel, singularity_sinkhole, software_apoptosis, speculative_overview, vacuum_keying
+from cloudflare_waf import block_ip as cloudflare_block_ip, configuration as cloudflare_configuration
+from models import AdvancedTelemetryRequest, AgentConsensusRequest, AlertRequest, AnalystLoadRequest, BattleRequest, CognitiveEchoRequest, DarkMeshRequest, DeceptionRequest, ForecastRequest, IncidentComment, IncidentUpdate, InfrastructureEchoRequest, LoginRequest, NeuromorphicRequest, NotificationUpdate, PermissionRequest, PolymorphismRequest, PsychologyRequest, QStateRequest, QuantumDecoyRequest, ResponseExecutionRequest, SatelliteRequest, ScannerRequest, SimulationRequest, SpeculativeTelemetryRequest, TemporalHealingRequest, ThreatAnalysisRequest, ThreatIntelLookup, TopologyMorphRequest, ThreatPhysicsRequest, UserCreate, VaccineRequest
 
 DB_PATH = Path(os.getenv("CYBERGUARD_DB_PATH", str(Path(__file__).with_name("cyberguard.db"))))
 JWT_SECRET = os.getenv("CYBERGUARD_JWT_SECRET", "development-only-change-me-use-a-long-secret-key")
+SECURITY_OWNER_EMAIL = os.getenv("CYBERGUARD_SECURITY_OWNER_EMAIL", "teamsecure.project@gmail.com")
+HEAD_ADMIN_USERNAME = os.getenv("CYBERGUARD_HEAD_ADMIN_USERNAME", "teamsecure.project@gmail.com")
+HEAD_ADMIN_PASSWORD = os.getenv("CYBERGUARD_HEAD_ADMIN_PASSWORD", "Secure@9040")
 STARTED_AT = datetime.now(timezone.utc)
+SECURITY_EVENT_WINDOW: dict[str, list[float]] = {}
 DEMO_SCENARIOS = [
     {
         "id": "deepfake-authority",
@@ -87,7 +103,10 @@ def initialize_database():
             CREATE TABLE IF NOT EXISTS users (
                 username TEXT PRIMARY KEY,
                 password_hash TEXT NOT NULL,
-                role TEXT NOT NULL
+                role TEXT NOT NULL,
+                email TEXT NOT NULL DEFAULT '',
+                parent_username TEXT,
+                status TEXT NOT NULL DEFAULT 'active'
             );
             CREATE TABLE IF NOT EXISTS incidents (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -161,8 +180,58 @@ def initialize_database():
                 simulation_json TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS network_nodes (
+                node_id TEXT PRIMARY KEY,
+                label TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS network_edges (
+                source TEXT NOT NULL,
+                target TEXT NOT NULL,
+                relationship TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (source, target)
+            );
+            CREATE TABLE IF NOT EXISTS battle_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                defender_actions_json TEXT NOT NULL,
+                result_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS permission_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                permission TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                requested_at TEXT NOT NULL,
+                decided_by TEXT,
+                decided_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS security_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                ip_address TEXT NOT NULL,
+                path TEXT NOT NULL,
+                details TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS blocked_ips (
+                ip_address TEXT PRIMARY KEY,
+                reason TEXT NOT NULL,
+                blocked_at TEXT NOT NULL,
+                expires_at TEXT
+            );
             """
         )
+        user_columns = {row["name"] for row in db.execute("PRAGMA table_info(users)").fetchall()}
+        if "email" not in user_columns:
+            db.execute("ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''")
+        if "parent_username" not in user_columns:
+            db.execute("ALTER TABLE users ADD COLUMN parent_username TEXT")
+        if "status" not in user_columns:
+            db.execute("ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
         columns = {row["name"] for row in db.execute("PRAGMA table_info(incidents)").fetchall()}
         if "status" not in columns:
             db.execute("ALTER TABLE incidents ADD COLUMN status TEXT NOT NULL DEFAULT 'New'")
@@ -170,8 +239,13 @@ def initialize_database():
             db.execute("ALTER TABLE incidents ADD COLUMN assigned_to TEXT")
         if "notes" not in columns:
             db.execute("ALTER TABLE incidents ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
-        users = [("analyst", hash_password("analyst123"), "analyst"), ("lead", hash_password("lead123"), "lead"), ("admin", hash_password("admin123"), "admin")]
-        db.executemany("INSERT OR IGNORE INTO users VALUES (?, ?, ?)", users)
+        users = [
+            ("analyst", hash_password("analyst123"), "analyst", "", None, "active"),
+            ("lead", hash_password("lead123"), "lead", "", None, "active"),
+            ("admin", hash_password("admin123"), "admin", SECURITY_OWNER_EMAIL, HEAD_ADMIN_USERNAME, "active"),
+            (HEAD_ADMIN_USERNAME, hash_password(HEAD_ADMIN_PASSWORD), "head_admin", SECURITY_OWNER_EMAIL, None, "active"),
+        ]
+        db.executemany("INSERT OR IGNORE INTO users (username, password_hash, role, email, parent_username, status) VALUES (?, ?, ?, ?, ?, ?)", users)
 
 
 @asynccontextmanager
@@ -202,6 +276,28 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def security_guard(request: Request, call_next):
+    ip_address = request_ip(request)
+    path = request.url.path.lower()
+    now = time.time()
+    with get_db() as db:
+        blocked = db.execute("SELECT ip_address FROM blocked_ips WHERE ip_address = ?", (ip_address,)).fetchone()
+    if blocked and ip_address not in {"127.0.0.1", "::1", "localhost"}:
+        return JSONResponse(status_code=403, content={"detail": "Access denied by CyberGuard security controls", "containment": "internal sinkhole preview"})
+    suspicious = any(marker in path for marker in ("/.env", "/.git", "/wp-admin", "/wp-login", "/etc/passwd", "/debug", "/phpmyadmin"))
+    attempts = SECURITY_EVENT_WINDOW.setdefault(ip_address, [])
+    SECURITY_EVENT_WINDOW[ip_address] = [stamp for stamp in attempts if now - stamp < 60]
+    if suspicious:
+        SECURITY_EVENT_WINDOW[ip_address].append(now)
+        record_security_event("suspicious-code-or-admin-probe", ip_address, request.url.path, "Protected path probing detected.")
+        if len(SECURITY_EVENT_WINDOW[ip_address]) >= 3 and ip_address not in {"127.0.0.1", "::1", "localhost"}:
+            with get_db() as db:
+                db.execute("INSERT OR REPLACE INTO blocked_ips (ip_address, reason, blocked_at) VALUES (?, ?, ?)", (ip_address, "Repeated protected-path probing", datetime.now(timezone.utc).isoformat()))
+            return JSONResponse(status_code=403, content={"detail": "IP blocked by CyberGuard", "containment": "internal sinkhole preview"})
+    return await call_next(request)
+
+
 def current_user(authorization: Optional[str] = Header(default=None)) -> dict[str, str]:
     if not authorization or not authorization.startswith("Bearer "):
         if os.getenv("CYBERGUARD_ALLOW_ANONYMOUS_EVAL", "true").lower() in {"true", "1", "yes"}:
@@ -215,9 +311,49 @@ def current_user(authorization: Optional[str] = Header(default=None)) -> dict[st
         raise HTTPException(status_code=401, detail="Invalid or expired session") from error
 
 
+def request_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    return forwarded or (request.client.host if request.client else "unknown")
 
-def admin_user(user: dict[str, str] = Depends(current_user)) -> dict[str, str]:
-    if user["role"] != "admin":
+
+def send_security_notice(subject: str, details: str):
+    smtp_host = os.getenv("CYBERGUARD_SMTP_HOST")
+    smtp_port = int(os.getenv("CYBERGUARD_SMTP_PORT", "587"))
+    smtp_user = os.getenv("CYBERGUARD_SMTP_USER")
+    smtp_password = os.getenv("CYBERGUARD_SMTP_PASSWORD")
+    if not smtp_host or not smtp_user or not smtp_password:
+        return False
+    message = EmailMessage()
+    message["From"] = smtp_user
+    message["To"] = SECURITY_OWNER_EMAIL
+    message["Subject"] = f"CyberGuard security alert: {subject}"
+    message.set_content(details)
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=8) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_password)
+            server.send_message(message)
+        return True
+    except (OSError, smtplib.SMTPException):
+        return False
+
+
+def record_security_event(event_type: str, ip_address: str, path: str, details: str):
+    with get_db() as db:
+        db.execute("INSERT INTO security_events (event_type, ip_address, path, details, created_at) VALUES (?, ?, ?, ?, ?)", (event_type, ip_address, path, details, datetime.now(timezone.utc).isoformat()))
+    send_security_notice(event_type, f"IP: {ip_address}\nPath: {path}\n{details}")
+
+
+def head_admin_user(request: Request, user: dict[str, str] = Depends(current_user)) -> dict[str, str]:
+    if user.get("role") != "head_admin" or user.get("username") != HEAD_ADMIN_USERNAME:
+        record_security_event("unauthorized-head-admin-access", request_ip(request), request.url.path, f"User {user.get('username', 'unknown')} attempted a head-admin action.")
+        raise HTTPException(status_code=403, detail="Head Administrator approval required")
+    return user
+
+
+def admin_user(request: Request, user: dict[str, str] = Depends(current_user)) -> dict[str, str]:
+    if user.get("role") != "head_admin" or user.get("username") != HEAD_ADMIN_USERNAME:
+        record_security_event("unauthorized-admin-access", request_ip(request), request.url.path, f"User {user.get('username', 'unknown')} attempted an admin action.")
         raise HTTPException(status_code=403, detail="Administrator role required")
     return user
 
@@ -516,7 +652,10 @@ def self_heal(incident_id: Optional[int] = None, user: dict[str, str] = Depends(
 @app.post("/api/v1/battle")
 def battle(request: BattleRequest, user: dict[str, str] = Depends(current_user)):
     latest = recent_incident_context()[0] if recent_incident_context() else {"risk_score": 0}
-    return run_battle(latest.get("risk_score", 0), request.defender_actions)
+    result = run_battle(latest.get("risk_score", 0), request.defender_actions)
+    with get_db() as db:
+        db.execute("INSERT INTO battle_sessions (defender_actions_json, result_json, created_at) VALUES (?, ?, ?)", (json.dumps(request.defender_actions), json.dumps(result), datetime.now(timezone.utc).isoformat()))
+    return result
 
 
 @app.get("/api/v1/notifications")
@@ -542,25 +681,313 @@ def threat_intel_lookup(request: ThreatIntelLookup, user: dict[str, str] = Depen
     return {"results": iocs, "provider": "local-heuristic", "external_enrichment": False}
 
 
+@app.post("/api/v1/scanner/scan")
+def scanner_scan(request: ScannerRequest, user: dict[str, str] = Depends(current_user)):
+    if not request.payload.strip():
+        raise HTTPException(status_code=400, detail="Scan payload cannot be empty.")
+    result = scan_payload(request.payload)
+    if request.indicator_type and not result["results"]:
+        result["results"] = [inspect_indicator(request.payload, request.indicator_type)]
+    write_audit(user, "scanner_scan", "payload", result["genome"])
+    return result
+
+
+@app.get("/api/v1/threat-intel/feed")
+def threat_intel_feed(user: dict[str, str] = Depends(current_user)):
+    items = []
+    for incident in recent_incident_context()[:20]:
+        assessment = incident.get("assessment", {})
+        iocs = assessment.get("iocs", [])
+        for ioc in iocs[:3]:
+            item = inspect_indicator(ioc.get("value", ioc.get("indicator", "")), ioc.get("type"))
+            item["incident_id"] = incident["id"]
+            items.append(item)
+    return {"items": items, "provider": "local-heuristic"}
+
+
+@app.get("/api/v1/threat-map")
+def threat_map(user: dict[str, str] = Depends(current_user)):
+    return build_global_threat_map(recent_incident_context())
+
+
+@app.get("/api/v1/identity-risk")
+def identity_risk(user: dict[str, str] = Depends(current_user)):
+    return build_identity_heatmap(recent_incident_context())
+
+
+@app.post("/api/v1/media/trust")
+async def media_trust(file: UploadFile = File(...), user: dict[str, str] = Depends(current_user)):
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded media cannot be empty.")
+    return analyze_trust_media(content, file.filename or "upload", file.content_type or "")
+
+
+@app.websocket("/api/v1/ws/events")
+async def events_socket(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            await websocket.send_json({"type": "heartbeat", "status": "connected"})
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        return
+
+
+@app.get("/api/v1/frontier/overview")
+def frontier_summary(user: dict[str, str] = Depends(current_user)):
+    return frontier_overview(recent_incident_context())
+
+
+@app.post("/api/v1/frontier/threat-physics")
+def frontier_threat_physics(request: ThreatPhysicsRequest, user: dict[str, str] = Depends(current_user)):
+    return predict_threat_physics(request.nodes, request.edges)
+
+
+@app.post("/api/v1/frontier/deception-session")
+def frontier_deception(request: DeceptionRequest, user: dict[str, str] = Depends(current_user)):
+    return cognitive_deception_session(request.message, request.replies)
+
+
+@app.post("/api/v1/frontier/topology-morph")
+def frontier_topology(request: TopologyMorphRequest, user: dict[str, str] = Depends(current_user)):
+    return morph_topology(request.nodes, request.edges, request.trigger)
+
+
+@app.post("/api/v1/frontier/static-analysis")
+async def frontier_static_analysis(file: UploadFile = File(...), user: dict[str, str] = Depends(current_user)):
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Artifact cannot be empty.")
+    return static_artifact_analysis(content, file.filename or "artifact")
+
+
+@app.post("/api/v1/frontier/agent-consensus")
+def frontier_agents(request: AgentConsensusRequest, user: dict[str, str] = Depends(current_user)):
+    return agent_consensus(request.telemetry)
+
+
+@app.post("/api/v1/frontier/analyst-load")
+def frontier_analyst_load(request: AnalystLoadRequest, user: dict[str, str] = Depends(current_user)):
+    return assess_analyst_load(request.telemetry)
+
+
+@app.post("/api/v1/frontier/q-state")
+def frontier_q_state(request: QStateRequest, user: dict[str, str] = Depends(current_user)):
+    return assess_q_state(request.telemetry)
+
+
+@app.post("/api/v1/frontier/satellite-link")
+def frontier_satellite(request: SatelliteRequest, user: dict[str, str] = Depends(current_user)):
+    return assess_satellite_link(request.telemetry)
+
+
+@app.post("/api/v1/frontier/cognitive-echo")
+def frontier_cognitive_echo(request: CognitiveEchoRequest, user: dict[str, str] = Depends(current_user)):
+    if not request.query.strip():
+        raise HTTPException(status_code=400, detail="Query cannot be empty.")
+    return build_cognitive_echo(request.query)
+
+
+@app.post("/api/v1/frontier/neuromorphic")
+def frontier_neuromorphic(request: NeuromorphicRequest, user: dict[str, str] = Depends(current_user)):
+    return assess_neuromorphic_telemetry(request.telemetry)
+
+
+@app.post("/api/v1/advanced/heartbeat-keying")
+def advanced_heartbeat(request: AdvancedTelemetryRequest, user: dict[str, str] = Depends(current_user)):
+    return heartbeat_keying(request.telemetry, user.get("username", "session"))
+
+
+@app.post("/api/v1/advanced/quantum-decoy")
+def advanced_quantum_decoy(request: QuantumDecoyRequest, user: dict[str, str] = Depends(current_user)):
+    return quantum_decoy(request.model_dump())
+
+
+@app.post("/api/v1/advanced/temporal-healing")
+def advanced_temporal_healing(request: TemporalHealingRequest, user: dict[str, str] = Depends(current_user)):
+    return temporal_healing(request.state)
+
+
+@app.post("/api/v1/advanced/acoustic-channel")
+def advanced_acoustic(request: AdvancedTelemetryRequest, user: dict[str, str] = Depends(current_user)):
+    return acoustic_channel(request.telemetry)
+
+
+@app.post("/api/v1/advanced/polymorphism")
+def advanced_polymorphism(request: PolymorphismRequest, user: dict[str, str] = Depends(current_user)):
+    return polymorphism_plan(request.binary)
+
+
+@app.post("/api/v1/advanced/infrastructure-echo")
+def advanced_infrastructure_echo(request: InfrastructureEchoRequest, user: dict[str, str] = Depends(current_user)):
+    if not request.query.strip():
+        raise HTTPException(status_code=400, detail="Query cannot be empty.")
+    return hallucinated_infrastructure(request.query)
+
+
+@app.post("/api/v1/advanced/dark-mesh")
+def advanced_dark_mesh(request: DarkMeshRequest, user: dict[str, str] = Depends(current_user)):
+    return dark_mesh_schedule(request.nodes, request.epoch)
+
+
+@app.post("/api/v1/advanced/vaccine-recommendations")
+def advanced_vaccines(request: VaccineRequest, user: dict[str, str] = Depends(current_user)):
+    return vaccine_recommendations(request.indicators)
+
+
+@app.post("/api/v1/advanced/space-weather")
+def advanced_space_weather(request: AdvancedTelemetryRequest, user: dict[str, str] = Depends(current_user)):
+    return space_weather_correlation(request.telemetry)
+
+
+@app.post("/api/v1/advanced/counter-agent")
+def advanced_counter_agent(request: AdvancedTelemetryRequest, user: dict[str, str] = Depends(current_user)):
+    return counter_agent_proxy(request.telemetry)
+
+
+@app.get("/api/v1/speculative/overview")
+def speculative_summary(user: dict[str, str] = Depends(current_user)):
+    return speculative_overview()
+
+
+@app.post("/api/v1/speculative/chrono-causal")
+def speculative_chrono(request: SpeculativeTelemetryRequest, user: dict[str, str] = Depends(current_user)):
+    return chrono_causal_trap(request.telemetry)
+
+
+@app.post("/api/v1/speculative/holographic-memory")
+def speculative_memory(request: SpeculativeTelemetryRequest, user: dict[str, str] = Depends(current_user)):
+    return holographic_memory(request.telemetry)
+
+
+@app.post("/api/v1/speculative/hyperbolic-network")
+def speculative_hyperbolic(request: SpeculativeTelemetryRequest, user: dict[str, str] = Depends(current_user)):
+    return hyperbolic_network(request.telemetry)
+
+
+@app.post("/api/v1/speculative/singularity-sinkhole")
+def speculative_sinkhole(request: SpeculativeTelemetryRequest, user: dict[str, str] = Depends(current_user)):
+    return singularity_sinkhole(request.telemetry)
+
+
+@app.post("/api/v1/speculative/vacuum-keying")
+def speculative_vacuum(request: SpeculativeTelemetryRequest, user: dict[str, str] = Depends(current_user)):
+    return vacuum_keying(request.telemetry)
+
+
+@app.post("/api/v1/speculative/software-apoptosis")
+def speculative_apoptosis(request: SpeculativeTelemetryRequest, user: dict[str, str] = Depends(current_user)):
+    return software_apoptosis(request.telemetry)
+
+
+@app.post("/api/v1/speculative/plasma-channel")
+def speculative_plasma(request: SpeculativeTelemetryRequest, user: dict[str, str] = Depends(current_user)):
+    return plasma_channel(request.telemetry)
+
+
+@app.post("/api/v1/speculative/cognitive-poisoning")
+def speculative_poisoning(request: SpeculativeTelemetryRequest, user: dict[str, str] = Depends(current_user)):
+    return cognitive_poisoning(request.telemetry)
+
+
+@app.post("/api/v1/speculative/phase-change-zeroization")
+def speculative_phase_change(request: SpeculativeTelemetryRequest, user: dict[str, str] = Depends(current_user)):
+    return phase_change_zeroization(request.telemetry)
+
+
+@app.post("/api/v1/speculative/photonic-bus")
+def speculative_photonic(request: SpeculativeTelemetryRequest, user: dict[str, str] = Depends(current_user)):
+    return photonic_bus(request.telemetry)
+
+
 @app.get("/api/v1/admin/users")
 def admin_users(user: dict[str, str] = Depends(admin_user)):
     with get_db() as db:
-        rows = db.execute("SELECT username, role FROM users ORDER BY username").fetchall()
+        rows = db.execute("SELECT username, role, email, parent_username, status FROM users ORDER BY username").fetchall()
     write_audit(user, "list_users", "users", "admin console")
     return {"users": [dict(row) for row in rows]}
 
 
 @app.post("/api/v1/admin/users")
-def create_user(request: UserCreate, user: dict[str, str] = Depends(admin_user)):
-    if request.role not in {"analyst", "lead", "admin"}:
+def create_user(request: UserCreate, user: dict[str, str] = Depends(head_admin_user)):
+    if request.role not in {"analyst", "lead", "sub_admin"}:
         raise HTTPException(status_code=400, detail="Invalid role")
+    if request.role == "sub_admin":
+        with get_db() as db:
+            count = db.execute("SELECT COUNT(*) AS count FROM users WHERE role = 'sub_admin'").fetchone()["count"]
+        if count >= 5:
+            raise HTTPException(status_code=409, detail="The five sub-admin slots are already allocated")
     try:
         with get_db() as db:
-            db.execute("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)", (request.username, hash_password(request.password), request.role))
+            db.execute("INSERT INTO users (username, password_hash, role, email, parent_username, status) VALUES (?, ?, ?, ?, ?, ?)", (request.username, hash_password(request.password), request.role, "", HEAD_ADMIN_USERNAME, "active"))
     except sqlite3.IntegrityError as error:
         raise HTTPException(status_code=409, detail="Username already exists") from error
     write_audit(user, "create_user", f"user:{request.username}", request.role)
     return {"status": "created", "username": request.username, "role": request.role}
+
+
+@app.post("/api/v1/admin/permissions/request")
+def request_permission(request: PermissionRequest, user: dict[str, str] = Depends(current_user)):
+    if user.get("role") != "sub_admin":
+        raise HTTPException(status_code=403, detail="Only sub-admins request elevated permissions")
+    with get_db() as db:
+        db.execute("INSERT INTO permission_requests (username, permission, requested_at) VALUES (?, ?, ?)", (user["username"], request.permission, datetime.now(timezone.utc).isoformat()))
+    send_security_notice("sub-admin permission request", f"{user['username']} requested: {request.permission}")
+    return {"status": "pending", "owner": SECURITY_OWNER_EMAIL}
+
+
+@app.get("/api/v1/admin/permissions")
+def permission_requests(user: dict[str, str] = Depends(head_admin_user)):
+    with get_db() as db:
+        rows = db.execute("SELECT * FROM permission_requests ORDER BY id DESC LIMIT 100").fetchall()
+    return {"requests": [dict(row) for row in rows]}
+
+
+@app.patch("/api/v1/admin/permissions/{request_id}")
+def decide_permission(request_id: int, approved: bool = Query(...), user: dict[str, str] = Depends(head_admin_user)):
+    status = "approved" if approved else "denied"
+    with get_db() as db:
+        row = db.execute("SELECT username, permission FROM permission_requests WHERE id = ?", (request_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Permission request not found")
+        db.execute("UPDATE permission_requests SET status = ?, decided_by = ?, decided_at = ? WHERE id = ?", (status, user["username"], datetime.now(timezone.utc).isoformat(), request_id))
+    send_security_notice(f"permission {status}", f"{row['username']} / {row['permission']}")
+    return {"status": status, "request_id": request_id}
+
+
+@app.get("/api/v1/admin/security-events")
+def security_events(user: dict[str, str] = Depends(admin_user)):
+    with get_db() as db:
+        rows = db.execute("SELECT * FROM security_events ORDER BY id DESC LIMIT 100").fetchall()
+        blocked = db.execute("SELECT * FROM blocked_ips ORDER BY blocked_at DESC").fetchall()
+    return {"events": [dict(row) for row in rows], "blocked_ips": [dict(row) for row in blocked], "owner_email": SECURITY_OWNER_EMAIL}
+
+
+@app.post("/api/v1/admin/security-events/block")
+def block_ip(ip_address: str = Query(...), reason: str = Query("Head-admin containment"), user: dict[str, str] = Depends(head_admin_user)):
+    with get_db() as db:
+        db.execute("INSERT OR REPLACE INTO blocked_ips (ip_address, reason, blocked_at) VALUES (?, ?, ?)", (ip_address, reason, datetime.now(timezone.utc).isoformat()))
+    record_security_event("manual-ip-block", ip_address, "admin-console", reason)
+    return {"status": "blocked", "ip_address": ip_address}
+
+
+@app.get("/api/v1/admin/cloudflare/status")
+def cloudflare_status(user: dict[str, str] = Depends(head_admin_user)):
+    return cloudflare_configuration()
+
+
+@app.post("/api/v1/admin/cloudflare/block-ip")
+def cloudflare_block(ip_address: str = Query(...), reason: str = Query("CyberGuard WAF containment"), user: dict[str, str] = Depends(head_admin_user)):
+    try:
+        result = cloudflare_block_ip(ip_address, reason)
+    except requests.RequestException as error:
+        raise HTTPException(status_code=502, detail=f"Cloudflare WAF request failed: {error}") from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    if result.get("status") == "blocked":
+        record_security_event("cloudflare-waf-ip-block", ip_address, "cloudflare", reason)
+    return result
 
 
 @app.get("/api/v1/admin/audit")

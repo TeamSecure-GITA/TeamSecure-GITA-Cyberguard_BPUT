@@ -19,9 +19,17 @@ import SystemView from './components/SystemView';
 import RiskGauge from './components/RiskGauge';
 import ThreatFeed from './components/ThreatFeed';
 import ThreatIntelligence from './components/ThreatIntelligence';
+import ThreatMap from './components/ThreatMap';
+import IdentityRiskHeatmap from './components/IdentityRiskHeatmap';
+import IocReputationFeed from './components/IocReputationFeed';
+import TrustScanner from './components/TrustScanner';
+import FrontierCapabilities from './components/FrontierCapabilities';
+import AdvancedDefenseLab from './components/AdvancedDefenseLab';
+import SpeculativeDefenseWidget from './components/SpeculativeDefenseWidget';
+import { LanguageProvider } from './i18n';
 
 export default function App() {
-  const [viewMode, setViewMode] = useState('workspace'); // 'workspace' or 'portal'
+  const [viewMode, setViewMode] = useState('portal'); // 'portal' or 'workspace'
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedIncident, setSelectedIncident] = useState(null);
   const [language, setLanguage] = useState('EN');
@@ -37,7 +45,7 @@ export default function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
-  const handleQuickLogin = async (username = 'lead', password = 'lead123') => {
+  const handleQuickLogin = async (username = 'teamsecure.project@gmail.com', password = 'Secure@9040') => {
     try {
       const response = await axios.post(`${apiBaseUrl}/api/v1/auth/login`, { username, password });
       setSession(response.data);
@@ -55,50 +63,72 @@ export default function App() {
 
   React.useEffect(() => {
     if (!session) {
-      handleQuickLogin('lead', 'lead123');
+      handleQuickLogin('teamsecure.project@gmail.com', 'Secure@9040');
     }
   }, []);
 
   React.useEffect(() => {
     if (!session) return;
     const config = { headers: { Authorization: `Bearer ${session.access_token}` } };
-    Promise.all([
+    Promise.allSettled([
       axios.get(`${apiBaseUrl}/api/v1/dashboard/metrics`, config),
       axios.get(`${apiBaseUrl}/api/v1/incidents`, config),
       axios.get(`${apiBaseUrl}/api/v1/dashboard/timeline`, config),
       axios.get(`${apiBaseUrl}/api/v1/system/health`, config),
       axios.get(`${apiBaseUrl}/api/v1/models/status`, config),
       axios.get(`${apiBaseUrl}/api/v1/notifications`, config),
-    ]).then(([metricsResponse, incidentsResponse, timelineResponse, healthResponse, modelResponse, notificationResponse]) => {
-      setMetrics(metricsResponse.data);
-      setIncidents(incidentsResponse.data.incidents || []);
-      setTimeline(timelineResponse.data || []);
-      setHealth(healthResponse.data);
-      setModelStatus(modelResponse.data);
-      setUnread(notificationResponse.data.unread || 0);
-    }).catch(() => {
-      setMetrics(null);
-      setIncidents([]);
+    ]).then(([metricsResult, incidentsResult, timelineResult, healthResult, modelResult, notificationResult]) => {
+      if (metricsResult.status === 'fulfilled') setMetrics(metricsResult.value.data);
+      if (incidentsResult.status === 'fulfilled') setIncidents(incidentsResult.value.data.incidents || []);
+      if (timelineResult.status === 'fulfilled') setTimeline(timelineResult.value.data || []);
+      if (healthResult.status === 'fulfilled') setHealth(healthResult.value.data);
+      if (modelResult.status === 'fulfilled') setModelStatus(modelResult.value.data);
+      if (notificationResult.status === 'fulfilled') setUnread(notificationResult.value.data.unread || 0);
     });
     const timer = window.setInterval(() => setRefreshKey((value) => value + 1), 10000);
     return () => window.clearInterval(timer);
   }, [session, apiBaseUrl, refreshKey]);
 
+  React.useEffect(() => {
+    if (!session || typeof WebSocket === 'undefined') return undefined;
+    const socketUrl = `${apiBaseUrl.replace(/^http/, 'ws')}/api/v1/ws/events`;
+    let socket;
+    try {
+      socket = new WebSocket(socketUrl);
+      socket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.type !== 'heartbeat') setRefreshKey((value) => value + 1);
+        } catch {
+          setRefreshKey((value) => value + 1);
+        }
+      };
+      socket.onopen = () => socket.send('subscribe');
+    } catch {
+      socket = undefined;
+    }
+    return () => socket?.close();
+  }, [session, apiBaseUrl]);
+
   // Primary Landing View: Animated CyberGyroscopic Threat Radar Portal
   if (viewMode === 'portal') {
     return (
-      <CyberRadarPortal
-        currentSession={session}
-        onOpenWorkspace={() => {
-          if (!session) {
-            handleQuickLogin('lead', 'lead123');
-          } else {
-            setViewMode('workspace');
-            setActiveTab('dashboard');
-          }
-        }}
-        onQuickLogin={handleQuickLogin}
-      />
+      <LanguageProvider language={language}>
+        <CyberRadarPortal
+          currentSession={session}
+          currentLang={language}
+          onLanguageChange={setLanguage}
+          onOpenWorkspace={() => {
+            if (!session) {
+              handleQuickLogin('teamsecure.project@gmail.com', 'Secure@9040');
+            } else {
+              setViewMode('workspace');
+              setActiveTab('dashboard');
+            }
+          }}
+          onQuickLogin={handleQuickLogin}
+        />
+      </LanguageProvider>
     );
   }
 
@@ -111,7 +141,8 @@ export default function App() {
   };
 
   return (
-    <div className="app-shell min-h-screen text-slate-100 flex flex-col bg-[#05111f]">
+    <LanguageProvider language={language}>
+      <div className="app-shell min-h-screen text-slate-100 flex flex-col bg-[#05111f]">
       <div className="utility-bar">
         <span><span className="utility-dot" />BPUT SOC / INNOVATION SUBMISSION</span>
         <LanguageToggle currentLang={language} onToggle={setLanguage} />
@@ -158,25 +189,34 @@ export default function App() {
                 <ThreatChart timeline={timeline} />
                 <ThreatFeed incidents={incidents} onSelectIncident={setSelectedIncident} />
               </div>
-              <IncidentTable incidents={incidents} initialSearch={incidentSearch} accessToken={session.access_token} onRefresh={() => setRefreshKey((value) => value + 1)} onSelectIncident={(inc) => setSelectedIncident(inc)} />
+             <IncidentTable
+               incidents={incidents}
+               initialSearch={incidentSearch}
+               accessToken={session?.access_token}
+               onSelectIncident={setSelectedIncident}
+               onRefresh={() => setRefreshKey((value) => value + 1)}
+             />
             </>
           )}
+{activeTab === 'graph' && <AttackGraph accessToken={session?.access_token} />}
+{activeTab === 'inspector' && <ThreatInspector accessToken={session?.access_token} />}
+{activeTab === 'compliance' && <ComplianceTab accessToken={session?.access_token} />}
+{activeTab === 'notifications' && <NotificationsPanel accessToken={session?.access_token} />}
+{activeTab === 'admin' && <AdminConsole accessToken={session?.access_token} />}
+{activeTab === 'intelligence' && <ThreatIntelligence incidents={incidents} accessToken={session?.access_token} />}
+{activeTab === 'live' && <div className="grid grid-cols-1 xl:grid-cols-2 gap-5"><ThreatMap apiBaseUrl={apiBaseUrl} accessToken={session?.access_token} /><IdentityRiskHeatmap apiBaseUrl={apiBaseUrl} accessToken={session?.access_token} /><IocReputationFeed apiBaseUrl={apiBaseUrl} accessToken={session?.access_token} /><TrustScanner apiBaseUrl={apiBaseUrl} accessToken={session?.access_token} /><FrontierCapabilities apiBaseUrl={apiBaseUrl} accessToken={session?.access_token} /><AdvancedDefenseLab apiBaseUrl={apiBaseUrl} accessToken={session?.access_token} /><SpeculativeDefenseWidget apiBaseUrl={apiBaseUrl} accessToken={session?.access_token} /></div>}
+</main>
+</div>
 
-          {activeTab === 'graph' && <AttackGraph accessToken={session.access_token} />}
-          {activeTab === 'inspector' && <ThreatInspector accessToken={session.access_token} />}
-          {activeTab === 'compliance' && <ComplianceTab accessToken={session.access_token} />}
-          {activeTab === 'notifications' && <NotificationsPanel accessToken={session.access_token} />}
-          {activeTab === 'admin' && <AdminConsole accessToken={session.access_token} />}
-          {activeTab === 'intelligence' && <ThreatIntelligence accessToken={session.access_token} incidents={incidents} />}
-        </main>
+{selectedIncident && (
+  <XaiModal
+    incident={selectedIncident}
+    onClose={() => setSelectedIncident(null)}
+    userRole={session?.user?.role}
+    accessToken={session?.access_token}
+  />
+)}
       </div>
-
-      <XaiModal
-        incident={selectedIncident}
-        onClose={() => setSelectedIncident(null)}
-        userRole={session.user.role}
-        accessToken={session.access_token}
-      />
-    </div>
+    </LanguageProvider>
   );
 }

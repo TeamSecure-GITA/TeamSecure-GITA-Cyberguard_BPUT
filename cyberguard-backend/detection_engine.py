@@ -1,5 +1,6 @@
 import json
 import math
+import os
 import re
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -14,7 +15,12 @@ except ImportError:
     joblib = None
 
 MODEL_PATH = Path(__file__).parent / "models" / "threat_text_model.joblib"
-TEXT_MODEL = joblib.load(MODEL_PATH) if joblib and MODEL_PATH.exists() else None
+TEXT_MODEL = None
+if os.getenv("CYBERGUARD_LOAD_TEXT_MODEL", "false").lower() in {"1", "true", "yes"} and joblib and MODEL_PATH.exists():
+    try:
+        TEXT_MODEL = joblib.load(MODEL_PATH)
+    except Exception:
+        TEXT_MODEL = None
 
 
 def model_signal(payload: str) -> tuple[int, dict | None]:

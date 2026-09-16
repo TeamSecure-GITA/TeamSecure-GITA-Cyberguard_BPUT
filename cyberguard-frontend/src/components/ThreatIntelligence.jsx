@@ -24,7 +24,7 @@ function Panel({ icon: Icon, eyebrow, title, children, action }) {
   </section>;
 }
 
-export default function ThreatIntelligence({ accessToken, incidents }) {
+export default function ThreatIntelligence({ accessToken, incidents = [] }) {
   const [selectedId, setSelectedId] = useState(incidents[0]?.database_id || null);
   const [genome, setGenome] = useState(null);
   const [correlations, setCorrelations] = useState(null);
