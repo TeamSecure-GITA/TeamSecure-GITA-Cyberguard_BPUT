@@ -2,15 +2,15 @@ import React from 'react';
 import { ChevronLeft, ChevronRight, LayoutDashboard, ShieldAlert, GitGraph, FileCheck, Bell, Settings, BrainCircuit, Orbit, Radar } from 'lucide-react';
 export default function Sidebar({ activeTab, setActiveTab, collapsed, setCollapsed }) {
   const navItems = [
-    { id: 'portal', label: 'Threat Radar 3D', icon: Orbit, isPortal: true },
-    { id: 'dashboard', label: 'SOC Dashboard', icon: LayoutDashboard },
-    { id: 'inspector', label: 'Threat Inspector', icon: ShieldAlert },
-    { id: 'intelligence', label: 'Threat Intelligence', icon: BrainCircuit },
-    { id: 'live', label: 'CyberGuard X Live', icon: Radar },
-    { id: 'graph', label: 'Attack Propagation', icon: GitGraph },
-    { id: 'compliance', label: 'CERT-In & Compliance', icon: FileCheck },
-    { id: 'notifications', label: 'Notifications', icon: Bell },
-    { id: 'admin', label: 'Admin Console', icon: Settings },
+    { id: 'portal', label: 'Threat Radar', icon: Orbit, isPortal: true },
+    { id: 'dashboard', label: 'Command Center', icon: LayoutDashboard },
+    { id: 'inspector', label: 'Detection Studio', icon: ShieldAlert },
+    { id: 'intelligence', label: 'Intelligence Operations', icon: BrainCircuit },
+    { id: 'live', label: 'XDR Fusion', icon: Radar },
+    { id: 'graph', label: 'Attack Graph', icon: GitGraph },
+    { id: 'compliance', label: 'Compliance & Governance', icon: FileCheck },
+    { id: 'notifications', label: 'Alert Inbox', icon: Bell },
+    { id: 'admin', label: 'Administration', icon: Settings },
   ];
 
   return (

@@ -19,7 +19,7 @@ const getSeverityBadge = (level) => {
 
 const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
-export default function IncidentTable({ incidents = [], accessToken, onRefresh, onSelectIncident, initialSearch = '' }) {
+export default function IncidentTable({ incidents = [], accessToken, onRefresh, onSelectIncident, initialSearch = '', routeData = null }) {
   const [search, setSearch] = useState(initialSearch);
   const [status, setStatus] = useState('');
   const [saving, setSaving] = useState(null);
@@ -41,6 +41,14 @@ export default function IncidentTable({ incidents = [], accessToken, onRefresh, 
   };
   return (
     <div className="bg-cardBg border border-slate-700/60 rounded-xl shadow-lg overflow-hidden">
+      {routeData && (
+        <div className="px-5 pt-5 pb-0">
+          <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-3 text-[10px] text-cyan-200">
+            <div className="font-bold uppercase mb-1">Fatigue-aware routing</div>
+            <div>{routeData.route_summary.high_priority} high priority · avg load {routeData.route_summary.avg_load} · analysts {routeData.route_summary.available_analysts}</div>
+          </div>
+        </div>
+      )}
       <div className="p-5 border-b border-slate-700 flex items-center justify-between">
         <div>
           <h3 className="text-lg font-bold text-white flex items-center gap-2">

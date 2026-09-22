@@ -1,0 +1,36 @@
+services:
+  flower-server:
+    build: ./cyberguard-backend
+    working_dir: /app
+    command: sh -c "pip install -r requirements-ai.txt && python flower_federated.py server --rounds 3"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./cyberguard-backend:/app
+
+  flower-client-a:
+    build: ./cyberguard-backend
+    working_dir: /app
+    command: sh -c "pip install -r requirements-ai.txt && python flower_federated.py client --data data/institution-a.csv"
+    depends_on:
+      - flower-server
+    volumes:
+      - ./cyberguard-backend:/app
+
+  flower-client-b:
+    build: ./cyberguard-backend
+    working_dir: /app
+    command: sh -c "pip install -r requirements-ai.txt && python flower_federated.py client --data data/institution-b.csv"
+    depends_on:
+      - flower-server
+    volumes:
+      - ./cyberguard-backend:/app
+
+  flower-client-c:
+    build: ./cyberguard-backend
+    working_dir: /app
+    command: sh -c "pip install -r requirements-ai.txt && python flower_federated.py client --data data/institution-c.csv"
+    depends_on:
+      - flower-server
+    volumes:
+      - ./cyberguard-backend:/app

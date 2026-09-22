@@ -1,0 +1,9 @@
+# Optional pretrained media and federated integrations.
+# Install only when GPU/CPU capacity and model licenses are available.
+transformers>=4.45
+accelerate>=0.34
+torch>=2.4
+torchvision>=0.19
+soundfile>=0.12
+flwr>=1.12
+huggingface-hub>=0.25

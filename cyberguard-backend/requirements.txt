@@ -7,6 +7,10 @@ python-multipart
 scikit-learn
 joblib
 PyJWT
+python-dotenv
+webauthn
 Pillow
 numpy
 opencv-python-headless
+bcrypt
+PyYAML

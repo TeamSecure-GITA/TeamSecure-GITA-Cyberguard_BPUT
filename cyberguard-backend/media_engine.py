@@ -44,8 +44,10 @@ def _entropy(values) -> float:
 
 def analyze_image(content: bytes) -> dict[str, Any]:
     from PIL import Image
+    from deepfake_models import analyze_pretrained
 
     image = Image.open(io.BytesIO(content))
+    pretrained = analyze_pretrained(content, "image")
     grayscale = np.asarray(image.convert("L").resize((64, 64)), dtype=float) / 255 if np is not None else None
     pixels = grayscale.flatten().tolist() if grayscale is not None else list(image.convert("L").resize((64, 64)).getdata())
     entropy = _entropy([round(pixel * 255) for pixel in pixels])
@@ -63,10 +65,15 @@ def analyze_image(content: bytes) -> dict[str, Any]:
     if image.width < 128 or image.height < 128:
         score += 15
         reasons.append("Low-resolution media reduces authenticity confidence.")
-    return {"score": min(score, 99), "reasons": reasons, "indicators": indicators, "method": "image-anomaly-model"}
+    if pretrained:
+        score = max(score, pretrained["score"])
+        reasons.append(f"Pretrained image detector {pretrained['model']} returned {pretrained['score']}% synthetic-media confidence.")
+        indicators.append({"name": "Pretrained Image Detector", "score": f"{pretrained['score']}%", "model": pretrained["model"]})
+    return {"score": min(score, 99), "reasons": reasons, "indicators": indicators, "method": "pretrained-image-detector" if pretrained else "image-anomaly-model", "pretrained_model": pretrained}
 
 
 def analyze_audio(content: bytes) -> dict[str, Any]:
+    from deepfake_models import analyze_pretrained
     with wave.open(io.BytesIO(content), "rb") as audio:
         frame_count = audio.getnframes()
         sample_width = audio.getsampwidth()
@@ -104,7 +111,12 @@ def analyze_audio(content: bytes) -> dict[str, Any]:
     if zero_crossings / max(len(samples), 1) > 0.2:
         score += 30
         reasons.append("Unusually high spectral transition activity warrants voice-cloning review.")
-    return {"score": min(score, 99), "reasons": reasons, "indicators": indicators, "method": "audio-anomaly-model"}
+    pretrained = analyze_pretrained(content, "audio")
+    if pretrained:
+        score = max(score, pretrained["score"])
+        reasons.append(f"Pretrained audio anti-spoof detector {pretrained['model']} returned {pretrained['score']}% synthetic-media confidence.")
+        indicators.append({"name": "Pretrained Audio Anti-Spoof", "score": f"{pretrained['score']}%", "model": pretrained["model"]})
+    return {"score": min(score, 99), "reasons": reasons, "indicators": indicators, "method": "pretrained-audio-detector" if pretrained else "audio-anomaly-model", "pretrained_model": pretrained}
 
 
 def analyze_video(content: bytes) -> dict[str, Any]:
@@ -128,9 +140,26 @@ def analyze_video(content: bytes) -> dict[str, Any]:
     return {"score": min(score, 99), "reasons": reasons, "indicators": indicators, "method": "video-metadata"}
 
 
+def analyze_qr(content: bytes) -> dict[str, Any]:
+    import cv2
+
+    image = cv2.imdecode(np.frombuffer(content, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if image is None:
+        return {"score": 20, "reasons": ["Image could not be decoded for QR inspection."], "indicators": [], "method": "qr-decoder"}
+    decoded, points, _ = cv2.QRCodeDetector().detectAndDecode(image)
+    if not decoded:
+        return {"score": 5, "reasons": ["No QR payload was found in the uploaded image."], "indicators": [{"name": "QR Payload", "score": "0%"}], "method": "qr-decoder"}
+    risky = decoded.lower().startswith(("http://", "https://"))
+    return {"score": 65 if risky else 35, "reasons": ["QR code decoded successfully; its payload was forwarded to URL analysis."], "indicators": [{"name": "QR Payload", "score": "88%" if risky else "35%"}], "decoded_payload": decoded, "method": "qr-decoder"}
+
+
 def analyze_media(content: bytes, content_type: str, filename: str, category: str) -> dict[str, Any]:
     suffix = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
     try:
+        if suffix in {"png", "jpg", "jpeg", "webp"}:
+            qr_result = analyze_qr(content)
+            if qr_result.get("decoded_payload"):
+                return qr_result
         if content_type.startswith("image/") or suffix in {"png", "jpg", "jpeg", "webp"}:
             return analyze_image(content)
         if content_type.startswith("audio/") or suffix in {"wav"}:

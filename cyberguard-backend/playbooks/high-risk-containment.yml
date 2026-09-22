@@ -1,0 +1,10 @@
+id: high-risk-containment
+name: High risk containment preview
+trigger:
+  risk_level: high
+actions:
+  - block_domain
+  - quarantine
+  - revoke_session
+  - notify_soc
+approval_required: true

@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { Mail, Video, Link, FileText, UserX, AlertTriangle, Upload, Search, Loader2, PlayCircle } from 'lucide-react';
+import { Mail, Video, Link, FileText, UserX, AlertTriangle, Upload, Search, Loader2, PlayCircle, Globe } from 'lucide-react';
 import axios from 'axios';
 
 export default function ThreatInspector({ accessToken }) {
-  const [activeSubTab, setActiveSubTab] = useState('phishing');
+  const [activeSubTab, setActiveSubTab] = useState('email');
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
   const [analysisResult, setAnalysisResult] = useState(null);
@@ -11,12 +11,47 @@ export default function ThreatInspector({ accessToken }) {
   const [selectedFile, setSelectedFile] = useState(null);
   const [scanStage, setScanStage] = useState('idle');
   const [dragActive, setDragActive] = useState(false);
+  const [liveAssessment, setLiveAssessment] = useState(null);
+  const [liveLoading, setLiveLoading] = useState(false);
+  const [adversarialResult, setAdversarialResult] = useState(null);
+  const [adversarialLoading, setAdversarialLoading] = useState(false);
+  const [assistantResult, setAssistantResult] = useState(null);
+  const [assistantLoading, setAssistantLoading] = useState(false);
 
   const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
+  useEffect(() => {
+    if (activeSubTab !== 'email' || !inputText.trim()) {
+      setLiveAssessment(null);
+      setLiveLoading(false);
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setLiveLoading(true);
+      try {
+        const response = await axios.post(`${apiBaseUrl}/api/v1/analyze/preview`, {
+          category: 'email',
+          payload: inputText,
+        }, { headers: { Authorization: `Bearer ${accessToken}` }, signal: controller.signal });
+        setLiveAssessment(response.data?.assessment || null);
+      } catch (previewError) {
+        if (!axios.isCancel(previewError)) setLiveAssessment(null);
+      } finally {
+        if (!controller.signal.aborted) setLiveLoading(false);
+      }
+    }, 500);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
+  }, [activeSubTab, inputText, accessToken, apiBaseUrl]);
+
   const handleAnalyze = async (e) => {
     e.preventDefault();
-    if (!inputText.trim() && !(['image', 'audio', 'video', 'deepfake'].includes(activeSubTab) && selectedFile)) return;
+    if (!inputText.trim() && !(['image', 'audio', 'video', 'deepfake', 'email_file'].includes(activeSubTab) && selectedFile)) return;
 
     setLoading(true);
     setScanStage('scanning');
@@ -26,9 +61,11 @@ export default function ThreatInspector({ accessToken }) {
     try {
       const config = { headers: { Authorization: `Bearer ${accessToken}` } };
       let response;
-      if (['image', 'audio', 'video', 'deepfake'].includes(activeSubTab) && selectedFile) {
+      if (activeSubTab === 'website') {
+        response = await axios.post(`${apiBaseUrl}/api/v1/analyze/website`, { url: inputText }, config);
+      } else if (['image', 'audio', 'video', 'deepfake', 'email_file'].includes(activeSubTab) && selectedFile) {
         const formData = new FormData();
-        formData.append('category', activeSubTab);
+        formData.append('category', activeSubTab === 'email_file' ? 'email' : activeSubTab);
         formData.append('file', selectedFile);
         response = await axios.post(`${apiBaseUrl}/api/v1/analyze/file`, formData, config);
       } else {
@@ -40,6 +77,7 @@ export default function ThreatInspector({ accessToken }) {
 
       if (response.data?.assessment) {
         setAnalysisResult(response.data.assessment);
+        setAssistantResult(null);
         setScanStage('ready');
       }
     } catch {
@@ -47,6 +85,28 @@ export default function ThreatInspector({ accessToken }) {
       setScanStage('idle');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const askAnalystAssistant = async () => {
+    if (!analysisResult) return;
+    setAssistantLoading(true);
+    try {
+      const response = await axios.post(`${apiBaseUrl}/api/v1/assistant/analyze`, { assessment: analysisResult }, { headers: { Authorization: `Bearer ${accessToken}` } });
+      setAssistantResult(response.data?.assistant || null);
+    } finally {
+      setAssistantLoading(false);
+    }
+  };
+
+  const runAdversarialTest = async () => {
+    if (!inputText.trim()) return;
+    setAdversarialLoading(true);
+    try {
+      const response = await axios.post(`${apiBaseUrl}/api/v1/adversarial/self-test`, { category: activeSubTab, payload: inputText }, { headers: { Authorization: `Bearer ${accessToken}` } });
+      setAdversarialResult(response.data);
+    } finally {
+      setAdversarialLoading(false);
     }
   };
 
@@ -65,6 +125,7 @@ export default function ThreatInspector({ accessToken }) {
 
   const tabs = [
     { id: 'email', label: 'Email Phishing', icon: Mail },
+    { id: 'email_file', label: 'Email Headers', icon: Mail },
     { id: 'sms', label: 'SMS / Social', icon: Mail },
     { id: 'deepfake', label: 'Deepfake Media', icon: Video },
     { id: 'image', label: 'Image Analysis', icon: Upload },
@@ -72,6 +133,7 @@ export default function ThreatInspector({ accessToken }) {
     { id: 'video', label: 'Video Analysis', icon: Video },
     { id: 'impersonation', label: 'Impersonation', icon: UserX },
     { id: 'url', label: 'Malicious URL', icon: Link },
+    { id: 'website', label: 'Live Website', icon: Globe },
     { id: 'ato', label: 'Credential / ATO', icon: AlertTriangle },
     { id: 'auth_logs', label: 'Authentication Logs', icon: FileText },
     { id: 'system_logs', label: 'System Logs', icon: FileText },
@@ -92,7 +154,7 @@ export default function ThreatInspector({ accessToken }) {
       <div className="inspector-heading mb-6">
         <div className="inspector-title-block">
           <div className="inspector-kicker"><span className="live-pulse" /> MULTI-SOURCE ANALYSIS DESK</div>
-          <h2 className="text-xl font-bold text-white">Threat Inspector</h2>
+          <h2 className="text-xl font-bold text-white">Detection Studio</h2>
           <p className="text-xs text-slate-400">
             Select an artifact channel, submit evidence, and receive a scored XAI assessment from the live engine.
           </p>
@@ -103,7 +165,7 @@ export default function ThreatInspector({ accessToken }) {
       <div className="inspector-source-label"><span>01</span> Choose an analysis channel <small>{tabs.length} sources available</small></div>
       <div className="inspector-source-grid">
         {[
-          ['email', 'Email', Mail], ['url', 'URL', Link], ['image', 'Image', Upload],
+          ['email', 'Email', Mail], ['email_file', 'EML', Mail], ['url', 'URL', Link], ['website', 'Website', Globe], ['image', 'Image', Upload],
           ['audio', 'Audio', Video], ['video', 'Video', Video], ['system_logs', 'Logs', FileText],
         ].map(([id, label, Icon]) => <button key={id} type="button" onClick={() => { setActiveSubTab(id); setAnalysisResult(null); setSelectedFile(null); setInputText(''); }} className={`source-card ${activeSubTab === id ? 'source-card-active' : ''}`}><Icon size={17} /><span>{label}</span><small>{activeSubTab === id ? 'selected' : 'inspect'}</small></button>)}
       </div>
@@ -145,15 +207,15 @@ export default function ThreatInspector({ accessToken }) {
       {/* Input Form */}
       <div className="inspector-source-label"><span>02</span> Submit evidence <small>{activeSubTab.replace('_', ' ')} channel selected</small></div>
       <form onSubmit={handleAnalyze} className="inspector-form space-y-4">
-        {['image', 'audio', 'video', 'deepfake'].includes(activeSubTab) ? (
+        {['image', 'audio', 'video', 'deepfake', 'email_file'].includes(activeSubTab) ? (
           <div className={`dropzone border-2 border-dashed rounded-xl p-8 text-center ${dragActive ? 'dropzone-active' : ''}`} onDragOver={(event) => { event.preventDefault(); setDragActive(true); }} onDragLeave={() => setDragActive(false)} onDrop={(event) => { event.preventDefault(); acceptFile(event.dataTransfer.files?.[0]); }}>
             <Upload size={32} className="mx-auto text-slate-500 mb-2" />
-            <p className="text-xs text-slate-300 font-medium">Upload Image, Audio, or Video</p>
+            <p className="text-xs text-slate-300 font-medium">Upload Image, Audio, Video, or .eml</p>
             <input
               type="file"
               className="hidden"
               id="mediaUpload"
-              accept="image/*,audio/*,video/*"
+              accept="image/*,audio/*,video/*,.eml,message/rfc822"
               onChange={(e) => acceptFile(e.target.files?.[0])}
             />
             <label
@@ -178,6 +240,15 @@ export default function ThreatInspector({ accessToken }) {
               placeholder={`Paste ${activeSubTab} payload, email headers, URL, or JSON logs here...`}
               className="w-full bg-darkBg border border-slate-700 rounded-xl p-3 text-xs text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
             />
+            {activeSubTab === 'email' && inputText.trim() && (
+              <div className="live-phishing-panel" aria-live="polite">
+                <div className="live-phishing-heading"><span className="live-pulse" /> LIVE PHISHING SIGNAL {liveLoading && <Loader2 size={12} className="animate-spin" />}</div>
+                {liveAssessment ? (
+                  <div className="live-phishing-summary"><strong>{liveAssessment.risk_level} risk · {liveAssessment.risk_score}%</strong><span>{liveAssessment.xai_explanation}</span></div>
+                ) : <span className="text-[10px] text-slate-500">Analyzing email indicators as you type...</span>}
+              </div>
+            )}
+            {inputText.trim() && <div className="mt-3 flex items-center gap-3"><button type="button" onClick={runAdversarialTest} disabled={adversarialLoading} className="px-3 py-2 rounded-lg border border-amber-500/30 text-[10px] text-amber-200 disabled:opacity-50">{adversarialLoading ? 'Probing...' : 'Run adversarial self-test'}</button>{adversarialResult && <span className="text-[10px] text-slate-400">Confidence decay: <strong className="text-amber-300">{adversarialResult.confidence_decay}%</strong> · {adversarialResult.status}</span>}</div>}
           </div>
         )}
 
@@ -230,6 +301,13 @@ export default function ThreatInspector({ accessToken }) {
           <p className="text-xs text-slate-200 bg-darkBg p-3 rounded-lg border border-slate-800 leading-relaxed font-mono">
             {analysisResult.xai_explanation}
           </p>
+          <div className="flex items-center gap-3">
+            <button type="button" onClick={askAnalystAssistant} disabled={assistantLoading} className="px-3 py-2 rounded-lg border border-cyan-500/30 text-[10px] text-cyan-200 disabled:opacity-50">
+              {assistantLoading ? 'Generating analyst brief...' : 'Generate analyst brief'}
+            </button>
+            {assistantResult && <span className="text-[10px] text-slate-500">Source: {assistantResult.model}</span>}
+          </div>
+          {assistantResult && <div className="text-xs text-slate-200 bg-cyan-500/5 p-3 rounded-lg border border-cyan-500/20"><strong className="text-cyan-300">Analyst brief</strong><p className="mt-1">{assistantResult.summary}</p><ul className="mt-2 list-disc pl-4">{(assistantResult.next_steps || []).map((step) => <li key={step}>{step}</li>)}</ul>{assistantResult.privacy && <small className="mt-2 block text-slate-500">{assistantResult.privacy}</small>}</div>}
 
           <div className="flex flex-wrap items-center gap-2 text-[10px]">
             <span className="px-2 py-1 rounded-md bg-cyan-500/10 border border-cyan-500/20 text-cyan-300">
@@ -247,10 +325,12 @@ export default function ThreatInspector({ accessToken }) {
             {analysisResult.indicators.map((ind, idx) => (
               <div key={idx} className="flex justify-between text-xs bg-slate-800/40 p-2 rounded border border-slate-800">
                 <span className="text-slate-300">{ind.name}</span>
-                <span className="font-mono text-cyan-400 font-bold">{ind.score}</span>
+                <span className="font-mono text-cyan-400 font-bold">{ind.score}{ind.weight ? ` · weight ${ind.weight}` : ''}</span>
               </div>
             ))}
           </div>
+          {analysisResult.qr_payload && <div className="text-xs text-amber-200 bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">Decoded QR destination: <strong>{analysisResult.qr_payload}</strong></div>}
+          {analysisResult.sender_authenticity && <div className="text-xs text-slate-300 bg-slate-800/40 border border-slate-700 rounded-lg p-3">Sender authenticity: From {analysisResult.sender_authenticity.from || 'unknown'} · Reply-To {analysisResult.sender_authenticity.reply_to || 'none'} · Return-Path {analysisResult.sender_authenticity.return_path || 'none'}</div>}
           <div className="pt-2">
             <span className="text-[10px] font-bold text-slate-400 uppercase">Extracted Threat Intelligence</span>
             <div className="mt-2 flex flex-wrap gap-2">

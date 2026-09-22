@@ -4,7 +4,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      CYBERGUARD_JWT_SECRET: ${CYBERGUARD_JWT_SECRET:-change-this-in-production}
+      CYBERGUARD_ENV: production
+      CYBERGUARD_JWT_SECRET: ${CYBERGUARD_JWT_SECRET:?Set CYBERGUARD_JWT_SECRET before starting Docker Compose}
       CYBERGUARD_FRONTEND_ORIGINS: http://localhost:5173
       CYBERGUARD_DB_PATH: /data/cyberguard.db
     volumes:

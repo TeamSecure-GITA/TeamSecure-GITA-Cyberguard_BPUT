@@ -1,0 +1,20 @@
+{
+  "dataset": "C:\\Users\\SUSIL SAMAL\\Desktop\\CyberGuard\\TeamSecure-GITA-Cyberguard_BPUT\\cyberguard-backend\\data\\uci_sms_spam.csv",
+  "samples": 5574,
+  "holdout_samples": 1394,
+  "backend": "stdlib-fallback",
+  "confusion_matrix": {
+    "tn": 688,
+    "fp": 9,
+    "fn": 409,
+    "tp": 288
+  },
+  "precision": 0.9696969696969697,
+  "recall": 0.4131994261119082,
+  "f1": 0.579476861167002,
+  "false_positive_rate": 0.01291248206599713,
+  "roc_auc": null,
+  "pr_auc": 0.2686333517905185,
+  "median_latency_ms_per_sample": 0.018893400287017366,
+  "p95_latency_ms_per_sample": 0.018893400287017366
+}

@@ -15,52 +15,100 @@ except ImportError:
     joblib = None
 
 MODEL_PATH = Path(__file__).parent / "models" / "threat_text_model.joblib"
+FALLBACK_MODEL_PATH = Path(__file__).parent / "models" / "threat_text_model_fallback.json"
 TEXT_MODEL = None
-if os.getenv("CYBERGUARD_LOAD_TEXT_MODEL", "false").lower() in {"1", "true", "yes"} and joblib and MODEL_PATH.exists():
+FALLBACK_TEXT_MODEL = None
+if os.getenv("CYBERGUARD_LOAD_TEXT_MODEL", "true").lower() in {"1", "true", "yes"} and joblib and MODEL_PATH.exists():
     try:
         TEXT_MODEL = joblib.load(MODEL_PATH)
     except Exception:
         TEXT_MODEL = None
+if os.getenv("CYBERGUARD_LOAD_TEXT_MODEL", "true").lower() in {"1", "true", "yes"} and FALLBACK_MODEL_PATH.exists():
+    try:
+        FALLBACK_TEXT_MODEL = json.loads(FALLBACK_MODEL_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        FALLBACK_TEXT_MODEL = None
 
 
 def model_signal(payload: str) -> tuple[int, dict | None]:
-    if TEXT_MODEL is None:
+    if TEXT_MODEL is not None:
+        probability = float(TEXT_MODEL.predict_proba([payload])[0][1])
+    elif FALLBACK_TEXT_MODEL is not None:
+        words = set(re.findall(r"[a-z0-9]{2,}", payload.lower()))
+        likelihoods = FALLBACK_TEXT_MODEL["likelihoods"]
+        log_scores = {}
+        for label in ("0", "1"):
+            prior = max(float(FALLBACK_TEXT_MODEL["priors"].get(label, 0.5)), 1e-9)
+            score = math.log(prior)
+            for word, probability in likelihoods[label].items():
+                score += math.log(max(probability if word in words else 1 - probability, 1e-9))
+            log_scores[label] = score
+        maximum = max(log_scores.values())
+        denominator = sum(math.exp(value - maximum) for value in log_scores.values())
+        probability = math.exp(log_scores["1"] - maximum) / max(denominator, 1e-9)
+    else:
         return 0, None
-    probability = float(TEXT_MODEL.predict_proba([payload])[0][1])
     score = round(probability * 100)
-    return score, {"name": "Trained Text Model Confidence", "score": f"{score}%"}
+    return score, {"name": "Trained Text Model Confidence", "score": f"{score}%", "model": "TF-IDF + Logistic Regression" if TEXT_MODEL is not None else FALLBACK_TEXT_MODEL["algorithm"]}
 
 def analyze_phishing_and_url(payload: str) -> tuple[int, List[str], List[dict]]:
-    score = 15
+    score = 6
     reasons = []
     indicators = []
-    
+
     payload_lower = payload.lower()
-    
-    # NLP Urgency & Credential Theft Pattern Matching
-    urgency_keywords = ["urgent", "verify", "immediate", "account suspended", "password reset", "action required"]
+    urgency_keywords = ["urgent", "verify", "immediate", "account suspended", "password reset", "action required", "final warning", "security alert"]
     detected_keywords = [kw for kw in urgency_keywords if kw in payload_lower]
-    
     if detected_keywords:
-        score += 35
+        score += 24
         reasons.append(f"High-urgency language and social engineering indicators detected ({', '.join(detected_keywords)}).")
         indicators.append({"name": "Language Pressure Index", "score": "88%"})
-        
-    # Domain Spoofing & URL Analysis
+
+    authority_terms = ["admin", "registrar", "director", "finance", "bank", "support", "official", "security team"]
+    if any(term in payload_lower for term in authority_terms):
+        score += 18
+        reasons.append("Authority impersonation framing suggests a trusted identity was invoked.")
+        indicators.append({"name": "Authority Impersonation Signal", "score": "84%"})
+
+    requests = ["transfer", "otp", "password", "verify credentials", "click here", "confirm identity", "reset password", "update payment", "wire", "gift card"]
+    if any(term in payload_lower for term in requests):
+        score += 20
+        reasons.append("Credential harvesting or financial coercion language is present in the request.")
+        indicators.append({"name": "Credential Theft Construct", "score": "86%"})
+
+    sender_domains = re.findall(r"from:.*?@([\w.-]+\.[A-Za-z]{2,})", payload_lower)
+    if sender_domains and any(domain.endswith(("gmail.com", "outlook.com", "yahoo.com", "hotmail.com")) for domain in sender_domains):
+        score += 10
+        reasons.append("The sender channel does not match the claimed institutional identity.")
+        indicators.append({"name": "Sender Identity Mismatch", "score": "78%"})
+
     urls = re.findall(r'https?://[^\s]+', payload)
     if urls:
         for url in urls:
             extracted = tldextract.extract(url)
             domain_str = f"{extracted.domain}.{extracted.suffix}"
-            if "bput" in extracted.domain and domain_str != "bput.ac.in":
-                score += 45
-                reasons.append(f"Look-alike / Typosquatting domain identified ({domain_str}) impersonating official authority.")
+            host = extracted.fqdn or extracted.domain
+            if any(token in host for token in ("login", "verify", "secure", "update", "micros0ft", "paypa1", "bput")) and domain_str not in {"bput.ac.in", "bput.edu.in", "bput.ac.in"}:
+                score += 24
+                reasons.append(f"Look-alike credential lure domain identified ({domain_str}) impersonating an official authority.")
                 indicators.append({"name": "Domain Dissimilarity Score", "score": "95%"})
-            elif extracted.suffix in ["xyz", "top", "online", "live", "site"]:
-                score += 30
+            elif extracted.suffix in ["xyz", "top", "online", "live", "site", "click"]:
+                score += 18
                 reasons.append(f"Unverified or high-risk TLD extension detected ({extracted.suffix}).")
                 indicators.append({"name": "Unverified SSL / TLD Reputation", "score": "82%"})
-                
+            if any(token in url.lower() for token in ("redirect=", "next=", "return=", "continue=")):
+                score += 12
+                reasons.append("URL redirect parameters are hiding a second destination and increase the risk of credential theft.")
+                indicators.append({"name": "Redirect Obfuscation", "score": "81%"})
+            if len(host) >= 24 or host.count("-") >= 2 or re.search(r"\d", host):
+                score += 8
+                reasons.append(f"Host naming pattern is abnormal and consistent with social-engineering lure construction ({host}).")
+                indicators.append({"name": "Lexical URL Anomaly", "score": "74%"})
+
+    if not reasons:
+        reasons.append("No phishing or social-engineering patterns matched the content baseline.")
+        indicators.append({"name": "Baseline Email Hygiene", "score": "14%"})
+
     return min(score, 99), reasons, indicators
 
 
@@ -264,8 +312,79 @@ def analyze_technical_activity(payload: str) -> tuple[int, List[str], List[dict]
             indicators.append({"name": f"{signature.title()} Signature", "score": f"{min(60 + increment, 98)}%"})
     return min(score, 99), reasons, indicators
 
+def adversarial_self_test(category: str, payload: str) -> dict:
+    baseline = evaluate_threat_payload(category, payload)
+    baseline_score = int(baseline["risk_score"])
+
+    variants = [
+        payload,
+        payload.replace("urgent", "immediately").replace("verify", "confirm").replace("password", "credentials"),
+        payload + " Please act now before access is suspended.",
+        payload.replace("@", "@") + " secure-login-check.example/confirm",
+    ]
+
+    results = []
+    for index, variant in enumerate(variants[:4], start=1):
+        variant_result = evaluate_threat_payload(category, variant)
+        decay = max(0, baseline_score - int(variant_result["risk_score"]))
+        results.append({
+            "probe_id": f"probe-{index}",
+            "variant": variant[:180],
+            "risk_score": int(variant_result["risk_score"]),
+            "risk_level": variant_result["risk_level"],
+            "confidence_decay": decay,
+            "signal_count": int(variant_result.get("signal_count", 0)),
+        })
+
+    strongest_decay = max((item["confidence_decay"] for item in results), default=0)
+    weak_points = [
+        item["probe_id"] for item in results if item["confidence_decay"] >= max(5, strongest_decay * 0.6)
+    ]
+
+    return {
+        "baseline_score": baseline_score,
+        "baseline_level": baseline["risk_level"],
+        "confidence_decay": strongest_decay,
+        "weak_points": weak_points,
+        "adversarial_probes": results,
+        "status": "exposed" if strongest_decay >= 10 else "stable",
+        "recommendation": "Increase model safeguards around urgency, authority, and redirect behavior." if strongest_decay >= 10 else "Model holds steady under adversarial probes.",
+    }
+
+
+def analyze_login_anomaly(payload: str) -> tuple[int, list[str], list[dict]]:
+    """Score structured login telemetry against a deterministic low-risk baseline."""
+    try:
+        event = json.loads(payload) if isinstance(payload, str) else payload
+    except (TypeError, json.JSONDecodeError):
+        event = {}
+    if not isinstance(event, dict):
+        return 0, [], []
+    values = [float(event.get(key, 0) or 0) for key in ("failed_attempts", "distinct_accounts", "distinct_countries", "mfa_denials")]
+    if not any(values) and not event.get("impossible_travel") and not event.get("new_device"):
+        return 0, [], []
+    try:
+        from sklearn.ensemble import IsolationForest
+        import numpy as np
+        reference = np.array([[0, 1, 1, 0], [1, 1, 1, 0], [0, 1, 1, 1], [2, 2, 1, 1], [1, 1, 2, 0], [3, 2, 1, 1]])
+        model = IsolationForest(n_estimators=48, contamination=0.2, random_state=42).fit(reference)
+        anomaly = max(1, min(99, round(50 - float(model.decision_function(np.array([values]))[0]) * 80)))
+    except Exception:
+        anomaly = min(99, 20 + round(sum(values) * 4))
+    reasons = ["Login telemetry deviates from the shared low-risk authentication baseline."]
+    indicators = [{"name": "Isolation Forest Login Anomaly", "score": f"{anomaly}%", "weight": 30}]
+    if event.get("impossible_travel"):
+        reasons.append("Impossible-travel activity is inconsistent with the user baseline.")
+        indicators.append({"name": "Impossible Travel", "score": "94%", "weight": 25})
+    return round(anomaly * 0.7), reasons, indicators
+
+
 def evaluate_threat_payload(category: str, payload: str) -> dict:
-    if category == "url":
+    if category in {"auth_logs", "anomaly"}:
+        score, reasons, indicators = analyze_login_anomaly(payload)
+        detection_method = "isolation-forest-behavioral-baseline"
+        mitre_techniques = ["T1078", "T1110.003"]
+    elif category == "url":
         score, reasons, indicators = analyze_url_intelligence(payload)
         detection_method = "url-intelligence"
         mitre_techniques = ["T1566.002", "T1583.001"]
@@ -318,6 +437,8 @@ def evaluate_threat_payload(category: str, payload: str) -> dict:
         level = "Safe"
         
     explanation = f"{level} Risk: " + (" ".join(reasons) if reasons else "No anomalous threat signatures detected.")
+    for indicator in indicators:
+        indicator.setdefault("weight", max(1, round(score / max(len(indicators), 1))))
     
     # Intelligent Playbook Mappings
     actions = []
@@ -340,4 +461,6 @@ def evaluate_threat_payload(category: str, payload: str) -> dict:
         "detection_method": detection_method,
         "mitre_techniques": mitre_techniques,
         "signal_count": len(indicators),
+        "explanation_summary": " ".join(reasons[:3]) or "No anomalous threat signatures detected.",
+        "scoring_formula": "bounded rule evidence + calibrated text/media/model signal; final score capped at 99",
     }

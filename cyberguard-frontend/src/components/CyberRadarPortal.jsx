@@ -19,7 +19,36 @@ import {
 } from 'lucide-react';
 import LanguageToggle from './LanguageToggle';
 
-export default function CyberRadarPortal({ onOpenWorkspace, onQuickLogin, currentSession, currentLang, onLanguageChange }) {
+const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+
+const decodeBase64Url = (value) => {
+  const padded = `${value}${'='.repeat((4 - (value.length % 4)) % 4)}`.replace(/-/g, '+').replace(/_/g, '/');
+  const binary = window.atob(padded);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+};
+
+const preparePasskeyOptions = (options) => ({
+  ...options,
+  challenge: decodeBase64Url(options.challenge),
+  user: options.user ? { ...options.user, id: decodeBase64Url(options.user.id) } : undefined,
+  allowCredentials: options.allowCredentials?.map((item) => ({ ...item, id: decodeBase64Url(item.id) })),
+  excludeCredentials: options.excludeCredentials?.map((item) => ({ ...item, id: decodeBase64Url(item.id) })),
+});
+
+const serializePasskey = (credential) => (typeof credential.toJSON === 'function' ? credential.toJSON() : {
+  id: credential.id,
+  rawId: btoa(String.fromCharCode(...new Uint8Array(credential.rawId))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
+  type: credential.type,
+  response: {
+    clientDataJSON: btoa(String.fromCharCode(...new Uint8Array(credential.response.clientDataJSON))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''),
+    ...(credential.response.attestationObject ? { attestationObject: btoa(String.fromCharCode(...new Uint8Array(credential.response.attestationObject))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') } : {}),
+    ...(credential.response.authenticatorData ? { authenticatorData: btoa(String.fromCharCode(...new Uint8Array(credential.response.authenticatorData))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') } : {}),
+    ...(credential.response.signature ? { signature: btoa(String.fromCharCode(...new Uint8Array(credential.response.signature))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') } : {}),
+    ...(credential.response.userHandle ? { userHandle: btoa(String.fromCharCode(...new Uint8Array(credential.response.userHandle))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') } : {}),
+  },
+});
+
+export default function CyberRadarPortal({ onOpenWorkspace, onQuickLogin, onVerifyOtp, onVerifyPasskey, onApprovedSession, currentSession, currentLang, onLanguageChange }) {
   const [telemetry, setTelemetry] = useState({
     lat: 12.44,
     freq: 4.82,
@@ -30,10 +59,18 @@ export default function CyberRadarPortal({ onOpenWorkspace, onQuickLogin, curren
 
   const [activeBlip, setActiveBlip] = useState(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [loginUsername, setLoginUsername] = useState('teamsecure.project@gmail.com');
-  const [loginPassword, setLoginPassword] = useState('Secure@9040');
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState(null);
+  const [otpChallenge, setOtpChallenge] = useState(null);
+  const [otp, setOtp] = useState('');
+  const [requestEmail, setRequestEmail] = useState('');
+  const [requestName, setRequestName] = useState('');
+  const [requestPurpose, setRequestPurpose] = useState('');
+  const [requestToken, setRequestToken] = useState('');
+  const [requestState, setRequestState] = useState(null);
+  const [requestLoading, setRequestLoading] = useState(false);
 
   // Dynamic telemetry pulse simulation
   useEffect(() => {
@@ -51,12 +88,7 @@ export default function CyberRadarPortal({ onOpenWorkspace, onQuickLogin, curren
     if (currentSession) {
       onOpenWorkspace();
     } else {
-      // Auto-authenticate as Senior SOC Lead or open workspace
-      if (onQuickLogin) {
-        onQuickLogin('teamsecure.project@gmail.com', 'Secure@9040');
-      } else {
-        onOpenWorkspace();
-      }
+      setShowAuthModal(true);
     }
   };
 
@@ -66,15 +98,83 @@ export default function CyberRadarPortal({ onOpenWorkspace, onQuickLogin, curren
     setAuthError(null);
     try {
       if (onQuickLogin) {
-        await onQuickLogin(loginUsername, loginPassword);
-        setShowAuthModal(false);
+        const result = await onQuickLogin(loginUsername, loginPassword);
+        if (result?.requires_passkey) {
+          if (!window.PublicKeyCredential || !navigator.credentials) throw new Error('This browser does not support passkeys.');
+          const credential = result.kind === 'registration'
+            ? await navigator.credentials.create({ publicKey: preparePasskeyOptions(result.options) })
+            : await navigator.credentials.get({ publicKey: preparePasskeyOptions(result.options) });
+          if (!credential) throw new Error('Passkey ceremony was cancelled.');
+          await onVerifyPasskey(result.challenge_id, serializePasskey(credential));
+          setShowAuthModal(false);
+        } else {
+          setShowAuthModal(false);
+        }
       } else {
         onOpenWorkspace();
       }
     } catch (err) {
-      setAuthError('Authentication failed. Check credentials.');
+      setAuthError(err.response?.data?.detail || 'Authentication failed. Check credentials.');
     } finally {
       setAuthLoading(false);
+    }
+  };
+
+  const handleOtpVerification = async (event) => {
+    event.preventDefault();
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      await onVerifyOtp(otpChallenge.challenge_id, otp);
+      setShowAuthModal(false);
+      setOtpChallenge(null);
+      setOtp('');
+    } catch (err) {
+      setAuthError(err.response?.data?.detail || 'OTP verification failed.');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const submitAccessRequest = async (event) => {
+    event.preventDefault();
+    setRequestLoading(true);
+    setRequestState(null);
+    setAuthError(null);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/access/request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: requestEmail, name: requestName, purpose: requestPurpose }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Unable to submit access request.');
+      setRequestToken(data.request_token);
+      setRequestState(data.email_sent ? 'Approval request sent to the security owner.' : 'Request saved, but SMTP is not configured yet.');
+    } catch (error) {
+      setAuthError(error.message);
+    } finally {
+      setRequestLoading(false);
+    }
+  };
+
+  const checkAccessApproval = async () => {
+    if (!requestToken) return;
+    setRequestLoading(true);
+    setAuthError(null);
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/v1/access/status?token=${encodeURIComponent(requestToken)}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Unable to check approval status.');
+      if (data.status === 'approved') {
+        onApprovedSession(data);
+        return;
+      }
+      setRequestState(`Request status: ${data.status}. The security owner must approve access first.`);
+    } catch (error) {
+      setAuthError(error.message);
+    } finally {
+      setRequestLoading(false);
     }
   };
 
@@ -394,13 +494,14 @@ export default function CyberRadarPortal({ onOpenWorkspace, onQuickLogin, curren
               </button>
             </div>
 
-            <form onSubmit={handleManualLogin} className="space-y-4">
+            {!otpChallenge ? <form onSubmit={handleManualLogin} className="space-y-4">
               <div>
                 <label className="block text-xs font-mono text-slate-300 mb-1">USERNAME</label>
                 <input
                   type="text"
                   value={loginUsername}
                   onChange={(e) => setLoginUsername(e.target.value)}
+                  placeholder="Enter your administrator username"
                   className="w-full px-3.5 py-2.5 rounded-lg bg-[#040c17] border border-slate-700 text-white font-mono text-sm focus:border-cyan-500 focus:outline-none"
                 />
               </div>
@@ -423,15 +524,8 @@ export default function CyberRadarPortal({ onOpenWorkspace, onQuickLogin, curren
               )}
 
               <div className="p-3 rounded-lg bg-slate-900/80 border border-slate-800 text-[11px] font-mono text-slate-400 space-y-1">
-                <p className="text-cyan-400 font-semibold">PRESET SOC ACCOUNTS:</p>
-                <div className="flex justify-between">
-                  <span>Lead SOC (Full Access):</span>
-                  <span className="text-slate-300">Head admin / teamsecure.project@gmail.com</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>Tier 1 Analyst (Read-only):</span>
-                  <span className="text-slate-300">analyst / analyst123</span>
-                </div>
+                <p className="text-cyan-400 font-semibold">RESTRICTED ACCESS:</p>
+                <p>Use your assigned administrator username. Credentials are never displayed in the public portal.</p>
               </div>
 
               <div className="pt-2 flex items-center gap-3">
@@ -450,7 +544,26 @@ export default function CyberRadarPortal({ onOpenWorkspace, onQuickLogin, curren
                   {authLoading ? 'Verifying...' : 'Authenticate'}
                 </button>
               </div>
-            </form>
+            </form> : <form onSubmit={handleOtpVerification} className="space-y-4">
+              <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-200">A one-time password was sent to {otpChallenge.masked_email}.</div>
+              <label className="block text-xs font-mono text-slate-300">ONE-TIME PASSWORD
+                <input required inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={otp} onChange={(event) => setOtp(event.target.value.replace(/\D/g, ''))} className="mt-2 w-full px-3.5 py-2.5 rounded-lg bg-[#040c17] border border-slate-700 text-white font-mono text-sm tracking-[0.4em] focus:border-cyan-500 focus:outline-none" placeholder="000000" />
+              </label>
+              <button type="submit" disabled={authLoading || otp.length !== 6} className="w-full py-2.5 rounded-lg bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold text-sm disabled:opacity-50">{authLoading ? 'Verifying OTP...' : 'Verify and enter workspace'}</button>
+            </form>}
+
+            <div className="border-t border-slate-800 pt-4">
+              <p className="text-xs font-semibold text-white">Request permission by email</p>
+              <p className="mt-1 text-[11px] text-slate-400">The security owner must approve your request before a temporary analyst session is issued.</p>
+              <form onSubmit={submitAccessRequest} className="mt-3 space-y-2">
+                <input required type="email" value={requestEmail} onChange={(event) => setRequestEmail(event.target.value)} placeholder="Your email address" className="w-full px-3 py-2 rounded-lg bg-[#040c17] border border-slate-700 text-white text-xs focus:border-cyan-500 focus:outline-none" />
+                <input type="text" value={requestName} onChange={(event) => setRequestName(event.target.value)} placeholder="Name (optional)" className="w-full px-3 py-2 rounded-lg bg-[#040c17] border border-slate-700 text-white text-xs focus:border-cyan-500 focus:outline-none" />
+                <input type="text" value={requestPurpose} onChange={(event) => setRequestPurpose(event.target.value)} placeholder="Purpose (optional)" className="w-full px-3 py-2 rounded-lg bg-[#040c17] border border-slate-700 text-white text-xs focus:border-cyan-500 focus:outline-none" />
+                <button type="submit" disabled={requestLoading} className="w-full py-2 rounded-lg border border-amber-400/40 text-amber-300 hover:bg-amber-400/10 disabled:opacity-50 text-xs font-semibold">{requestLoading ? 'Submitting...' : 'Request approval'}</button>
+              </form>
+              {requestState && <p className="mt-3 text-[11px] text-emerald-300">{requestState}</p>}
+              {requestToken && <button type="button" onClick={checkAccessApproval} disabled={requestLoading} className="mt-2 w-full py-2 rounded-lg border border-cyan-400/40 text-cyan-300 hover:bg-cyan-400/10 disabled:opacity-50 text-xs font-semibold">Check approval</button>}
+            </div>
           </div>
         </div>
       )}

@@ -9,6 +9,13 @@ export default function XaiModal({ incident, onClose, userRole, accessToken }) {
   const [correlations, setCorrelations] = useState(null);
   const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
   useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+  useEffect(() => {
     if (!incident?.database_id) return;
     const config = { headers: { Authorization: `Bearer ${accessToken}` } };
     Promise.all([
@@ -78,8 +85,8 @@ export default function XaiModal({ incident, onClose, userRole, accessToken }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-      <div className="bg-cardBg border border-slate-700 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl">
+    <div className="xai-modal-backdrop fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      <div className="xai-modal bg-cardBg border border-slate-700 rounded-2xl w-full max-w-3xl overflow-hidden shadow-2xl" role="dialog" aria-modal="true" aria-labelledby="xai-modal-title">
         
         {/* Header */}
         <div className="px-6 py-4 border-b border-slate-700 flex items-center justify-between bg-slate-900/50">
@@ -88,17 +95,17 @@ export default function XaiModal({ incident, onClose, userRole, accessToken }) {
               <Cpu size={20} />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-white">Explainable AI Threat Assessment</h3>
+              <h3 id="xai-modal-title" className="text-lg font-bold text-white">Explainable AI Threat Assessment</h3>
               <p className="text-xs text-slate-400 font-mono">Incident Target: {incident.id}</p>
             </div>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-white p-1 rounded-lg bg-slate-800 transition">
-            <X size={20} />
+          <button type="button" onClick={onClose} className="xai-close-button text-slate-300 hover:text-white p-2 rounded-lg bg-slate-800 transition" aria-label="Close XAI assessment">
+            <X size={18} /><span>Close</span>
           </button>
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-5">
+        <div className="xai-modal-content p-6 space-y-5">
           <div className="flex items-center justify-between p-4 bg-slate-900/80 rounded-xl border border-slate-800">
             <div>
               <span className="text-xs text-slate-400 uppercase font-semibold">Calculated Threat Level</span>

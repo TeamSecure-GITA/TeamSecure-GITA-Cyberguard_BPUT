@@ -61,11 +61,37 @@ def _local_reputation(indicator: dict[str, str]) -> dict[str, Any]:
     return {"reputation": indicator.get("reputation", "unknown"), "risk_score": 20, "source": "local-heuristic"}
 
 
+def _live_reputation(indicator: dict[str, str]) -> dict[str, Any] | None:
+    value = indicator["indicator"]
+    if indicator["type"] == "url" and os.getenv("CYBERGUARD_URLHAUS_AUTH_KEY"):
+        try:
+            response = requests.post("https://urlhaus-api.abuse.ch/v1/url/", data={"url": indicator["value"]}, headers={"Auth-Key": os.getenv("CYBERGUARD_URLHAUS_AUTH_KEY")}, timeout=5)
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("query_status") == "ok":
+                return {"reputation": "malicious", "risk_score": 98, "source": "URLhaus"}
+            return {"reputation": "unknown", "risk_score": 20, "source": "URLhaus"}
+        except (requests.RequestException, ValueError):
+            return {"enrichment_error": "URLhaus-unavailable"}
+    if indicator["type"] == "ip" and os.getenv("CYBERGUARD_ABUSEIPDB_KEY"):
+        try:
+            response = requests.get("https://api.abuseipdb.com/api/v2/check", params={"ipAddress": value, "maxAgeInDays": 90}, headers={"Key": os.getenv("CYBERGUARD_ABUSEIPDB_KEY"), "Accept": "application/json"}, timeout=5)
+            response.raise_for_status()
+            score = int(response.json().get("data", {}).get("abuseConfidenceScore", 0))
+            return {"reputation": "malicious" if score >= 50 else "unknown", "risk_score": score, "source": "AbuseIPDB"}
+        except (requests.RequestException, ValueError):
+            return {"enrichment_error": "AbuseIPDB-unavailable"}
+    return None
+
+
 def enrich_iocs(iocs: list[dict[str, str]]) -> list[dict[str, Any]]:
     enriched = []
     external_url = os.getenv("CYBERGUARD_THREAT_INTEL_URL")
     for ioc in iocs:
         result = {**ioc, **_local_reputation(ioc)}
+        live = _live_reputation(ioc)
+        if live:
+            result.update(live)
         if external_url:
             try:
                 response = requests.post(external_url, json={"indicator": ioc["indicator"], "type": ioc["type"]}, timeout=3)

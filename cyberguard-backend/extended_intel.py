@@ -53,16 +53,55 @@ def inspect_indicator(value: str, indicator_type: str | None = None) -> dict[str
 
 
 def scan_payload(payload: str) -> dict[str, Any]:
-    urls = re.findall(r"https?://[^\s<>'\"]+", payload)
-    emails = re.findall(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", payload)
+    text = payload.strip()
+    lowered = text.lower()
+    score = 8
+    reasons: list[str] = []
+
+    urgency_terms = ["urgent", "verify", "immediate", "account suspended", "password reset", "security alert", "final warning", "action required"]
+    if any(term in lowered for term in urgency_terms):
+        score += 25
+        reasons.append("Urgency and credential pressure language detected.")
+
+    authority_terms = ["admin", "registrar", "director", "official", "finance", "security team", "support desk"]
+    if any(term in lowered for term in authority_terms):
+        score += 18
+        reasons.append("Authority impersonation language detected.")
+
+    request_terms = ["transfer", "otp", "verify credentials", "click here", "confirm identity", "update payment", "gift card", "wire", "reset password"]
+    if any(term in lowered for term in request_terms):
+        score += 20
+        reasons.append("Request coercion suggests credential theft or financial abuse.")
+
+    urls = re.findall(r"https?://[^\s<>'\"]+", text)
+    emails = re.findall(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", text)
     values = list(dict.fromkeys(urls + emails))
     results = [inspect_indicator(value) for value in values]
-    score = max((item["risk_score"] for item in results), default=8)
+
+    for item in results:
+        if item["reputation"] == "malicious":
+            score = max(score, min(99, item["risk_score"] + 10))
+        elif item["reputation"] == "suspicious":
+            score = max(score, min(99, item["risk_score"] + 5))
+
+    for url in urls:
+        host = urlparse(url).hostname or ""
+        if any(token in host for token in ("login", "verify", "secure", "update", "micros0ft", "paypa1")):
+            score += 14
+            reasons.append(f"Look-alike URL structure was detected for {host}.")
+        if any(tld in host for tld in ("xyz", "top", "online", "click", "live", "site")):
+            score += 10
+            reasons.append("High-risk URL suffix pattern detected.")
+
+    if not values and not reasons:
+        score = 8
+
+    score = min(score, 99)
     return {
         "safe": score < 45,
         "risk_score": score,
         "results": results,
-        "genome": hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16].upper(),
+        "genome": hashlib.sha256(text.encode("utf-8")).hexdigest()[:16].upper(),
     }
 
 

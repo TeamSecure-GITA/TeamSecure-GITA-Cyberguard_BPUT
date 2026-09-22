@@ -18,6 +18,27 @@ The bundled demonstration dataset contains 104 labeled examples covering phishin
 
 These figures are only a baseline because the bundled examples are synthetic and the expanded set intentionally favors catching suspicious activity. Production evaluation must use a separated, verified, representative dataset and should report precision, recall, F1, confusion matrix, false-positive rate, inference latency, and drift over time.
 
+## Reproducible evaluation workflow
+
+`evaluate_public_datasets.py` accepts an authorised CSV snapshot with `text,label` columns and writes the required confusion matrix, false-positive rate, ROC-AUC, PR-AUC, and median/p95 inference latency:
+
+```powershell
+cd cyberguard-backend
+python evaluate_public_datasets.py --data path\to\authorised\dataset.csv --output evaluation-results.json
+```
+
+Do not report the bundled 104 synthetic examples as public-data performance. Preserve the dataset licence, source URL, collection date, deduplication policy, and untouched test split beside each generated result.
+
+## Optional pretrained media evaluation
+
+The image and audio adapters in `deepfake_models.py` use configurable Hugging Face model IDs only when `CYBERGUARD_ENABLE_PRETRAINED_MEDIA=true` and `requirements-ai.txt` is installed. `/api/v1/models/status` reports the loaded model and any loading error. The current heuristic result must not be labelled as pretrained output. Before production use, calibrate both modalities on an authorised holdout and publish per-modality confusion matrices, ROC-AUC, PR-AUC, and p95 latency.
+
+## Federated and analyst-assistant workflows
+
+`federated_training.py` simulates three institutions using federated averaging over hashed features. It redacts email addresses and long numeric identifiers and does not share raw text. `CYBERGUARD_FEDERATED_EPSILON` records the declared privacy budget; this is a simulation until a Flower deployment is configured.
+
+`POST /api/v1/assistant/analyze` sends only redacted structured evidence to an OpenAI-compatible endpoint when `CYBERGUARD_LLM_ENDPOINT`, `CYBERGUARD_LLM_API_KEY`, and `CYBERGUARD_LLM_MODEL` are configured. With no provider configured it returns an explicitly labelled offline template. The rules and classifiers remain the decision-makers.
+
 ## Demonstration Scenarios
 
 1. Phishing/social engineering: urgency, credential request, and look-alike URL.

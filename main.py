@@ -19,8 +19,11 @@ except ImportError:
     base_dir = os.path.dirname(os.path.abspath(__file__))
     candidates = [
         os.path.join(base_dir, "cyberguard-backend", ".venv", "bin", "python3"),
+        os.path.join(base_dir, "cyberguard-backend", ".venv", "Scripts", "python.exe"),
         os.path.join(base_dir, "cyberguard-backend", "venv", "bin", "python3"),
+        os.path.join(base_dir, "cyberguard-backend", "venv", "Scripts", "python.exe"),
         os.path.join(base_dir, ".venv", "bin", "python3"),
+        os.path.join(base_dir, ".venv", "Scripts", "python.exe"),
     ]
     venv_python = next((p for p in candidates if os.path.exists(p)), None)
     if venv_python and sys.executable != venv_python:

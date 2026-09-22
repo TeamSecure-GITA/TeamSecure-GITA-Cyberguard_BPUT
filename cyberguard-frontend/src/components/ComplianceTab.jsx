@@ -30,6 +30,26 @@ export default function ComplianceTab({ accessToken }) {
     },
   ]);
   const [mitreMappings, setMitreMappings] = useState([]);
+  const [certificateBusy, setCertificateBusy] = useState(false);
+
+  const generateCertificate = () => {
+    setCertificateBusy(true);
+    const certificate = {
+      title: 'CyberGuard Compliance Audit Certificate',
+      generated_at: new Date().toISOString(),
+      controls: complianceData.map(({ framework, status, score, description }) => ({ framework, status, score, description })),
+      mitre_attack_mappings: mitreMappings,
+      evidence: 'Generated from the authenticated CyberGuard compliance and MITRE endpoints.',
+    };
+    const blob = new Blob([JSON.stringify(certificate, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `cyberguard-audit-certificate-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setCertificateBusy(false);
+  };
 
   useEffect(() => {
     const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
@@ -47,12 +67,12 @@ export default function ComplianceTab({ accessToken }) {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <div>
-          <h2 className="text-xl font-bold text-slate-100">National Cybersecurity & Institutional Compliance</h2>
+          <h2 className="text-xl font-bold text-slate-100">Compliance & Governance</h2>
           <p className="text-xs text-slate-400">Automated mapping against Indian Cybersecurity Standards & Guidelines</p>
         </div>
-        <button className="flex items-center space-x-2 bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 px-4 py-2 rounded-xl text-xs font-semibold hover:bg-cyan-500/20 transition">
+        <button type="button" onClick={generateCertificate} disabled={certificateBusy} className="flex items-center space-x-2 bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 px-4 py-2 rounded-xl text-xs font-semibold hover:bg-cyan-500/20 transition disabled:opacity-50">
           <FileText size={16} />
-          <span>Generate Audit Certificate</span>
+          <span>{certificateBusy ? 'Generating...' : 'Generate Audit Certificate'}</span>
         </button>
       </div>
 

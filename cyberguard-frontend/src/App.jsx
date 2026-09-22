@@ -26,6 +26,8 @@ import TrustScanner from './components/TrustScanner';
 import FrontierCapabilities from './components/FrontierCapabilities';
 import AdvancedDefenseLab from './components/AdvancedDefenseLab';
 import SpeculativeDefenseWidget from './components/SpeculativeDefenseWidget';
+import SecurityFusionCenter from './components/SecurityFusionCenter';
+import RoadmapCoveragePanel from './components/RoadmapCoveragePanel';
 import { LanguageProvider } from './i18n';
 
 export default function App() {
@@ -43,33 +45,46 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [incidentSearch, setIncidentSearch] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
+  const [demoSeeded, setDemoSeeded] = useState(false);
+  const [routingInfo, setRoutingInfo] = useState(null);
   const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
-  const handleQuickLogin = async (username = 'teamsecure.project@gmail.com', password = 'Secure@9040') => {
-    try {
-      const response = await axios.post(`${apiBaseUrl}/api/v1/auth/login`, { username, password });
+  const handleQuickLogin = async (username, password) => {
+    const response = await axios.post(`${apiBaseUrl}/api/v1/auth/login`, { username, password });
+    if (!response.data.requires_otp) {
       setSession(response.data);
-      return response.data;
-    } catch (err) {
-      const fallbackSession = {
-        access_token: 'offline-demo-token',
-        token_type: 'bearer',
-        user: { username, role: username === 'lead' ? 'lead' : 'analyst' }
-      };
-      setSession(fallbackSession);
-      return fallbackSession;
+      setViewMode('workspace');
+      setActiveTab('dashboard');
     }
+    return response.data;
   };
 
-  React.useEffect(() => {
-    if (!session) {
-      handleQuickLogin('teamsecure.project@gmail.com', 'Secure@9040');
-    }
-  }, []);
+  const handleVerifyOtp = async (challengeId, otp) => {
+    const response = await axios.post(`${apiBaseUrl}/api/v1/auth/verify-otp`, { challenge_id: challengeId, otp });
+    setSession(response.data);
+    setViewMode('workspace');
+    setActiveTab('dashboard');
+    return response.data;
+  };
+
+  const handleVerifyPasskey = async (challengeId, credential) => {
+    const response = await axios.post(`${apiBaseUrl}/api/v1/auth/passkey`, { challenge_id: challengeId, credential });
+    setSession(response.data);
+    setViewMode('workspace');
+    setActiveTab('dashboard');
+    return response.data;
+  };
 
   React.useEffect(() => {
     if (!session) return;
     const config = { headers: { Authorization: `Bearer ${session.access_token}` } };
+    const recoverUnauthorized = (result) => {
+      if (result.status === 'rejected' && result.reason?.response?.status === 401) {
+        setSession(null);
+        setViewMode('portal');
+        setRoutingInfo(null);
+      }
+    };
     Promise.allSettled([
       axios.get(`${apiBaseUrl}/api/v1/dashboard/metrics`, config),
       axios.get(`${apiBaseUrl}/api/v1/incidents`, config),
@@ -78,6 +93,7 @@ export default function App() {
       axios.get(`${apiBaseUrl}/api/v1/models/status`, config),
       axios.get(`${apiBaseUrl}/api/v1/notifications`, config),
     ]).then(([metricsResult, incidentsResult, timelineResult, healthResult, modelResult, notificationResult]) => {
+      [metricsResult, incidentsResult, timelineResult, healthResult, modelResult, notificationResult].forEach(recoverUnauthorized);
       if (metricsResult.status === 'fulfilled') setMetrics(metricsResult.value.data);
       if (incidentsResult.status === 'fulfilled') setIncidents(incidentsResult.value.data.incidents || []);
       if (timelineResult.status === 'fulfilled') setTimeline(timelineResult.value.data || []);
@@ -88,6 +104,61 @@ export default function App() {
     const timer = window.setInterval(() => setRefreshKey((value) => value + 1), 10000);
     return () => window.clearInterval(timer);
   }, [session, apiBaseUrl, refreshKey]);
+
+  React.useEffect(() => {
+    if (!session) {
+      setRoutingInfo(null);
+      return;
+    }
+
+    const config = { headers: { Authorization: `Bearer ${session.access_token}` } };
+    axios.post(
+      `${apiBaseUrl}/api/v1/alert-routing`,
+      {
+        incidents: incidents.length ? incidents : [],
+        analysts: [{ username: session.user?.username || 'analyst', role: session.user?.role || 'analyst' }],
+      },
+      config,
+    )
+      .then((response) => setRoutingInfo(response.data))
+      .catch((error) => {
+        setRoutingInfo(null);
+        if (error.response?.status === 401) {
+          setSession(null);
+          setViewMode('portal');
+        }
+      });
+  }, [session, apiBaseUrl, incidents, refreshKey]);
+
+  React.useEffect(() => {
+    if (!session || demoSeeded || incidents.length > 0) return;
+
+    const hydrateDemoData = async () => {
+      try {
+        const scenariosResponse = await axios.get(`${apiBaseUrl}/api/v1/demo/scenarios`, { headers: { Authorization: `Bearer ${session.access_token}` } });
+        const scenarios = scenariosResponse.data.scenarios || [];
+        if (!scenarios.length) {
+          setDemoSeeded(true);
+          return;
+        }
+
+        await Promise.allSettled(
+          scenarios.map((scenario) => axios.post(
+            `${apiBaseUrl}/api/v1/analyze`,
+            { category: scenario.category, payload: scenario.payload },
+            { headers: { Authorization: `Bearer ${session.access_token}` } },
+          )),
+        );
+
+        setDemoSeeded(true);
+        setRefreshKey((value) => value + 1);
+      } catch {
+        setDemoSeeded(true);
+      }
+    };
+
+    hydrateDemoData();
+  }, [session, incidents.length, demoSeeded, apiBaseUrl]);
 
   React.useEffect(() => {
     if (!session || typeof WebSocket === 'undefined') return undefined;
@@ -126,7 +197,14 @@ export default function App() {
               setActiveTab('dashboard');
             }
           }}
+          onApprovedSession={(approvedSession) => {
+            setSession(approvedSession);
+            setViewMode('workspace');
+            setActiveTab('dashboard');
+          }}
           onQuickLogin={handleQuickLogin}
+          onVerifyOtp={handleVerifyOtp}
+          onVerifyPasskey={handleVerifyPasskey}
         />
       </LanguageProvider>
     );
@@ -174,7 +252,7 @@ export default function App() {
                 <div className="hero-grid" />
                 <div>
                   <div className="hero-kicker"><span className="live-pulse" /> AI SECURITY OPERATIONS CENTER</div>
-                  <h2>CyberGuard AI<br /><span>Command Center</span></h2>
+                  <h2>CyberGuard AI<br /><span>Security Command Center</span></h2>
                   <p>One operating picture for detection, explanation, and response across BPUT digital assets.</p>
                 </div>
                 <div className="hero-status"><span className="hero-status-label">Posture</span><strong>{health?.status === 'healthy' ? 'Operational' : 'Checking'}</strong><span>Updated live from the AI engine</span></div>
@@ -193,6 +271,7 @@ export default function App() {
                incidents={incidents}
                initialSearch={incidentSearch}
                accessToken={session?.access_token}
+               routeData={routingInfo}
                onSelectIncident={setSelectedIncident}
                onRefresh={() => setRefreshKey((value) => value + 1)}
              />
@@ -201,10 +280,24 @@ export default function App() {
 {activeTab === 'graph' && <AttackGraph accessToken={session?.access_token} />}
 {activeTab === 'inspector' && <ThreatInspector accessToken={session?.access_token} />}
 {activeTab === 'compliance' && <ComplianceTab accessToken={session?.access_token} />}
-{activeTab === 'notifications' && <NotificationsPanel accessToken={session?.access_token} />}
-{activeTab === 'admin' && <AdminConsole accessToken={session?.access_token} />}
+{activeTab === 'notifications' && <NotificationsPanel accessToken={session?.access_token} workload={{ incidents, analysts: [{ username: session?.user?.username || 'analyst', role: session?.user?.role || 'analyst' }] }} />}
+{activeTab === 'admin' && <AdminConsole accessToken={session?.access_token} routeData={routingInfo} />}
 {activeTab === 'intelligence' && <ThreatIntelligence incidents={incidents} accessToken={session?.access_token} />}
-{activeTab === 'live' && <div className="grid grid-cols-1 xl:grid-cols-2 gap-5"><ThreatMap apiBaseUrl={apiBaseUrl} accessToken={session?.access_token} /><IdentityRiskHeatmap apiBaseUrl={apiBaseUrl} accessToken={session?.access_token} /><IocReputationFeed apiBaseUrl={apiBaseUrl} accessToken={session?.access_token} /><TrustScanner apiBaseUrl={apiBaseUrl} accessToken={session?.access_token} /><FrontierCapabilities apiBaseUrl={apiBaseUrl} accessToken={session?.access_token} /><AdvancedDefenseLab apiBaseUrl={apiBaseUrl} accessToken={session?.access_token} /><SpeculativeDefenseWidget apiBaseUrl={apiBaseUrl} accessToken={session?.access_token} /></div>}
+{activeTab === 'live' && (
+  <div className="space-y-5">
+    <SecurityFusionCenter apiBaseUrl={apiBaseUrl} accessToken={session?.access_token} />
+    <RoadmapCoveragePanel apiBaseUrl={apiBaseUrl} accessToken={session?.access_token} userRole={session?.user?.role} incidents={incidents} />
+    <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+      <ThreatMap apiBaseUrl={apiBaseUrl} accessToken={session?.access_token} />
+      <IdentityRiskHeatmap apiBaseUrl={apiBaseUrl} accessToken={session?.access_token} />
+      <IocReputationFeed apiBaseUrl={apiBaseUrl} accessToken={session?.access_token} />
+      <TrustScanner apiBaseUrl={apiBaseUrl} accessToken={session?.access_token} />
+      <FrontierCapabilities apiBaseUrl={apiBaseUrl} accessToken={session?.access_token} />
+      <AdvancedDefenseLab apiBaseUrl={apiBaseUrl} accessToken={session?.access_token} />
+      <SpeculativeDefenseWidget apiBaseUrl={apiBaseUrl} accessToken={session?.access_token} />
+    </div>
+  </div>
+)}
 </main>
 </div>
 

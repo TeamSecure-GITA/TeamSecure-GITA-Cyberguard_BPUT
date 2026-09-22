@@ -1,13 +1,27 @@
 import ast
 import hashlib
+import html
 import json
 import os
+import re
 import secrets
 import sqlite3
 import sys
 import smtplib
 import time
+import base64
 from email.message import EmailMessage
+
+try:
+    import bcrypt
+except ImportError:
+    bcrypt = None
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+except ImportError:
+    pass
 
 # Auto-detect and switch to local .venv if run with system python lacking fastapi/uvicorn
 try:
@@ -17,53 +31,84 @@ except ImportError:
     backend_dir = os.path.dirname(os.path.abspath(__file__))
     candidates = [
         os.path.join(backend_dir, ".venv", "bin", "python3"),
+        os.path.join(backend_dir, ".venv", "Scripts", "python.exe"),
         os.path.join(backend_dir, "venv", "bin", "python3"),
+        os.path.join(backend_dir, "venv", "Scripts", "python.exe"),
         os.path.join(os.path.dirname(backend_dir), ".venv", "bin", "python3"),
+        os.path.join(os.path.dirname(backend_dir), ".venv", "Scripts", "python.exe"),
     ]
     venv_python = next((p for p in candidates if os.path.exists(p)), None)
     if venv_python and sys.executable != venv_python:
         os.execv(venv_python, [venv_python] + sys.argv)
 
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import requests
 import jwt
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from webauthn import generate_authentication_options, generate_registration_options, options_to_json, verify_authentication_response, verify_registration_response
+from webauthn.helpers.structs import PublicKeyCredentialDescriptor, UserVerificationRequirement
 
-from detection_engine import TEXT_MODEL, evaluate_threat_payload
+from detection_engine import FALLBACK_TEXT_MODEL, TEXT_MODEL, adversarial_self_test, evaluate_threat_payload
 from battle_simulator import run_battle
 from campaign_engine import correlate_incident
 from digital_twin import build_twin
 from forecast_engine import forecast_risk
 from media_engine import analyze_media
-from models import AgentConsensusRequest, AlertRequest, BattleRequest, DeceptionRequest, ForecastRequest, IncidentComment, IncidentUpdate, LoginRequest, NotificationUpdate, PsychologyRequest, ResponseExecutionRequest, ScannerRequest, SimulationRequest, ThreatAnalysisRequest, ThreatIntelLookup, TopologyMorphRequest, ThreatPhysicsRequest, UserCreate
 from psychology_detector import analyze_psychology
 from response_simulator import simulate_response
 from self_healing import recommend_healing
 from threat_intel import enrich_iocs, extract_iocs
-from threat_fusion import build_genome, serialize_genome
+from email_authenticity import analyze_eml
+from website_inspector import inspect_website
+from playbook_engine import load_playbooks, plan_playbook, validate_playbook
+from llm_assistant import generate_analysis
+from deepfake_models import model_status as pretrained_media_status
+from threat_fusion import (
+    alert_quality_report,
+    build_genome,
+    compute_drift_snapshot,
+    detect_memory_hits,
+    generate_attacker_intent,
+    record_alert_outcome as fusion_record_alert_outcome,
+    score_explainability,
+    serialize_genome,
+)
 from timeline_engine import build_timeline
 from extended_intel import analyze_trust_media, build_global_threat_map, build_identity_heatmap, inspect_indicator, scan_payload
-from frontier_engine import agent_consensus, cognitive_deception_session, frontier_overview, morph_topology, predict_threat_physics, static_artifact_analysis
 from frontier_engine import agent_consensus, assess_analyst_load, assess_neuromorphic_telemetry, assess_q_state, assess_satellite_link, build_cognitive_echo, cognitive_deception_session, frontier_overview, morph_topology, predict_threat_physics, static_artifact_analysis
 from advanced_defense_engine import acoustic_channel, counter_agent_proxy, dark_mesh_schedule, hallucinated_infrastructure, heartbeat_keying, polymorphism_plan, quantum_decoy, space_weather_correlation, temporal_healing, vaccine_recommendations
 from speculative_defense_engine import chrono_causal_trap, cognitive_poisoning, holographic_memory, hyperbolic_network, phase_change_zeroization, photonic_bus, plasma_channel, singularity_sinkhole, software_apoptosis, speculative_overview, vacuum_keying
 from cloudflare_waf import block_ip as cloudflare_block_ip, configuration as cloudflare_configuration
-from models import AdvancedTelemetryRequest, AgentConsensusRequest, AlertRequest, AnalystLoadRequest, BattleRequest, CognitiveEchoRequest, DarkMeshRequest, DeceptionRequest, ForecastRequest, IncidentComment, IncidentUpdate, InfrastructureEchoRequest, LoginRequest, NeuromorphicRequest, NotificationUpdate, PermissionRequest, PolymorphismRequest, PsychologyRequest, QStateRequest, QuantumDecoyRequest, ResponseExecutionRequest, SatelliteRequest, ScannerRequest, SimulationRequest, SpeculativeTelemetryRequest, TemporalHealingRequest, ThreatAnalysisRequest, ThreatIntelLookup, TopologyMorphRequest, ThreatPhysicsRequest, UserCreate, VaccineRequest
+from roadmap_features import analyst_bias_report, attention_heatmap, attacker_resource_cost, breach_economics, compliance_diff, counterfactual_replay, cross_modal_consistency, jurisdiction_route, seed_honeytokens, shared_immunity
+from provider_integrations import deploy_honeytokens, integration_status as provider_integration_status, publish_tenant_signatures, sync_cve_feed
+from models import AccessRequestCreate, AdvancedTelemetryRequest, AgentConsensusRequest, AlertRequest, AnalystLoadRequest, BattleRequest, CognitiveEchoRequest, DarkMeshRequest, DeceptionRequest, ForecastRequest, IncidentComment, IncidentUpdate, InfrastructureEchoRequest, LoginRequest, NeuromorphicRequest, NotificationUpdate, OtpVerificationRequest, PasskeyCredentialRequest, PermissionRequest, PolymorphismRequest, PsychologyRequest, QStateRequest, QuantumDecoyRequest, ResponseExecutionRequest, SatelliteRequest, ScannerRequest, SimulationRequest, SpeculativeTelemetryRequest, TemporalHealingRequest, ThreatAnalysisRequest, ThreatIntelLookup, TopologyMorphRequest, ThreatPhysicsRequest, UserCreate, VaccineRequest
 
 DB_PATH = Path(os.getenv("CYBERGUARD_DB_PATH", str(Path(__file__).with_name("cyberguard.db"))))
-JWT_SECRET = os.getenv("CYBERGUARD_JWT_SECRET", "development-only-change-me-use-a-long-secret-key")
+JWT_SECRET = os.getenv("CYBERGUARD_JWT_SECRET", "").strip()
+if not JWT_SECRET:
+    if os.getenv("CYBERGUARD_ENV", "development").lower() == "production":
+        raise RuntimeError("CYBERGUARD_JWT_SECRET must be set to a unique value in production")
+    JWT_SECRET = secrets.token_urlsafe(48)
 SECURITY_OWNER_EMAIL = os.getenv("CYBERGUARD_SECURITY_OWNER_EMAIL", "teamsecure.project@gmail.com")
+PUBLIC_APP_URL = os.getenv("CYBERGUARD_PUBLIC_APP_URL", "http://127.0.0.1:5173")
+ACCESS_REQUEST_TTL_HOURS = max(1, int(os.getenv("CYBERGUARD_ACCESS_REQUEST_TTL_HOURS", "24")))
 HEAD_ADMIN_USERNAME = os.getenv("CYBERGUARD_HEAD_ADMIN_USERNAME", "teamsecure.project@gmail.com")
 HEAD_ADMIN_PASSWORD = os.getenv("CYBERGUARD_HEAD_ADMIN_PASSWORD", "Secure@9040")
+MAX_UPLOAD_BYTES = max(1_000_000, int(os.getenv("CYBERGUARD_MAX_UPLOAD_BYTES", "10485760")))
 STARTED_AT = datetime.now(timezone.utc)
 SECURITY_EVENT_WINDOW: dict[str, list[float]] = {}
+OTP_CHALLENGES: dict[str, dict[str, Any]] = {}
+OTP_TTL_SECONDS = max(60, int(os.getenv("CYBERGUARD_OTP_TTL_SECONDS", "300")))
+OTP_MAX_ATTEMPTS = max(3, int(os.getenv("CYBERGUARD_OTP_MAX_ATTEMPTS", "5")))
+PASSKEY_RP_ID = os.getenv("CYBERGUARD_PASSKEY_RP_ID", "127.0.0.1")
+PASSKEY_ORIGIN = os.getenv("CYBERGUARD_PASSKEY_ORIGIN", "http://127.0.0.1:5173")
+PASSKEY_CHALLENGES: dict[str, dict[str, Any]] = {}
 DEMO_SCENARIOS = [
     {
         "id": "deepfake-authority",
@@ -85,6 +130,22 @@ DEMO_SCENARIOS = [
     },
 ]
 
+DHCP_LEASES = {
+    "192.168.1.10": {"mac": "00:1A:2B:3C:4D:5E", "hostname": "Admin-Workstation", "device_type": "corporate-laptop"},
+    "192.168.1.25": {"mac": "A1:B2:C3:D4:E5:F6", "hostname": "Finance-Server", "device_type": "server"},
+    "192.168.1.42": {"mac": "88:77:66:55:44:33", "hostname": "Faculty-Laptop", "device_type": "corporate-laptop"},
+    "192.168.1.99": {"mac": "74:E1:B2:8F:44:9A", "hostname": "Unknown-Kali-Linux", "device_type": "untrusted-host"},
+    "0.0.0.0": {"mac": "UNKNOWN", "hostname": "Untracked-Device", "device_type": "unknown"},
+}
+
+IDP_USER_REGISTRY = {
+    "user_admin": {"name": "Amit Sharma", "role": "Network Administrator", "status": "ACTIVE", "password": "admin123"},
+    "user_faculty": {"name": "Dr. Mishra", "role": "Professor", "status": "ACTIVE", "password": "faculty123"},
+    "user_student": {"name": "Rohan Das", "role": "Student", "status": "SUSPENDED", "password": "student123"},
+}
+
+SIEM_EVENT_STORE: list[dict] = []
+
 
 def get_db():
     connection = sqlite3.connect(DB_PATH)
@@ -92,8 +153,134 @@ def get_db():
     return connection
 
 
+def correlate_dhcp_ip(source_ip: str) -> dict:
+    normalized_ip = str(source_ip or "0.0.0.0").strip()
+    lease = DHCP_LEASES.get(normalized_ip)
+    if lease:
+        return lease
+    return {"mac": "UNKNOWN", "hostname": "Untracked-Device", "device_type": "unknown"}
+
+
+def normalize_severity(severity: str) -> str:
+    value = (severity or "LOW").upper()
+    return value if value in {"LOW", "MEDIUM", "HIGH", "CRITICAL"} else "MEDIUM"
+
+
+def siem_ingest_event(payload: dict | None, user: dict[str, str] | None = None):
+    if user is None:
+        user = {"username": "system", "role": "lead"}
+    data = payload or {}
+    source_ip = str(data.get("source_ip") or "0.0.0.0")
+    event_type = str(data.get("event_type") or "System Access")
+    severity = normalize_severity(str(data.get("severity") or "LOW"))
+    details = str(data.get("details") or "SIEM event ingested")
+    timestamp = datetime.now(timezone.utc).isoformat()
+    device_info = correlate_dhcp_ip(source_ip)
+    hostname = str(data.get("source_host") or device_info.get("hostname") or "Untracked-Device")
+    log_entry = {
+        "timestamp": timestamp,
+        "source_ip": source_ip,
+        "source_host": hostname,
+        "mac_address": device_info.get("mac", "UNKNOWN"),
+        "hostname": hostname,
+        "event": event_type,
+        "severity": severity,
+        "details": details,
+    }
+    SIEM_EVENT_STORE.insert(0, log_entry)
+
+    if severity == "CRITICAL" or "kali" in hostname.lower() or "unknown" in hostname.lower():
+        action_taken = f"ALERT: SIEM triggered DHCP isolation protocol. Cutting network lease for {hostname}."
+        threat_status = "CRITICAL"
+    elif severity in {"HIGH", "MEDIUM"}:
+        action_taken = "Log ingested and indexed. Device is under monitoring."
+        threat_status = "HIGH" if severity == "HIGH" else "MEDIUM"
+    else:
+        action_taken = "Log ingested and indexed cleanly."
+        threat_status = "LOW"
+
+    return {
+        "message": "SIEM processing complete",
+        "correlated_log": log_entry,
+        "system_response": action_taken,
+        "threat_level": threat_status,
+        "user": user.get("username", "unknown"),
+    }
+
+
+def read_siem_events(user: dict[str, str] | None = None):
+    if user is None:
+        user = {"username": "system", "role": "lead"}
+    events = sorted(SIEM_EVENT_STORE, key=lambda item: item["timestamp"], reverse=True)[:20]
+    high_risk = [event for event in events if event["severity"] in {"HIGH", "CRITICAL"}]
+    return {"events": events, "count": len(events), "high_risk_count": len(high_risk), "user": user.get("username", "unknown")}
+
+
+def idp_authenticate_user(payload: dict | None, user: dict[str, str] | None = None):
+    if user is None:
+        user = {"username": "system", "role": "lead"}
+    data = payload or {}
+    username = str(data.get("username") or "")
+    password = str(data.get("password") or "")
+    source_ip = str(data.get("source_ip") or "0.0.0.0")
+    requested_app = str(data.get("service_provider_app") or "Main Dashboard")
+
+    profile = IDP_USER_REGISTRY.get(username)
+    if not profile:
+        return {"auth_status": "DENIED", "reason": "User identity record not found in IdP database."}
+
+    if profile["status"] == "SUSPENDED":
+        return {"auth_status": "DENIED", "user": profile["name"], "reason": "Account quarantined automatically due to active security event alerts."}
+
+    if profile["password"] != password:
+        return {"auth_status": "DENIED", "user": profile["name"], "reason": "Invalid credentials for IdP authentication."}
+
+    hardware_context = correlate_dhcp_ip(source_ip)
+    suspicious_ip = source_ip in DHCP_LEASES and DHCP_LEASES[source_ip].get("hostname") == "Unknown-Kali-Linux"
+    suspicious_event = any(
+        event["source_ip"] == source_ip or event["hostname"] == hardware_context.get("hostname")
+        for event in SIEM_EVENT_STORE
+    )
+
+    if suspicious_ip or suspicious_event:
+        return {
+            "auth_status": "BLOCKED",
+            "user": profile["name"],
+            "reason": "Risk engine flagged this asset or IP as compromised. IdP policy blocked the session.",
+            "alert": "CRITICAL RISK: authentication attempt blocked from untrusted hardware asset or malicious SIEM event.",
+        }
+
+    if profile["role"] == "Network Administrator" and hardware_context.get("hostname") != "Admin-Workstation":
+        return {
+            "auth_status": "BLOCKED",
+            "user": profile["name"],
+            "reason": "Hardware mismatch detected against IdP governance rules.",
+            "alert": "CRITICAL RISK: Admin login attempted from unauthorized hardware asset. Triggering threat notification.",
+        }
+
+    return {
+        "auth_status": "SUCCESS",
+        "identity_verified": {
+            "name": profile["name"],
+            "role": profile["role"],
+            "hardware_bound": hardware_context.get("hostname", "Untracked-Device"),
+            "mac_address": hardware_context.get("mac", "UNKNOWN"),
+            "requested_app": requested_app,
+        },
+        "message": f"Single Sign-On (SSO) token issued cleanly for {requested_app}.",
+    }
+
+
 def hash_password(password: str) -> str:
+    if bcrypt:
+        return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    if stored_hash.startswith("$2") and bcrypt:
+        return bcrypt.checkpw(password.encode("utf-8"), stored_hash.encode("utf-8"))
+    return secrets.compare_digest(stored_hash, hashlib.sha256(password.encode("utf-8")).hexdigest())
 
 
 def initialize_database():
@@ -107,6 +294,14 @@ def initialize_database():
                 email TEXT NOT NULL DEFAULT '',
                 parent_username TEXT,
                 status TEXT NOT NULL DEFAULT 'active'
+            );
+            CREATE TABLE IF NOT EXISTS passkeys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                credential_id TEXT NOT NULL UNIQUE,
+                public_key TEXT NOT NULL,
+                sign_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS incidents (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -209,6 +404,19 @@ def initialize_database():
                 decided_by TEXT,
                 decided_at TEXT
             );
+            CREATE TABLE IF NOT EXISTS access_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL,
+                name TEXT NOT NULL DEFAULT '',
+                purpose TEXT NOT NULL DEFAULT '',
+                request_token_hash TEXT NOT NULL UNIQUE,
+                approval_token_hash TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL DEFAULT 'pending',
+                requested_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                decided_at TEXT,
+                decided_by TEXT
+            );
             CREATE TABLE IF NOT EXISTS security_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 event_type TEXT NOT NULL,
@@ -300,13 +508,13 @@ async def security_guard(request: Request, call_next):
 
 def current_user(authorization: Optional[str] = Header(default=None)) -> dict[str, str]:
     if not authorization or not authorization.startswith("Bearer "):
-        if os.getenv("CYBERGUARD_ALLOW_ANONYMOUS_EVAL", "true").lower() in {"true", "1", "yes"}:
+        if os.getenv("CYBERGUARD_ALLOW_ANONYMOUS_EVAL", "false").lower() in {"true", "1", "yes"}:
             return {"username": "evaluator", "role": "lead"}
         raise HTTPException(status_code=401, detail="Authentication required")
     try:
         return jwt.decode(authorization.removeprefix("Bearer "), JWT_SECRET, algorithms=["HS256"])
     except jwt.PyJWTError as error:
-        if os.getenv("CYBERGUARD_ALLOW_ANONYMOUS_EVAL", "true").lower() in {"true", "1", "yes"}:
+        if os.getenv("CYBERGUARD_ALLOW_ANONYMOUS_EVAL", "false").lower() in {"true", "1", "yes"}:
             return {"username": "evaluator", "role": "lead"}
         raise HTTPException(status_code=401, detail="Invalid or expired session") from error
 
@@ -317,16 +525,20 @@ def request_ip(request: Request) -> str:
 
 
 def send_security_notice(subject: str, details: str):
+    return send_email(SECURITY_OWNER_EMAIL, f"CyberGuard security alert: {subject}", details)
+
+
+def send_email(recipient: str, subject: str, details: str):
     smtp_host = os.getenv("CYBERGUARD_SMTP_HOST")
     smtp_port = int(os.getenv("CYBERGUARD_SMTP_PORT", "587"))
     smtp_user = os.getenv("CYBERGUARD_SMTP_USER")
     smtp_password = os.getenv("CYBERGUARD_SMTP_PASSWORD")
     if not smtp_host or not smtp_user or not smtp_password:
-        return False
+        return None
     message = EmailMessage()
     message["From"] = smtp_user
-    message["To"] = SECURITY_OWNER_EMAIL
-    message["Subject"] = f"CyberGuard security alert: {subject}"
+    message["To"] = recipient
+    message["Subject"] = subject
     message.set_content(details)
     try:
         with smtplib.SMTP(smtp_host, smtp_port, timeout=8) as server:
@@ -338,10 +550,81 @@ def send_security_notice(subject: str, details: str):
         return False
 
 
+def issue_admin_otp(username: str, recipient: str) -> dict[str, str]:
+    otp = f"{secrets.randbelow(1_000_000):06d}"
+    challenge_id = secrets.token_urlsafe(24)
+    OTP_CHALLENGES[challenge_id] = {
+        "username": username,
+        "otp_hash": hashlib.sha256(otp.encode("utf-8")).hexdigest(),
+        "expires_at": time.time() + OTP_TTL_SECONDS,
+        "attempts": 0,
+    }
+    sent = send_email(
+        recipient,
+        "CyberGuard administrator verification code",
+        f"Your CyberGuard administrator verification code is {otp}. It expires in {OTP_TTL_SECONDS // 60} minutes. If you did not request this, ignore this message.",
+    )
+    if sent is None:
+        OTP_CHALLENGES.pop(challenge_id, None)
+        raise HTTPException(status_code=503, detail="OTP email is not configured. Add CYBERGUARD_SMTP_HOST, CYBERGUARD_SMTP_USER, and CYBERGUARD_SMTP_PASSWORD to cyberguard-backend/.env.")
+    if not sent:
+        OTP_CHALLENGES.pop(challenge_id, None)
+        raise HTTPException(status_code=503, detail="OTP email could not be delivered. Check the SMTP host, port, username, and app password.")
+    return {"challenge_id": challenge_id, "masked_email": f"{recipient[:2]}***@{recipient.split('@', 1)[-1]}"}
+
+
+def issue_session(user: sqlite3.Row) -> dict[str, Any]:
+    token = jwt.encode({"username": user["username"], "role": user["role"], "iat": int(datetime.now(timezone.utc).timestamp())}, JWT_SECRET, algorithm="HS256")
+    return {"access_token": token, "token_type": "bearer", "user": {"username": user["username"], "role": user["role"]}}
+
+
+def passkey_options(username: str) -> dict[str, Any]:
+    with get_db() as db:
+        credentials = db.execute("SELECT credential_id FROM passkeys WHERE username = ?", (username,)).fetchall()
+    challenge_id = secrets.token_urlsafe(24)
+    if credentials:
+        options = generate_authentication_options(
+            rp_id=PASSKEY_RP_ID,
+            allow_credentials=[PublicKeyCredentialDescriptor(id=base64.urlsafe_b64decode(row["credential_id"] + "=" * (-len(row["credential_id"]) % 4))) for row in credentials],
+            user_verification=UserVerificationRequirement.PREFERRED,
+        )
+        kind = "authentication"
+    else:
+        options = generate_registration_options(
+            rp_id=PASSKEY_RP_ID,
+            rp_name="CyberGuard Operations Center",
+            user_name=username,
+            user_id=username.encode("utf-8"),
+            user_display_name="CyberGuard Administrator",
+        )
+        kind = "registration"
+    PASSKEY_CHALLENGES[challenge_id] = {"username": username, "kind": kind, "challenge": options.challenge, "expires_at": time.time() + 300}
+    return {"challenge_id": challenge_id, "kind": kind, "options": json.loads(options_to_json(options))}
+
+
 def record_security_event(event_type: str, ip_address: str, path: str, details: str):
     with get_db() as db:
         db.execute("INSERT INTO security_events (event_type, ip_address, path, details, created_at) VALUES (?, ?, ?, ?, ?)", (event_type, ip_address, path, details, datetime.now(timezone.utc).isoformat()))
     send_security_notice(event_type, f"IP: {ip_address}\nPath: {path}\n{details}")
+
+
+def hash_access_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def access_request_row(token: str):
+    with get_db() as db:
+        return db.execute("SELECT * FROM access_requests WHERE request_token_hash = ?", (hash_access_token(token),)).fetchone()
+
+
+def access_request_state(row):
+    if not row:
+        raise HTTPException(status_code=404, detail="Access request not found")
+    if row["status"] == "pending" and datetime.fromisoformat(row["expires_at"]) < datetime.now(timezone.utc):
+        with get_db() as db:
+            db.execute("UPDATE access_requests SET status = 'expired' WHERE id = ?", (row["id"],))
+        return "expired"
+    return row["status"]
 
 
 def head_admin_user(request: Request, user: dict[str, str] = Depends(current_user)) -> dict[str, str]:
@@ -402,6 +685,77 @@ def recent_incident_context() -> list[dict]:
     return result
 
 
+def fatigue_routing(incidents: list[dict], analysts: list[dict]) -> dict:
+    analyst_capacity = {}
+    for analyst in analysts:
+        role = str(analyst.get("role") or "analyst").lower()
+        if role in {"lead", "sub_admin", "admin", "head_admin"}:
+            analyst_capacity[analyst.get("username", f"{role}-{len(analyst_capacity)+1}")] = 1.0
+        else:
+            analyst_capacity[analyst.get("username", f"analyst-{len(analyst_capacity)+1}")] = 0.75
+
+    queue = []
+    for incident in incidents:
+        risk = int(incident.get("risk_score", 0) or 0)
+        status = str(incident.get("status") or "New")
+        assigned = incident.get("assigned_to")
+        if assigned and assigned in analyst_capacity:
+            current_load = analyst_capacity[assigned]
+            route_target = assigned
+        else:
+            target = min(analyst_capacity, key=lambda name: (analyst_capacity[name], name))
+            route_target = target
+            analyst_capacity[target] = min(1.4, analyst_capacity[target] + 0.25)
+        queue.append({
+            "incident_id": incident.get("database_id") or incident.get("id"),
+            "risk_score": risk,
+            "status": status,
+            "target": route_target,
+            "priority": "critical" if risk >= 85 else "high" if risk >= 65 else "medium",
+            "copilot_load": round(analyst_capacity.get(route_target, 0.75), 2),
+        })
+
+    queue.sort(key=lambda item: (-item["risk_score"], item["copilot_load"]))
+    route_summary = {
+        "available_analysts": len(analysts),
+        "alert_count": len(queue),
+        "high_priority": sum(1 for item in queue if item["priority"] in {"critical", "high"}),
+        "avg_load": round(sum(item["copilot_load"] for item in queue) / max(len(queue), 1), 2),
+    }
+    return {"recommended_queue": queue, "route_summary": route_summary}
+
+
+def incident_intent(incident_id: int, user: dict[str, str] | None = None) -> dict:
+    incident = incident_context(incident_id)
+    related = [item for item in recent_incident_context() if item["id"] != incident_id]
+    return generate_attacker_intent(incident, related)
+
+
+def incident_drift(incident_id: int, user: dict[str, str] | None = None) -> dict:
+    incident = incident_context(incident_id)
+    related = [item for item in recent_incident_context() if item["id"] != incident_id]
+    return compute_drift_snapshot(incident, related)
+
+
+def incident_memory(incident_id: int, user: dict[str, str] | None = None) -> dict:
+    incident = incident_context(incident_id)
+    history = [item for item in recent_incident_context() if item["id"] != incident_id]
+    return detect_memory_hits(incident.get("payload", ""), history)
+
+
+def incident_explainability(incident_id: int, user: dict[str, str] | None = None) -> dict:
+    incident = incident_context(incident_id)
+    return score_explainability(incident)
+
+
+def record_alert_outcome(incident_id: int, detection_type: str, alert_risk_score: int, final_resolution: str, reviewed_by: str = "analyst") -> dict:
+    return fusion_record_alert_outcome(incident_id, detection_type, alert_risk_score, final_resolution, reviewed_by)
+
+
+def alert_quality(user: dict[str, str] | None = None) -> dict:
+    return alert_quality_report()
+
+
 def persist_cyberguard_x(incident_id: int, incident: dict):
     genome = build_genome(incident)
     timeline = build_timeline(incident)
@@ -422,6 +776,63 @@ def root():
     return {"status": "Active", "system": "CYBERGUARD AI Engine v2.0"}
 
 
+@app.post("/api/v1/access/request")
+def create_access_request(request: AccessRequestCreate):
+    email = request.email.strip().lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(hours=ACCESS_REQUEST_TTL_HOURS)
+    with get_db() as db:
+        existing = db.execute("SELECT id, status, expires_at FROM access_requests WHERE email = ? ORDER BY id DESC LIMIT 1", (email,)).fetchone()
+        if existing and existing["status"] == "pending" and datetime.fromisoformat(existing["expires_at"]) > now:
+            raise HTTPException(status_code=409, detail="An access request for this email is already pending")
+        request_token = secrets.token_urlsafe(32)
+        approval_token = secrets.token_urlsafe(32)
+        cursor = db.execute(
+            "INSERT INTO access_requests (email, name, purpose, request_token_hash, approval_token_hash, requested_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (email, request.name.strip()[:120], request.purpose.strip()[:500], hash_access_token(request_token), hash_access_token(approval_token), now.isoformat(), expires_at.isoformat()),
+        )
+        request_id = cursor.lastrowid
+    approval_url = f"{PUBLIC_APP_URL.rstrip('/')}/api/v1/access/approve?token={approval_token}"
+    email_sent = send_email(
+        SECURITY_OWNER_EMAIL,
+        "CyberGuard access approval requested",
+        f"A visitor requested CyberGuard access.\n\nEmail: {email}\nName: {request.name.strip() or 'Not provided'}\nPurpose: {request.purpose.strip() or 'Not provided'}\nRequest ID: {request_id}\n\nApprove access (valid for {ACCESS_REQUEST_TTL_HOURS} hours):\n{approval_url}\n",
+    )
+    return {"request_id": request_id, "request_token": request_token, "status": "pending", "expires_at": expires_at.isoformat(), "email_sent": email_sent}
+
+
+@app.get("/api/v1/access/status")
+def access_request_status(token: str = Query(..., min_length=20)):
+    row = access_request_row(token)
+    status = access_request_state(row)
+    response = {"request_id": row["id"], "status": status, "expires_at": row["expires_at"]}
+    if status == "approved":
+        expires = datetime.now(timezone.utc) + timedelta(hours=8)
+        username = f"guest:{row['email']}"
+        response["access_token"] = jwt.encode({"username": username, "role": "analyst", "email": row["email"], "iat": int(datetime.now(timezone.utc).timestamp()), "exp": int(expires.timestamp())}, JWT_SECRET, algorithm="HS256")
+        response["user"] = {"username": username, "role": "analyst", "email": row["email"]}
+    return response
+
+
+@app.get("/api/v1/access/approve", response_class=HTMLResponse)
+def approve_access_request(token: str = Query(..., min_length=20)):
+    with get_db() as db:
+        row = db.execute("SELECT * FROM access_requests WHERE approval_token_hash = ?", (hash_access_token(token),)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Approval request not found")
+        status = access_request_state(row)
+        if status == "pending":
+            db.execute("UPDATE access_requests SET status = 'approved', decided_at = ?, decided_by = ? WHERE id = ?", (datetime.now(timezone.utc).isoformat(), SECURITY_OWNER_EMAIL, row["id"]))
+            status = "approved"
+            send_email(row["email"], "CyberGuard access approved", "Your CyberGuard access request was approved. Return to the CyberGuard portal and select Check approval to continue.")
+    safe_email = html.escape(row["email"])
+    heading = "Access approved" if status == "approved" else f"Access request {html.escape(status)}"
+    message = "The applicant can now return to the CyberGuard portal and check approval." if status == "approved" else "This approval link is no longer active."
+    return HTMLResponse(f"<!doctype html><html><head><title>CyberGuard access</title></head><body style='font-family:Arial;background:#06111f;color:#e5f7ff;padding:48px'><h1>{heading}</h1><p>{message}</p><p>Applicant: {safe_email}</p></body></html>")
+
+
 @app.get("/api/v1/demo/scenarios")
 def demo_scenarios(user: dict[str, str] = Depends(current_user)):
     return {"scenarios": DEMO_SCENARIOS}
@@ -430,12 +841,76 @@ def demo_scenarios(user: dict[str, str] = Depends(current_user)):
 @app.post("/api/v1/auth/login")
 def login(request: LoginRequest):
     initialize_database()
+    username = request.username.strip()
     with get_db() as db:
-        user = db.execute("SELECT username, role, password_hash FROM users WHERE username = ?", (request.username,)).fetchone()
-    if not user or user["password_hash"] != hash_password(request.password):
+        user = db.execute("SELECT username, role, password_hash, email FROM users WHERE lower(username) = lower(?)", (username,)).fetchone()
+    if not user or not verify_password(request.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    token = jwt.encode({"username": user["username"], "role": user["role"], "iat": int(datetime.now(timezone.utc).timestamp())}, JWT_SECRET, algorithm="HS256")
-    return {"access_token": token, "token_type": "bearer", "user": {"username": user["username"], "role": user["role"]}}
+    return issue_session(user)
+
+
+@app.post("/api/v1/auth/passkey")
+def verify_passkey(request: PasskeyCredentialRequest):
+    challenge = PASSKEY_CHALLENGES.pop(request.challenge_id, None)
+    if not challenge or challenge["expires_at"] < time.time():
+        raise HTTPException(status_code=401, detail="Passkey request expired. Authenticate again.")
+    credential = request.credential
+    if challenge["kind"] == "registration":
+        verified = verify_registration_response(
+            credential=credential,
+            expected_challenge=challenge["challenge"],
+            expected_rp_id=PASSKEY_RP_ID,
+            expected_origin=PASSKEY_ORIGIN,
+        )
+        credential_id = base64.urlsafe_b64encode(verified.credential_id).decode().rstrip("=")
+        public_key = base64.urlsafe_b64encode(verified.credential_public_key).decode().rstrip("=")
+        with get_db() as db:
+            db.execute("INSERT INTO passkeys (username, credential_id, public_key, sign_count, created_at) VALUES (?, ?, ?, ?, ?)", (challenge["username"], credential_id, public_key, verified.sign_count, datetime.now(timezone.utc).isoformat()))
+            user = db.execute("SELECT username, role FROM users WHERE username = ?", (challenge["username"],)).fetchone()
+        return issue_session(user)
+
+    raw_id = credential.get("rawId") or credential.get("id")
+    try:
+        credential_id = base64.urlsafe_b64decode(raw_id + "=" * (-len(raw_id) % 4))
+        credential_key = base64.urlsafe_b64encode(credential_id).decode().rstrip("=")
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid passkey credential.")
+    with get_db() as db:
+        stored = db.execute("SELECT * FROM passkeys WHERE credential_id = ? AND username = ?", (credential_key, challenge["username"])).fetchone()
+    if not stored:
+        raise HTTPException(status_code=401, detail="Passkey is not registered for this administrator.")
+    verified = verify_authentication_response(
+        credential=credential,
+        expected_challenge=challenge["challenge"],
+        expected_rp_id=PASSKEY_RP_ID,
+        expected_origin=PASSKEY_ORIGIN,
+        credential_public_key=base64.urlsafe_b64decode(stored["public_key"] + "=" * (-len(stored["public_key"]) % 4)),
+        credential_current_sign_count=stored["sign_count"],
+    )
+    with get_db() as db:
+        db.execute("UPDATE passkeys SET sign_count = ? WHERE id = ?", (verified.new_sign_count, stored["id"]))
+        user = db.execute("SELECT username, role FROM users WHERE username = ?", (challenge["username"],)).fetchone()
+    return issue_session(user)
+
+
+@app.post("/api/v1/auth/verify-otp")
+def verify_admin_otp(request: OtpVerificationRequest):
+    challenge = OTP_CHALLENGES.get(request.challenge_id)
+    if not challenge or challenge["expires_at"] < time.time():
+        OTP_CHALLENGES.pop(request.challenge_id, None)
+        raise HTTPException(status_code=401, detail="OTP expired. Authenticate again to request a new code.")
+    challenge["attempts"] += 1
+    if challenge["attempts"] > OTP_MAX_ATTEMPTS:
+        OTP_CHALLENGES.pop(request.challenge_id, None)
+        raise HTTPException(status_code=429, detail="Too many invalid OTP attempts. Authenticate again to request a new code.")
+    if not secrets.compare_digest(challenge["otp_hash"], hashlib.sha256(request.otp.strip().encode("utf-8")).hexdigest()):
+        raise HTTPException(status_code=401, detail="Invalid OTP.")
+    with get_db() as db:
+        user = db.execute("SELECT username, role FROM users WHERE username = ? AND role = 'head_admin'", (challenge["username"],)).fetchone()
+    OTP_CHALLENGES.pop(request.challenge_id, None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Administrator account is unavailable.")
+    return issue_session(user)
 
 
 @app.get("/api/v1/auth/me")
@@ -457,28 +932,96 @@ def analyze_threat(request: ThreatAnalysisRequest, user: dict[str, str] = Depend
     return {"status": "success", "incident_id": incident_id, "category": request.category, "assessment": assessment, "user": user["username"]}
 
 
+@app.post("/api/v1/analyze/preview")
+def preview_threat(request: ThreatAnalysisRequest, user: dict[str, str] = Depends(current_user)):
+    if not request.payload.strip():
+        raise HTTPException(status_code=400, detail="Payload content cannot be empty.")
+    assessment = evaluate_threat_payload(request.category, request.payload)
+    assessment["iocs"] = enrich_iocs(extract_iocs(request.payload))
+    return {"status": "success", "category": request.category, "assessment": assessment}
+
+
+@app.post("/api/v1/assistant/analyze")
+def analyst_assistant(payload: dict[str, Any], user: dict[str, str] = Depends(current_user)):
+    assessment = payload.get("assessment")
+    if not isinstance(assessment, dict):
+        raise HTTPException(status_code=400, detail="An assessment object is required.")
+    result = generate_analysis(assessment, payload.get("incident"))
+    write_audit(user, "llm_assistant", "analyst-assistant", result.get("model", "offline-template"))
+    return {"status": "success", "assistant": result}
+
+
 @app.post("/api/v1/analyze/file")
 async def analyze_file(category: str = Form(...), file: UploadFile = File(...), user: dict[str, str] = Depends(current_user)):
-    content = await file.read()
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded file cannot be empty.")
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"Uploaded file exceeds the {MAX_UPLOAD_BYTES // 1_000_000} MB limit.")
     file_hash = hashlib.sha256(content).hexdigest()
-    is_text = (file.content_type or "").startswith("text/") or (file.filename or "").lower().endswith((".txt", ".log", ".json", ".csv"))
-    payload = content.decode("utf-8", errors="replace") if is_text else f"Uploaded {file.content_type or 'media'} file: {file.filename}"
+    filename = file.filename or "upload"
+    is_eml = (file.content_type or "").lower() == "message/rfc822" or filename.lower().endswith(".eml")
+    is_text = (file.content_type or "").startswith("text/") or filename.lower().endswith((".txt", ".log", ".json", ".csv"))
+    email_result = analyze_eml(content) if is_eml else None
+    payload = email_result["payload"] if email_result else (content.decode("utf-8", errors="replace") if is_text else f"Uploaded {file.content_type or 'media'} file: {filename}")
     assessment = evaluate_threat_payload(category, payload)
     assessment["iocs"] = enrich_iocs(extract_iocs(payload))
-    if not is_text:
-        media_result = analyze_media(content, file.content_type or "", file.filename or "upload", category)
+    if email_result:
+        assessment["risk_score"] = max(assessment["risk_score"], email_result["score"])
+        assessment["indicators"].extend(email_result["indicators"])
+        assessment["xai_explanation"] += " " + " ".join(email_result["reasons"])
+        assessment["sender_authenticity"] = email_result["metadata"]
+    if not is_text and not email_result:
+        media_result = analyze_media(content, file.content_type or "", filename, category)
         assessment["risk_score"] = max(assessment["risk_score"], media_result["score"])
         assessment["indicators"].extend(media_result["indicators"])
         assessment["xai_explanation"] += " " + " ".join(media_result["reasons"])
         assessment["media_method"] = media_result["method"]
-    incident_id = store_incident(category, payload, assessment, file.filename, file_hash)
+        if media_result.get("decoded_payload"):
+            qr_assessment = evaluate_threat_payload("url", media_result["decoded_payload"])
+            assessment["qr_payload"] = media_result["decoded_payload"]
+            assessment["risk_score"] = max(assessment["risk_score"], qr_assessment["risk_score"])
+            assessment["indicators"].extend(qr_assessment["indicators"])
+            assessment["xai_explanation"] += " " + qr_assessment["xai_explanation"]
+    score = int(assessment["risk_score"])
+    assessment["risk_level"] = "Critical" if score >= 80 else "High" if score >= 60 else "Medium" if score >= 40 else "Low" if score >= 20 else "Safe"
+    incident_id = store_incident(category, payload, assessment, filename, file_hash)
     persist_cyberguard_x(incident_id, {"id": incident_id, "category": category, "payload": payload, "risk_score": assessment["risk_score"], "risk_level": assessment["risk_level"], "assessment": assessment, "created_at": datetime.now(timezone.utc).isoformat()})
-    write_audit(user, "analyze_file", f"incident:{incident_id}", file.filename or category)
+    write_audit(user, "analyze_file", f"incident:{incident_id}", filename)
     if assessment["risk_level"] in ["High", "Critical"]:
         create_notification(user["username"], f"{assessment['risk_level']} media threat detected", f"Incident INC-{incident_id:04d} requires review.", assessment["risk_level"])
-    return {"status": "success", "incident_id": incident_id, "filename": file.filename, "file_hash": file_hash, "assessment": assessment, "media_method": assessment.get("media_method"), "user": user["username"]}
+    return {"status": "success", "incident_id": incident_id, "filename": filename, "file_hash": file_hash, "assessment": assessment, "media_method": assessment.get("media_method"), "user": user["username"]}
+
+
+@app.post("/api/v1/analyze/website")
+def analyze_website(payload: dict[str, str], user: dict[str, str] = Depends(current_user)):
+    url = str(payload.get("url", "")).strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="A website URL is required.")
+    try:
+        inspection = inspect_website(url)
+    except (ValueError, requests.RequestException, OSError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    text = " ".join([inspection["final_url"], inspection["title"], *inspection["findings"]])
+    assessment = evaluate_threat_payload("url", text)
+    assessment["website_inspection"] = inspection
+    write_audit(user, "analyze_website", url, "website")
+    return {"status": "success", "assessment": assessment, "inspection": inspection}
+
+
+@app.get("/api/v1/playbooks")
+def list_playbooks(user: dict[str, str] = Depends(current_user)):
+    return {"playbooks": load_playbooks()}
+
+
+@app.post("/api/v1/playbooks/plan")
+def preview_playbook(payload: dict[str, Any], user: dict[str, str] = Depends(current_user)):
+    try:
+        result = plan_playbook(payload.get("playbook", {}), payload.get("assessment", {}), bool(payload.get("approved", False)))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    write_audit(user, "playbook_plan", result["playbook_id"], result["mode"])
+    return result
 
 
 @app.get("/api/v1/incidents")
@@ -584,6 +1127,50 @@ def incident_attack_chain(incident_id: int, user: dict[str, str] = Depends(curre
     return {"incident_id": incident_id, "events": build_timeline(incident_context(incident_id))}
 
 
+@app.get("/api/v1/incidents/{incident_id}/intent")
+def incident_intent_route(incident_id: int, user: dict[str, str] = Depends(current_user)):
+    return incident_intent(incident_id, user)
+
+
+@app.get("/api/v1/incidents/{incident_id}/drift")
+def incident_drift_route(incident_id: int, user: dict[str, str] = Depends(current_user)):
+    return incident_drift(incident_id, user)
+
+
+@app.get("/api/v1/incidents/{incident_id}/memory")
+def incident_memory_route(incident_id: int, user: dict[str, str] = Depends(current_user)):
+    return incident_memory(incident_id, user)
+
+
+@app.get("/api/v1/incidents/{incident_id}/explainability")
+def incident_explainability_route(incident_id: int, user: dict[str, str] = Depends(current_user)):
+    return incident_explainability(incident_id, user)
+
+
+@app.post("/api/v1/alert-routing")
+def alert_routing_endpoint(request: dict | None = None, user: dict[str, str] = Depends(current_user)):
+    payload = request or {}
+    incidents = payload.get("incidents", recent_incident_context())
+    analysts = payload.get("analysts", [{"username": user.get("username", "analyst"), "role": user.get("role", "analyst")}])
+    return fatigue_routing(incidents, analysts)
+
+
+@app.get("/api/v1/alert-quality")
+def alert_quality_route(user: dict[str, str] = Depends(current_user)):
+    return alert_quality(user)
+
+
+@app.post("/api/v1/alert-quality/record")
+def alert_quality_record(request: dict, user: dict[str, str] = Depends(current_user)):
+    return record_alert_outcome(
+        int(request.get("incident_id", 0)),
+        str(request.get("detection_type", "unknown")),
+        int(request.get("alert_risk_score", 0)),
+        str(request.get("final_resolution", "unknown")),
+        str(request.get("reviewed_by", user.get("username", "analyst"))),
+    )
+
+
 @app.get("/api/v1/campaigns")
 def campaigns(user: dict[str, str] = Depends(current_user)):
     with get_db() as db:
@@ -679,6 +1266,31 @@ def threat_intel_lookup(request: ThreatIntelLookup, user: dict[str, str] = Depen
         iocs = [{"type": request.indicator_type or "unknown", "value": request.value, "indicator": request.value, "reputation": "unknown"}]
     write_audit(user, "threat_intel_lookup", request.value, request.indicator_type or "auto")
     return {"results": iocs, "provider": "local-heuristic", "external_enrichment": False}
+
+
+@app.post("/api/v1/adversarial/self-test")
+def adversarial_self_test_route(request: dict, user: dict[str, str] = Depends(current_user)):
+    payload = str(request.get("payload") or "").strip()
+    category = str(request.get("category") or "email").strip() or "email"
+    if not payload:
+        raise HTTPException(status_code=400, detail="Payload content cannot be empty.")
+    result = adversarial_self_test(category, payload)
+    write_audit(user, "adversarial_self_test", category, result["recommendation"])
+    return result
+
+
+@app.post("/api/v1/roadmap/media-consistency")
+async def roadmap_media_consistency(files: list[UploadFile] = File(...), user: dict[str, str] = Depends(current_user)):
+    if len(files) < 2:
+        raise HTTPException(status_code=400, detail="Upload at least two media channels for cross-modal comparison.")
+    results = []
+    for file in files[:4]:
+        content = await file.read()
+        if content:
+            result = analyze_media(content, file.content_type or "", file.filename or "upload", "deepfake")
+            result["media_type"] = file.content_type or file.filename or "unknown"
+            results.append(result)
+    return cross_modal_consistency(results)
 
 
 @app.post("/api/v1/scanner/scan")
@@ -1063,18 +1675,29 @@ def dashboard_graph(user: dict[str, str] = Depends(current_user)):
 
 @app.get("/api/v1/system/health")
 def system_health(user: dict[str, str] = Depends(current_user)):
+    request_started = time.perf_counter()
     with get_db() as db:
         event_count = db.execute("SELECT COUNT(*) AS count FROM incidents").fetchone()["count"]
+        recent_count = db.execute("SELECT COUNT(*) AS count FROM incidents WHERE created_at >= ?", ((datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),)).fetchone()["count"]
     uptime = (datetime.now(timezone.utc) - STARTED_AT).total_seconds()
-    return {"status": "healthy", "uptime_seconds": round(uptime), "events_stored": event_count, "model_loaded": TEXT_MODEL is not None, "database": "sqlite", "response_integrations": bool(os.getenv("CYBERGUARD_RESPONSE_WEBHOOK_URL"))}
+    model_loaded = TEXT_MODEL is not None or FALLBACK_TEXT_MODEL is not None
+    media_status = pretrained_media_status()
+    evaluation_path = Path(__file__).parent / "data" / "uci-sms-results.json"
+    evaluation = {}
+    if evaluation_path.exists():
+        try:
+            evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            evaluation = {}
+    return {"status": "healthy", "uptime_seconds": round(uptime), "api_latency_ms": round((time.perf_counter() - request_started) * 1000, 2), "events_stored": event_count, "events_per_minute": recent_count, "model_loaded": model_loaded, "model_confidence": "pretrained-media" if media_status.get("mode") == "pretrained" else "trained-fallback", "media_models": media_status, "threat_accuracy": round(float(evaluation.get("f1", 0)) * 100, 1), "evaluation_backend": evaluation.get("backend", "baseline"), "database": "sqlite", "response_integrations": bool(os.getenv("CYBERGUARD_RESPONSE_WEBHOOK_URL"))}
 
 
 @app.get("/api/v1/models/status")
 def model_status(user: dict[str, str] = Depends(current_user)):
     return {
-        "text_classifier": {"loaded": TEXT_MODEL is not None, "algorithm": "TF-IDF + Logistic Regression"},
+        "text_classifier": {"loaded": TEXT_MODEL is not None or FALLBACK_TEXT_MODEL is not None, "algorithm": "TF-IDF + Logistic Regression" if TEXT_MODEL is not None else "Bernoulli Naive Bayes fallback", "samples": FALLBACK_TEXT_MODEL.get("samples") if FALLBACK_TEXT_MODEL else None},
         "media_inspection": {"loaded": True, "algorithm": "Lightweight Isolation Forest over image/audio features plus video metadata"},
-        "deep_learning_adapter": {"loaded": bool(os.getenv("CYBERGUARD_MEDIA_MODEL_PATH")), "path_configured": bool(os.getenv("CYBERGUARD_MEDIA_MODEL_PATH"))},
+        "deep_learning_adapter": pretrained_media_status(),
         "threat_intelligence": {"loaded": True, "algorithm": "Local IOC reputation with optional external provider", "external_configured": bool(os.getenv("CYBERGUARD_THREAT_INTEL_URL"))},
     }
 
@@ -1108,11 +1731,11 @@ def integration_status(user: dict[str, str] = Depends(current_user)):
         {"name": "Response Webhook", "configured": bool(os.getenv("CYBERGUARD_RESPONSE_WEBHOOK_URL"))},
         {"name": "Alert Webhook", "configured": bool(os.getenv("CYBERGUARD_ALERT_WEBHOOK_URL"))},
         {"name": "SIEM Ingestion", "configured": bool(os.getenv("CYBERGUARD_SIEM_URL"))},
-    ]}
+    ], "providers": provider_integration_status()}
 
 
 @app.post("/api/v1/integrations/siem/ingest")
-def ingest_siem_event(request: ThreatAnalysisRequest, user: dict[str, str] = Depends(current_user)):
+def ingest_siem_event_route(request: ThreatAnalysisRequest, user: dict[str, str] = Depends(current_user)):
     result = analyze_threat(request, user)
     siem_url = os.getenv("CYBERGUARD_SIEM_URL")
     if siem_url:
@@ -1125,6 +1748,21 @@ def ingest_siem_event(request: ThreatAnalysisRequest, user: dict[str, str] = Dep
     else:
         result["siem_delivery"] = "recorded"
     return result
+
+
+@app.post("/api/v1/siem/log")
+def siem_ingest_event_route_json(payload: dict, user: dict[str, str] = Depends(current_user)):
+    return siem_ingest_event(payload, user)
+
+
+@app.get("/api/v1/siem/logs")
+def siem_logs(user: dict[str, str] = Depends(current_user)):
+    return read_siem_events(user)
+
+
+@app.post("/api/v1/idp/authenticate")
+def idp_authenticate_route(payload: dict, user: dict[str, str] = Depends(current_user)):
+    return idp_authenticate_user(payload, user)
 
 
 @app.post("/api/v1/response/execute")
@@ -1156,6 +1794,95 @@ def dispatch_alert(request: AlertRequest, user: dict[str, str] = Depends(current
         except requests.RequestException as error:
             raise HTTPException(status_code=502, detail=f"Alert integration failed: {error}") from error
     return {"status": "recorded", "channel": request.channel, "delivery": "simulation", "user": user["username"]}
+
+
+def _roadmap_incidents() -> list[dict[str, Any]]:
+    return recent_incident_context()
+
+
+@app.get("/api/v1/roadmap/economics/{incident_id}")
+def roadmap_economics(incident_id: int, user: dict[str, str] = Depends(current_user)):
+    return breach_economics(incident_context(incident_id))
+
+
+@app.post("/api/v1/roadmap/honeytokens")
+def roadmap_honeytokens(request: dict, user: dict[str, str] = Depends(current_user)):
+    incident_id = request.get("incident_id")
+    incident = incident_context(int(incident_id)) if incident_id else (_roadmap_incidents()[0] if _roadmap_incidents() else {"id": "preview", "category": "unknown"})
+    result = seed_honeytokens(incident, int(request.get("count", 3)))
+    write_audit(user, "honeytoken_preview", str(result["incident_id"]), "Simulation-only canary plan generated")
+    return result
+
+
+@app.post("/api/v1/roadmap/honeytokens/deploy")
+def roadmap_honeytokens_deploy(request: dict, user: dict[str, str] = Depends(head_admin_user)):
+    tokens = request.get("tokens", [])
+    result = deploy_honeytokens(tokens, request.get("incident_id"))
+    write_audit(user, "honeytoken_deploy", str(request.get("incident_id", "unknown")), result["status"])
+    return result
+
+
+@app.get("/api/v1/roadmap/bias")
+def roadmap_bias(user: dict[str, str] = Depends(current_user)):
+    with get_db() as db:
+        audit = [dict(row) for row in db.execute("SELECT username, action, resource, created_at FROM audit_logs ORDER BY id DESC LIMIT 200").fetchall()]
+    return analyst_bias_report(_roadmap_incidents(), audit)
+
+
+@app.get("/api/v1/roadmap/immunity")
+def roadmap_immunity(user: dict[str, str] = Depends(current_user)):
+    return shared_immunity(_roadmap_incidents(), user.get("username", "default"))
+
+
+@app.post("/api/v1/roadmap/immunity/publish")
+def roadmap_immunity_publish(request: dict, user: dict[str, str] = Depends(head_admin_user)):
+    signatures = request.get("signatures") or shared_immunity(_roadmap_incidents(), user.get("username", "default"))["shared_signatures"]
+    result = publish_tenant_signatures(signatures, str(request.get("tenant_id") or user.get("username", "default")))
+    write_audit(user, "tenant_immunity_publish", str(result.get("published", 0)), result["status"])
+    return result
+
+
+@app.get("/api/v1/roadmap/resource/{incident_id}")
+def roadmap_resource_cost(incident_id: int, user: dict[str, str] = Depends(current_user)):
+    return attacker_resource_cost(incident_context(incident_id))
+
+
+@app.get("/api/v1/roadmap/attention")
+def roadmap_attention(user: dict[str, str] = Depends(current_user)):
+    with get_db() as db:
+        events = [dict(row) for row in db.execute("SELECT action, resource, created_at FROM audit_logs ORDER BY id DESC LIMIT 200").fetchall()]
+    return attention_heatmap(events)
+
+
+@app.get("/api/v1/roadmap/jurisdiction/{incident_id}")
+def roadmap_jurisdiction(incident_id: int, user: dict[str, str] = Depends(current_user)):
+    return jurisdiction_route(incident_context(incident_id))
+
+
+@app.post("/api/v1/roadmap/counterfactual/{incident_id}")
+def roadmap_counterfactual(incident_id: int, request: dict, user: dict[str, str] = Depends(current_user)):
+    return counterfactual_replay(
+        incident_context(incident_id),
+        [str(action) for action in request.get("actions", [])],
+        str(request.get("variable", "response_delay_hours")),
+        int(request.get("value", 4)),
+    )
+
+
+@app.post("/api/v1/roadmap/compliance-diff")
+def roadmap_compliance_diff(request: dict, user: dict[str, str] = Depends(current_user)):
+    controls = compliance_controls(user)["controls"]
+    return compliance_diff(controls, request.get("cves", []))
+
+
+@app.post("/api/v1/roadmap/compliance-diff/sync")
+def roadmap_compliance_diff_sync(user: dict[str, str] = Depends(head_admin_user)):
+    try:
+        feed = sync_cve_feed()
+    except requests.RequestException as error:
+        raise HTTPException(status_code=502, detail=f"CVE feed synchronization failed: {error}") from error
+    result = compliance_diff(compliance_controls(user)["controls"], feed.get("cves", []))
+    return {"feed": feed, "diff": result}
 
 
 if __name__ == "__main__":

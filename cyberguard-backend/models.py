@@ -27,6 +27,19 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
+class OtpVerificationRequest(BaseModel):
+    challenge_id: str
+    otp: str
+
+class PasskeyCredentialRequest(BaseModel):
+    challenge_id: str
+    credential: Dict[str, Any]
+
+class AccessRequestCreate(BaseModel):
+    email: str
+    name: str = ""
+    purpose: str = ""
+
 class UserResponse(BaseModel):
     username: str
     role: str
