@@ -23,6 +23,34 @@ services:
         value: /var/data/cyberguard.db
       - key: CYBERGUARD_ALLOW_ANONYMOUS_EVAL
         value: "false"
+      - key: CYBERGUARD_DATABASE_URL
+        sync: false
+      - key: CYBERGUARD_SIEM_URL
+        sync: false
+      - key: CYBERGUARD_JIRA_URL
+        sync: false
+      - key: CYBERGUARD_JIRA_TOKEN
+        sync: false
+      - key: CYBERGUARD_JIRA_PROJECT
+        sync: false
+      - key: CYBERGUARD_SERVICENOW_URL
+        sync: false
+      - key: CYBERGUARD_SERVICENOW_TOKEN
+        sync: false
+      - key: CYBERGUARD_GRAPH_TOKEN
+        sync: false
+      - key: CYBERGUARD_OKTA_URL
+        sync: false
+      - key: CYBERGUARD_OKTA_TOKEN
+        sync: false
+      - key: CYBERGUARD_EDR_URL
+        sync: false
+      - key: CYBERGUARD_EDR_TOKEN
+        sync: false
+      - key: CYBERGUARD_SECRET_MANAGER
+        sync: false
+      - key: CYBERGUARD_OTEL_ENDPOINT
+        sync: false
     disk:
       name: cyberguard-data
       mountPath: /var/data

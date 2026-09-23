@@ -15,3 +15,4 @@ numpy
 opencv-python-headless
 bcrypt
 PyYAML
+psycopg[binary]>=3.2,<4

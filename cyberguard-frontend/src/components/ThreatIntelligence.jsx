@@ -40,7 +40,6 @@ export default function ThreatIntelligence({ accessToken, incidents = [] }) {
   const [explainability, setExplainability] = useState(null);
   const [alertQuality, setAlertQuality] = useState(null);
   const [counterfactual, setCounterfactual] = useState(null);
-  const [baselineTwin, setBaselineTwin] = useState(null);
   const [selectedActions, setSelectedActions] = useState(['isolate', 'revoke']);
   const [busy, setBusy] = useState(false);
   const config = { headers: { Authorization: `Bearer ${accessToken}` } };
@@ -57,9 +56,6 @@ export default function ThreatIntelligence({ accessToken, incidents = [] }) {
   }, [incidents, selectedId]);
 
   useEffect(() => {
-    if (!selectedIncident?.database_id) {
-      axios.get(`${apiBaseUrl}/api/v1/network/twin`, config).then((response) => setBaselineTwin(response.data)).catch(() => setBaselineTwin({ nodes: [], edges: [] }));
-    }
     if (!selectedIncident?.database_id) {
       setGenome(null);
       setCorrelations(null);
@@ -139,17 +135,9 @@ export default function ThreatIntelligence({ accessToken, incidents = [] }) {
 
     <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
       {!hasIncidentData ? (
-        <>
-          <Panel icon={Waypoints} eyebrow="05 / digital twin" title="Live network propagation">
-            <div className="twin-map">{(baselineTwin?.nodes || []).map((node, index) => <div className={`twin-node twin-${node.kind}`} style={{ left: `${12 + (index % 3) * 34}%`, top: `${20 + Math.floor(index / 3) * 32}%` }} key={node.id}><span><Radar size={13} /></span><small>{node.label}</small></div>)}</div>
-            <div className="twin-footer"><span>{baselineTwin?.nodes?.length || 0} nodes observed</span><span className="text-emerald-300">● live telemetry</span></div>
-          </Panel>
-          <Panel icon={Sparkles} eyebrow="06 / human manipulation" title="Psychology signal map">
-            <div className="risk-meter-label"><span>Manipulation pressure</span><strong>0%</strong></div><RiskBar value={0} color="#f6c76c" />
-            <div className="psychology-grid">{['urgency', 'fear', 'authority', 'reward'].map((tactic) => <div key={tactic}><span>{tactic}</span><b>clear</b></div>)}</div>
-          </Panel>
-          <div className="rounded-2xl border border-dashed border-slate-600 bg-slate-900/40 p-5 text-sm text-slate-400 xl:col-span-2">Run a threat assessment to unlock incident-specific genome, drift, forecast, and response intelligence.</div>
-        </>
+        <div className="rounded-2xl border border-slate-700 bg-slate-950/40 p-5 text-sm text-slate-400">
+          Intelligence panels remain on standby until a threat is analyzed and inserted into the SOC timeline.
+        </div>
       ) : (
         <>
           <Panel icon={BrainCircuit} eyebrow="01 / threat DNA" title="Genome fingerprint">

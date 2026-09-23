@@ -1,0 +1,50 @@
+services:
+  backend:
+    build: ./cyberguard-backend
+    restart: unless-stopped
+    env_file:
+      - ./cyberguard-backend/.env
+    environment:
+      CYBERGUARD_ENV: production
+      CYBERGUARD_JWT_SECRET: ${CYBERGUARD_JWT_SECRET:?Set CYBERGUARD_JWT_SECRET}
+      CYBERGUARD_FRONTEND_ORIGINS: ${CYBERGUARD_FRONTEND_ORIGINS:?Set CYBERGUARD_FRONTEND_ORIGINS}
+      CYBERGUARD_DB_PATH: /data/cyberguard.db
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - cyberguard-data:/data
+      - cyberguard-backups:/backups
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    build: ./cyberguard-backend
+    restart: unless-stopped
+    env_file:
+      - ./cyberguard-backend/.env
+    environment:
+      CYBERGUARD_DB_PATH: /data/cyberguard.db
+      CYBERGUARD_BACKUP_PATH: /backups/cyberguard.backup.db
+    command: ["python", "worker.py"]
+    volumes:
+      - cyberguard-data:/data
+      - cyberguard-backups:/backups
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  frontend:
+    build: ./cyberguard-frontend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5173:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  cyberguard-data:
+  cyberguard-backups:

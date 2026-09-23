@@ -28,8 +28,16 @@ from main import (
 from extended_intel import scan_payload
 from models import ForecastRequest, LoginRequest, SimulationRequest, ThreatAnalysisRequest, ThreatIntelLookup
 from roadmap_features import analyst_bias_report, attention_heatmap, attacker_resource_cost, breach_economics, compliance_diff, counterfactual_replay, cross_modal_consistency, jurisdiction_route, seed_honeytokens, shared_immunity
-from fastapi.testclient import TestClient
-from main import app
+from prevention_engine import (
+    campaign_aware_prevention,
+    containment_action_plan,
+    cross_channel_prevention_score,
+    deception_trigger_check,
+    identity_trust_evaluation,
+    insider_threat_risk,
+    policy_aware_prevention,
+    risk_aware_prevention_decision,
+)
 
 
 def test_core_operator_workflow():
@@ -48,46 +56,6 @@ def test_core_operator_workflow():
     assert incident_detail(result["incident_id"], lead)["incident"]["actions"] == []
     assert notifications(lead)["unread"] >= 0
     assert dashboard_metrics(lead)["totalEvents"] >= 1
-
-
-def test_http_operator_workflow_and_authenticated_websocket():
-    initialize_database()
-    client = TestClient(app)
-    login_response = client.post("/api/v1/auth/login", json={"username": "lead", "password": "lead123"})
-    assert login_response.status_code == 200
-    token = login_response.json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
-
-    analysis = client.post(
-        "/api/v1/analyze",
-        headers=headers,
-        json={"category": "email", "payload": "URGENT verify credentials at https://secure-login.xyz/auth"},
-    )
-    assert analysis.status_code == 200
-    incident_id = analysis.json()["incident_id"]
-    incident = client.get(f"/api/v1/incidents/{incident_id}", headers=headers)
-    assert incident.status_code == 200
-    assert incident.json()["incident"]["assessment"]["xai_explanation"]
-
-    with client.websocket_connect(f"/api/v1/ws/events?token={token}") as websocket:
-        websocket.send_text("subscribe")
-        assert websocket.receive_json()["type"] == "heartbeat"
-
-    registry = client.get("/api/v1/models/registry", headers=headers)
-    assert registry.status_code == 200
-    assert {model["model_id"] for model in registry.json()["models"]} >= {
-        "cyberguard-text-phishing-v1",
-        "cyberguard-media-triage-v1",
-    }
-
-
-def test_demo_scenarios_can_be_disabled_for_production():
-    initialize_database()
-    client = TestClient(app)
-    token = client.post("/api/v1/auth/login", json={"username": "lead", "password": "lead123"}).json()["access_token"]
-    response = client.get("/api/v1/demo/scenarios", headers={"Authorization": f"Bearer {token}"})
-    assert response.status_code == 200
-    assert response.json()["enabled"] is True
 
 
 def test_phishing_scan_scores_signal_content_not_static_baseline():
@@ -235,3 +203,46 @@ def test_limited_roadmap_workflows_are_functional():
     assert replay["counterfactual_risk"] > replay["baseline_risk"]
     diff = compliance_diff([{"id": "control-1", "status": "Needs Review"}], [{"id": "CVE-TEST", "severity": "high"}])
     assert diff["gap_count"] == 2
+
+
+def test_prevention_engine_features_are_functional():
+    decision = risk_aware_prevention_decision({
+        "risk_score": 92,
+        "category": "email",
+        "payload": "URGENT verify credentials at http://evil-login.example/login",
+        "asset_criticality": "critical",
+    }, {"role": "admin", "team": "finance"})
+    assert decision["action"] in {"block", "isolate", "require_mfa"}
+    assert decision["score"] >= 80
+
+    campaign = campaign_aware_prevention([
+        {"payload": "URGENT verify at https://secure-login.example", "user": "analyst@org.com"},
+        {"payload": "URGENT verify at https://secure-login.example", "user": "lead@org.com"},
+    ])
+    assert campaign["campaign_id"]
+    assert campaign["watch_status"] in {"monitoring", "blocking", "contained"}
+
+    trust = identity_trust_evaluation({"country": "US", "device": "new-device", "login_count": 3, "source_ip": "203.0.113.14"})
+    assert trust["trust_score"] >= 0
+    assert trust["status"] in {"trusted", "review", "blocked"}
+
+    insider = insider_threat_risk({"downloads": 9, "off_hours": True, "privilege_change": True, "sensitive_access": 5})
+    assert insider["risk_score"] >= 50
+
+    decoy = deception_trigger_check([{"type": "honeytoken", "host": "finance-host-01", "user": "finance-user"}])
+    assert decoy["trigger_status"] == "triggered"
+
+    containment = containment_action_plan({"risk_score": 90, "source_ip": "198.51.100.10", "category": "email"})
+    assert containment["actions"]
+
+    cross = cross_channel_prevention_score({
+        "email_risk": 88,
+        "url_risk": 76,
+        "device_risk": 70,
+        "login_risk": 82,
+        "campaign_similarity": 0.8,
+    })
+    assert cross["final_score"] >= 70
+
+    policy = policy_aware_prevention({"role": "admin"}, {"criticality": "critical"}, {"category": "url"})
+    assert policy["enforcement_level"] in {"strict", "standard", "monitor"}

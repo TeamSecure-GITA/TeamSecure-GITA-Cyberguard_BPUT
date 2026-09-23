@@ -1,124 +1,34 @@
-# CyberGuard
+# TeamSecure-GITA-Cyberguard_BPUT
 
-CyberGuard is an AI-assisted SOC platform for phishing, malicious URLs, digital impersonation, synthetic media triage, account takeover, and cyber-threat response. It combines deterministic evidence rules with a TF-IDF text model, media anomaly scoring, explainable risk factors, MITRE ATT&CK mapping, RBAC, incident workflow, SIEM ingest, and audited response simulation.
+## Future Feature Roadmap (Serially Numbered)
 
-## What works
+The project is already structured for a SOC dashboard with live detection, AI-assisted triage, and simulated response. The following ideas can be mapped into the current frontend and backend architecture without changing the platform's overall design.
 
-- FastAPI backend and React/Vite SOC dashboard
-- Email, SMS, URL, image, audio, video, authentication, system, network, API, malware, and exfiltration analysis
-- QR-code extraction from image uploads and safe URL re-analysis
-- `.eml` parsing with SPF, DKIM, DMARC, From, Reply-To, and Return-Path checks
-- SSRF-safe website inspection with DNS private-range blocking, bounded redirects, size limits, and password-form detection
-- Isolation Forest login anomaly scoring for structured authentication telemetry
-- Weighted XAI indicators, plain-language explanations, scoring formula, IOC enrichment, and MITRE techniques
-- Declarative YAML playbook validation and approval-aware dry-run planning
-- Optional pretrained image/audio detector adapters with explicit model and calibration status
-- Optional OpenAI-compatible analyst assistant with PII redaction and offline fallback
-- Three-client federated text-training simulation with no raw-text sharing
-- Reproducible public-dataset evaluation CLI with confusion matrix, FPR, ROC-AUC, PR-AUC, and latency
-- JWT sessions, role-based response controls, audit logging, incident lifecycle, Docker, and Render deployment
+1. **Adversarial self-testing** — `ThreatInspector` + `CyberBrain` on the frontend; `detection_engine.py` + `main.py` on the backend. This feature creates adversarial examples against the model and exposes confidence decay as a live blind-spot map.
+2. **Attacker-intent narrative generation** — `CyberBrain` + `ThreatIntelligence` + `XaiModal`; backend via `campaign_engine.py`, `threat_fusion.py`, and `main.py`. This generates plain-language hypotheses for attacker goals and likely next steps.
+3. **Attacker fingerprint drift tracking** — `ThreatDNA` + `ThreatGenome` + `ThreatFeed`; backend via `threat_fusion.py`, `campaign_engine.py`, `main.py`. This tracks how attacker TTPs drift over time against your environment.
+4. **Defender fatigue-aware alert routing** — `AdminConsole` + `NotificationsPanel` + `IncidentTable`; backend via `main.py`, `forecast_engine.py`, `response_simulator.py`. This routes alerts according to human workload and response capacity.
+5. **Simulated breach economics panel** — `RiskGauge` + `ThreatCards` + `ThreatForecast`; backend via `forecast_engine.py` and `main.py`. This converts technical severity into a financial exposure and delay cost view.
+6. **Adaptive honeytoken seeding** — `ThreatInspector` + `SecurityFusionCenter`; backend via `main.py` and `detection_engine.py`. This dynamically plants decoy credentials and files based on active attacker probes.
+7. **Cross-modal deepfake consistency scoring** — `AdvancedDefenseLab` + `ThreatInspector`; backend via `media_engine.py` and `main.py`. This combines image, audio, video, and metadata timing for a unified authenticity score.
+8. **Incident counterfactual replay** — `CyberTimeMachine` + `ThreatIntelligence` + `DigitalTwin`; backend via `digital_twin.py`, `timeline_engine.py`, and `main.py`. This replays a resolved incident with one variable changed to assess what-if scenarios.
+9. **Analyst bias detection** — `AdminConsole` + `NotificationsPanel` + `IncidentTable`; backend via `main.py` and audit logging. This flags patterns where analysts escalate or dismiss alerts inconsistently.
+10. **Supply-chain blast radius mapping** — `AttackGraph` + `ThreatMap` + `SystemView`; backend via `digital_twin.py`, `campaign_engine.py`, and `main.py`. This models third-party compromise propagation into your environment.
+11. **Living compliance diff** — `ComplianceTab` + `AdminConsole`; backend via `main.py` and compliance logic. This keeps controls up-to-date against new regulations and CVEs.
+12. **Threat immune memory** — `ThreatFeed` + `ThreatInspector` + `IncidentTable`; backend via `main.py`, `threat_fusion.py`, `timeline_engine.py`. This stores resolved patterns as memory rules and explains what was caught by memory vs. fresh analysis.
+13. **Alert-to-outcome feedback scoring** — `ThreatCards` + `MetricCards` + `AdminConsole`; backend via `main.py`, `detection_engine.py`, and the dashboard metrics layer. This scores whether each alert was correct, noisy, or false and feeds that into the model quality dashboard.
+14. **Multi-tenant shared immunity layer** — `AdminConsole` + `SecurityFusionCenter`; backend via `main.py`, `campaign_engine.py`, and `threat_fusion.py`. This allows anonymized, resolved signatures from one tenant to improve security outcomes for others without leaking sensitive details.
+15. **Attacker resource-cost estimation** — `ThreatInspector` + `ThreatIntelligence` + `CyberBrain`; backend via `detection_engine.py`, `campaign_engine.py`, `threat_fusion.py`. This estimates whether the attack likely used commodity tooling or a custom, expensive campaign.
+16. **Session-level attention heatmap for analysts** — `Header` + `Sidebar` + `ThreatInspector` + `IncidentTable`; backend via `main.py` and event analytics. This visualizes where analysts click and spend time during triage.
+17. **Regulatory jurisdiction auto-routing** — `ComplianceTab` + `AdminConsole` + `ThreatIntelligence`; backend via `main.py` and incident metadata processing. This flags which breach-notification rules apply based on jurisdiction and residency signals.
+18. **Incident explainability score** — `XaiModal` + `ThreatInspector` + `CyberBrain`; backend via `main.py`, `detection_engine.py`, and `threat_fusion.py`. This displays how traceable and trustworthy the explanation logic is to the analyst.
 
-## Run locally
+## Operations and Deployment
 
-### Backend
-
-```powershell
-cd cyberguard-backend
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-$env:CYBERGUARD_JWT_SECRET = 'replace-with-a-long-random-local-secret'
-uvicorn main:app --reload --host 127.0.0.1 --port 8000
-```
-
-### Frontend
-
-```powershell
-cd cyberguard-frontend
-npm install
-npm run dev
-```
-
-Open `http://127.0.0.1:5173`. The local demo accounts are created by the backend database initializer: `lead` / `lead123` and `analyst` / `analyst123`. Change all demo credentials before deployment.
-
-### Optional AI integrations
-
-Install the separately licensed/operational dependencies only when the host can run them:
-
-```powershell
-cd cyberguard-backend
-pip install -r requirements-ai.txt
-$env:CYBERGUARD_ENABLE_PRETRAINED_MEDIA = 'true'
-```
-
-The image and audio model IDs are configurable in `.env`. `/api/v1/models/status` reports whether weights actually loaded. The analyst assistant uses `CYBERGUARD_LLM_ENDPOINT`, `CYBERGUARD_LLM_API_KEY`, and `CYBERGUARD_LLM_MODEL`; without them it returns a clearly labelled offline template.
-
-Download the configured public weights after reviewing their licences:
-
-```powershell
-pip install -r requirements-ai.txt
-python download_pretrained_models.py
-$env:CYBERGUARD_ENABLE_PRETRAINED_MEDIA = 'true'
-```
-
-Run the federated simulation and evaluation against an authorised CSV snapshot:
-
-```powershell
-python federated_training.py --data data/training_data.csv
-python evaluate_public_datasets.py --data data/training_data.csv --output evaluation-results.json
-python data/download_public_dataset.py --output data/uci_sms_spam.csv
-python evaluate_public_datasets.py --data data/uci_sms_spam.csv --output data/uci-sms-results.json
-python evaluate_media_dataset.py --data path\to\authorised\media-dataset --calibrate --require-provenance --fpr-budget 0.05 --output evaluation-results.json
-```
-
-Media production evaluation requires `validation/real`, `validation/fake`, `test/real`, and `test/fake` folders plus a completed `dataset-manifest.json`. Copy `data/authorised-media-dataset-manifest.example.json`, record the dataset source, licence, collection date, label policy, deduplication, and permitted use, then run the command above. The threshold is selected only on validation data and all reported test metrics come from the untouched test split.
-
-For submission, replace the bundled demonstration CSV with licensed public snapshots and preserve their licence, collection date, split, and results file. The evaluation script never downloads data implicitly.
-
-For a real Flower run, start one server and three clients with separate institution datasets:
-
-```powershell
-python flower_federated.py server --rounds 3
-python flower_federated.py client --data institution-a.csv
-python flower_federated.py client --data institution-b.csv
-
-The repository also includes a local four-container profile using the three sample institution files:
-
-```powershell
-python flower_federated.py client --data institution-c.csv
-```
-
-Replace the sample institution files with approved, disjoint datasets before treating the federated result as meaningful.
-```
-
-For load testing, install `requirements-dev.txt`, start the API, and run `locust -f locustfile.py --host http://127.0.0.1:8000`.
-
-### Docker
-
-Docker Compose runs in production mode and intentionally refuses to start without `CYBERGUARD_JWT_SECRET`:
-
-```powershell
-$env:CYBERGUARD_JWT_SECRET = 'replace-with-a-long-random-secret'
-docker compose up --build
-```
-
-## Key API routes
-
-- `POST /api/v1/analyze` and `/api/v1/analyze/file`
-- `POST /api/v1/analyze/website`
-- `GET /api/v1/incidents/{id}/explainability`
-- `GET /api/v1/playbooks` and `POST /api/v1/playbooks/plan`
+- Dashboard polling refreshes persisted metrics and incident records every ten seconds.
+- Incident operators can search, filter, assign, annotate, and move incidents through New, Investigating, Contained, Mitigated, and Closed states.
+- MITRE ATT&CK mappings and compliance evidence are available through authenticated APIs.
+- `Dockerfile` files and `docker-compose.yml` provide a repeatable deployment path.
+- Set `CYBERGUARD_JWT_SECRET`, webhook URLs, and `CYBERGUARD_DB_PATH` through the deployment environment.
 - `POST /api/v1/response/execute`
-- `POST /api/v1/siem/log`
-
-Interactive API documentation is available at `http://127.0.0.1:8000/docs` while the backend is running.
-
-## Evaluation notes
-
-The bundled text model is a baseline trained on the demonstration dataset in `cyberguard-backend/data/training_data.csv`. It is not a substitute for evaluation on authorised public datasets. Before submission, run a dated benchmark using SMS Spam Collection, authorised URL feeds, and suitable intrusion/deepfake datasets; publish confusion matrices, false-positive rate, ROC/PR metrics, and p50/p95 latency in `EVALUATION.md`.
-
-The media detectors currently provide calibrated triage signals, not a claim of forensic deepfake proof. Analysts should use the displayed evidence and the `verify manually` decision path before taking consequential action.
-
-## Architecture and security
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the data flow. Uploads are bounded by `CYBERGUARD_MAX_UPLOAD_BYTES`; website inspection rejects private and reserved addresses and validates every redirect; response actions are allowlisted and lead-controlled; YAML playbooks are dry-run/approval aware and cannot execute shell commands.
+- `POST /api/v1/alert/dispatch`

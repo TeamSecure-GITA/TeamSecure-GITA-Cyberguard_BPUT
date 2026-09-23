@@ -28,6 +28,13 @@ import AdvancedDefenseLab from './components/AdvancedDefenseLab';
 import SpeculativeDefenseWidget from './components/SpeculativeDefenseWidget';
 import SecurityFusionCenter from './components/SecurityFusionCenter';
 import RoadmapCoveragePanel from './components/RoadmapCoveragePanel';
+import PreventionCenter from './components/PreventionCenter';
+import CampaignWatchlist from './components/CampaignWatchlist';
+import IdentityTrustPanel from './components/IdentityTrustPanel';
+import DeceptionPanel from './components/DeceptionPanel';
+import InsiderRiskPanel from './components/InsiderRiskPanel';
+import ContainmentQueue from './components/ContainmentQueue';
+import PolicyEnginePanel from './components/PolicyEnginePanel';
 import { LanguageProvider } from './i18n';
 
 export default function App() {
@@ -162,7 +169,7 @@ export default function App() {
 
   React.useEffect(() => {
     if (!session || typeof WebSocket === 'undefined') return undefined;
-    const socketUrl = `${apiBaseUrl.replace(/^http/, 'ws')}/api/v1/ws/events?token=${encodeURIComponent(session.access_token)}`;
+    const socketUrl = `${apiBaseUrl.replace(/^http/, 'ws')}/api/v1/ws/events`;
     let socket;
     try {
       socket = new WebSocket(socketUrl);
@@ -261,6 +268,19 @@ export default function App() {
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
                 <div className="xl:col-span-2"><ThreatCards metrics={metrics} /></div>
                 <RiskGauge metrics={metrics} />
+              </div>
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <PreventionCenter accessToken={session?.access_token} />
+                <CampaignWatchlist accessToken={session?.access_token} />
+              </div>
+              <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                <IdentityTrustPanel accessToken={session?.access_token} />
+                <DeceptionPanel accessToken={session?.access_token} />
+                <InsiderRiskPanel accessToken={session?.access_token} />
+              </div>
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                <ContainmentQueue accessToken={session?.access_token} />
+                <PolicyEnginePanel accessToken={session?.access_token} />
               </div>
               <SystemView health={health} modelStatus={modelStatus} />
               <div className="grid grid-cols-1 xl:grid-cols-[1.45fr_.85fr] gap-4">
