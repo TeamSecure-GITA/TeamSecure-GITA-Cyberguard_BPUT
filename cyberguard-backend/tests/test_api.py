@@ -28,6 +28,8 @@ from main import (
 from extended_intel import scan_payload
 from models import ForecastRequest, LoginRequest, SimulationRequest, ThreatAnalysisRequest, ThreatIntelLookup
 from roadmap_features import analyst_bias_report, attention_heatmap, attacker_resource_cost, breach_economics, compliance_diff, counterfactual_replay, cross_modal_consistency, jurisdiction_route, seed_honeytokens, shared_immunity
+from fastapi.testclient import TestClient
+from main import app
 
 
 def test_core_operator_workflow():
@@ -46,6 +48,46 @@ def test_core_operator_workflow():
     assert incident_detail(result["incident_id"], lead)["incident"]["actions"] == []
     assert notifications(lead)["unread"] >= 0
     assert dashboard_metrics(lead)["totalEvents"] >= 1
+
+
+def test_http_operator_workflow_and_authenticated_websocket():
+    initialize_database()
+    client = TestClient(app)
+    login_response = client.post("/api/v1/auth/login", json={"username": "lead", "password": "lead123"})
+    assert login_response.status_code == 200
+    token = login_response.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    analysis = client.post(
+        "/api/v1/analyze",
+        headers=headers,
+        json={"category": "email", "payload": "URGENT verify credentials at https://secure-login.xyz/auth"},
+    )
+    assert analysis.status_code == 200
+    incident_id = analysis.json()["incident_id"]
+    incident = client.get(f"/api/v1/incidents/{incident_id}", headers=headers)
+    assert incident.status_code == 200
+    assert incident.json()["incident"]["assessment"]["xai_explanation"]
+
+    with client.websocket_connect(f"/api/v1/ws/events?token={token}") as websocket:
+        websocket.send_text("subscribe")
+        assert websocket.receive_json()["type"] == "heartbeat"
+
+    registry = client.get("/api/v1/models/registry", headers=headers)
+    assert registry.status_code == 200
+    assert {model["model_id"] for model in registry.json()["models"]} >= {
+        "cyberguard-text-phishing-v1",
+        "cyberguard-media-triage-v1",
+    }
+
+
+def test_demo_scenarios_can_be_disabled_for_production():
+    initialize_database()
+    client = TestClient(app)
+    token = client.post("/api/v1/auth/login", json={"username": "lead", "password": "lead123"}).json()["access_token"]
+    response = client.get("/api/v1/demo/scenarios", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    assert response.json()["enabled"] is True
 
 
 def test_phishing_scan_scores_signal_content_not_static_baseline():

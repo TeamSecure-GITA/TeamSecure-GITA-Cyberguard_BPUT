@@ -17,13 +17,21 @@ export default function SecurityFusionCenter({ apiBaseUrl, accessToken }) {
     source_ip: '192.168.1.99',
     service_provider_app: 'CYBERGUARD SOC',
   });
+  const [seedAttempted, setSeedAttempted] = useState(false);
 
   const loadLogs = async () => {
     try {
       const response = await axios.get(`${apiBaseUrl}/api/v1/siem/logs`, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
-      setLogs(response.data.events || []);
+      const events = response.data.events || [];
+      if (!events.length && !seedAttempted) {
+        setSeedAttempted(true);
+        const seeded = await axios.post(`${apiBaseUrl}/api/v1/siem/demo-seed`, {}, { headers: { Authorization: `Bearer ${accessToken}` } });
+        setLogs(seeded.data.events || []);
+      } else {
+        setLogs(events);
+      }
     } catch (error) {
       setLogs([
         {
@@ -43,7 +51,7 @@ export default function SecurityFusionCenter({ apiBaseUrl, accessToken }) {
     loadLogs();
     const interval = window.setInterval(loadLogs, 15000);
     return () => window.clearInterval(interval);
-  }, [apiBaseUrl, accessToken]);
+  }, [apiBaseUrl, accessToken, seedAttempted]);
 
   const riskCount = useMemo(() => logs.filter((entry) => ['HIGH', 'CRITICAL'].includes(entry.severity)).length, [logs]);
 

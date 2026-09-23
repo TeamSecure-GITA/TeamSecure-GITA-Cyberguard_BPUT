@@ -9,7 +9,15 @@ services:
     envVars:
       - key: CYBERGUARD_JWT_SECRET
         generateValue: true
+      - key: CYBERGUARD_ENV
+        value: production
+      - key: CYBERGUARD_HEAD_ADMIN_USERNAME
+        sync: false
+      - key: CYBERGUARD_HEAD_ADMIN_PASSWORD
+        sync: false
       - key: CYBERGUARD_FRONTEND_ORIGINS
+        sync: false
+      - key: CYBERGUARD_PUBLIC_APP_URL
         sync: false
       - key: CYBERGUARD_DB_PATH
         value: /var/data/cyberguard.db
@@ -19,3 +27,12 @@ services:
       name: cyberguard-data
       mountPath: /var/data
       sizeGB: 1
+  - type: web
+    name: cyberguard-frontend
+    runtime: static
+    rootDir: cyberguard-frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        sync: false

@@ -125,7 +125,7 @@ export default function ThreatInspector({ accessToken }) {
 
   const tabs = [
     { id: 'email', label: 'Email Phishing', icon: Mail },
-    { id: 'email_file', label: 'Email Headers', icon: Mail },
+    { id: 'email_file', label: 'EML Sender Inspection', icon: Mail },
     { id: 'sms', label: 'SMS / Social', icon: Mail },
     { id: 'deepfake', label: 'Deepfake Media', icon: Video },
     { id: 'image', label: 'Image Analysis', icon: Upload },
@@ -165,7 +165,7 @@ export default function ThreatInspector({ accessToken }) {
       <div className="inspector-source-label"><span>01</span> Choose an analysis channel <small>{tabs.length} sources available</small></div>
       <div className="inspector-source-grid">
         {[
-          ['email', 'Email', Mail], ['email_file', 'EML', Mail], ['url', 'URL', Link], ['website', 'Website', Globe], ['image', 'Image', Upload],
+          ['email', 'Email', Mail], ['email_file', 'EML Inspect', Mail], ['url', 'URL', Link], ['website', 'Website', Globe], ['image', 'Image', Upload],
           ['audio', 'Audio', Video], ['video', 'Video', Video], ['system_logs', 'Logs', FileText],
         ].map(([id, label, Icon]) => <button key={id} type="button" onClick={() => { setActiveSubTab(id); setAnalysisResult(null); setSelectedFile(null); setInputText(''); }} className={`source-card ${activeSubTab === id ? 'source-card-active' : ''}`}><Icon size={17} /><span>{label}</span><small>{activeSubTab === id ? 'selected' : 'inspect'}</small></button>)}
       </div>
@@ -210,7 +210,7 @@ export default function ThreatInspector({ accessToken }) {
         {['image', 'audio', 'video', 'deepfake', 'email_file'].includes(activeSubTab) ? (
           <div className={`dropzone border-2 border-dashed rounded-xl p-8 text-center ${dragActive ? 'dropzone-active' : ''}`} onDragOver={(event) => { event.preventDefault(); setDragActive(true); }} onDragLeave={() => setDragActive(false)} onDrop={(event) => { event.preventDefault(); acceptFile(event.dataTransfer.files?.[0]); }}>
             <Upload size={32} className="mx-auto text-slate-500 mb-2" />
-            <p className="text-xs text-slate-300 font-medium">Upload Image, Audio, Video, or .eml</p>
+            <p className="text-xs text-slate-300 font-medium">Upload Image, Audio, Video, or an EML message</p>
             <input
               type="file"
               className="hidden"

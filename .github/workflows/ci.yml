@@ -16,7 +16,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements-dev.txt
-      - run: pytest -q
+      - run: PYTHONPATH=. pytest -q
 
   frontend:
     runs-on: ubuntu-latest
@@ -33,3 +33,6 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run dev -- --host 127.0.0.1 > /tmp/cyberguard-vite.log 2>&1 &
+      - run: npm run test:smoke

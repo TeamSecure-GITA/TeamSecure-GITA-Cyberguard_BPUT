@@ -69,6 +69,7 @@ from website_inspector import inspect_website
 from playbook_engine import load_playbooks, plan_playbook, validate_playbook
 from llm_assistant import generate_analysis
 from deepfake_models import model_status as pretrained_media_status
+from model_registry import model_registry
 from threat_fusion import (
     alert_quality_report,
     build_genome,
@@ -86,23 +87,29 @@ from advanced_defense_engine import acoustic_channel, counter_agent_proxy, dark_
 from speculative_defense_engine import chrono_causal_trap, cognitive_poisoning, holographic_memory, hyperbolic_network, phase_change_zeroization, photonic_bus, plasma_channel, singularity_sinkhole, software_apoptosis, speculative_overview, vacuum_keying
 from cloudflare_waf import block_ip as cloudflare_block_ip, configuration as cloudflare_configuration
 from roadmap_features import analyst_bias_report, attention_heatmap, attacker_resource_cost, breach_economics, compliance_diff, counterfactual_replay, cross_modal_consistency, jurisdiction_route, seed_honeytokens, shared_immunity
-from provider_integrations import deploy_honeytokens, integration_status as provider_integration_status, publish_tenant_signatures, sync_cve_feed
+from provider_integrations import deploy_honeytokens, integration_status as provider_integration_status, provider_readiness, publish_tenant_signatures, sync_cve_feed
 from models import AccessRequestCreate, AdvancedTelemetryRequest, AgentConsensusRequest, AlertRequest, AnalystLoadRequest, BattleRequest, CognitiveEchoRequest, DarkMeshRequest, DeceptionRequest, ForecastRequest, IncidentComment, IncidentUpdate, InfrastructureEchoRequest, LoginRequest, NeuromorphicRequest, NotificationUpdate, OtpVerificationRequest, PasskeyCredentialRequest, PermissionRequest, PolymorphismRequest, PsychologyRequest, QStateRequest, QuantumDecoyRequest, ResponseExecutionRequest, SatelliteRequest, ScannerRequest, SimulationRequest, SpeculativeTelemetryRequest, TemporalHealingRequest, ThreatAnalysisRequest, ThreatIntelLookup, TopologyMorphRequest, ThreatPhysicsRequest, UserCreate, VaccineRequest
 
 DB_PATH = Path(os.getenv("CYBERGUARD_DB_PATH", str(Path(__file__).with_name("cyberguard.db"))))
 JWT_SECRET = os.getenv("CYBERGUARD_JWT_SECRET", "").strip()
+ENVIRONMENT = os.getenv("CYBERGUARD_ENV", "development").lower()
 if not JWT_SECRET:
-    if os.getenv("CYBERGUARD_ENV", "development").lower() == "production":
+    if ENVIRONMENT == "production":
         raise RuntimeError("CYBERGUARD_JWT_SECRET must be set to a unique value in production")
     JWT_SECRET = secrets.token_urlsafe(48)
 SECURITY_OWNER_EMAIL = os.getenv("CYBERGUARD_SECURITY_OWNER_EMAIL", "teamsecure.project@gmail.com")
 PUBLIC_APP_URL = os.getenv("CYBERGUARD_PUBLIC_APP_URL", "http://127.0.0.1:5173")
 ACCESS_REQUEST_TTL_HOURS = max(1, int(os.getenv("CYBERGUARD_ACCESS_REQUEST_TTL_HOURS", "24")))
 HEAD_ADMIN_USERNAME = os.getenv("CYBERGUARD_HEAD_ADMIN_USERNAME", "teamsecure.project@gmail.com")
-HEAD_ADMIN_PASSWORD = os.getenv("CYBERGUARD_HEAD_ADMIN_PASSWORD", "Secure@9040")
+HEAD_ADMIN_PASSWORD = os.getenv("CYBERGUARD_HEAD_ADMIN_PASSWORD", "local-development-only")
+if ENVIRONMENT == "production" and HEAD_ADMIN_PASSWORD == "local-development-only":
+    raise RuntimeError("CYBERGUARD_HEAD_ADMIN_PASSWORD must be set to a unique value in production")
+DEMO_SEED_ENABLED = os.getenv("CYBERGUARD_ENABLE_DEMO_SEED", "true" if ENVIRONMENT != "production" else "false").lower() in {"1", "true", "yes"}
 MAX_UPLOAD_BYTES = max(1_000_000, int(os.getenv("CYBERGUARD_MAX_UPLOAD_BYTES", "10485760")))
+MAX_REQUESTS_PER_MINUTE = max(30, int(os.getenv("CYBERGUARD_MAX_REQUESTS_PER_MINUTE", "120")))
 STARTED_AT = datetime.now(timezone.utc)
 SECURITY_EVENT_WINDOW: dict[str, list[float]] = {}
+REQUEST_WINDOW: dict[str, list[float]] = {}
 OTP_CHALLENGES: dict[str, dict[str, Any]] = {}
 OTP_TTL_SECONDS = max(60, int(os.getenv("CYBERGUARD_OTP_TTL_SECONDS", "300")))
 OTP_MAX_ATTEMPTS = max(3, int(os.getenv("CYBERGUARD_OTP_MAX_ATTEMPTS", "5")))
@@ -447,12 +454,14 @@ def initialize_database():
             db.execute("ALTER TABLE incidents ADD COLUMN assigned_to TEXT")
         if "notes" not in columns:
             db.execute("ALTER TABLE incidents ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
-        users = [
-            ("analyst", hash_password("analyst123"), "analyst", "", None, "active"),
-            ("lead", hash_password("lead123"), "lead", "", None, "active"),
-            ("admin", hash_password("admin123"), "admin", SECURITY_OWNER_EMAIL, HEAD_ADMIN_USERNAME, "active"),
-            (HEAD_ADMIN_USERNAME, hash_password(HEAD_ADMIN_PASSWORD), "head_admin", SECURITY_OWNER_EMAIL, None, "active"),
-        ]
+        users = [(HEAD_ADMIN_USERNAME, hash_password(HEAD_ADMIN_PASSWORD), "head_admin", SECURITY_OWNER_EMAIL, None, "active")]
+        if ENVIRONMENT != "production":
+            users = [
+                ("analyst", hash_password("analyst123"), "analyst", "", None, "active"),
+                ("lead", hash_password("lead123"), "lead", "", None, "active"),
+                ("admin", hash_password("admin123"), "admin", SECURITY_OWNER_EMAIL, HEAD_ADMIN_USERNAME, "active"),
+                *users,
+            ]
         db.executemany("INSERT OR IGNORE INTO users (username, password_hash, role, email, parent_username, status) VALUES (?, ?, ?, ?, ?, ?)", users)
 
 
@@ -493,6 +502,12 @@ async def security_guard(request: Request, call_next):
         blocked = db.execute("SELECT ip_address FROM blocked_ips WHERE ip_address = ?", (ip_address,)).fetchone()
     if blocked and ip_address not in {"127.0.0.1", "::1", "localhost"}:
         return JSONResponse(status_code=403, content={"detail": "Access denied by CyberGuard security controls", "containment": "internal sinkhole preview"})
+    if path.startswith("/api/") and path not in {"/api/v1/system/health", "/api/v1/docs", "/api/v1/openapi.json"}:
+        request_attempts = REQUEST_WINDOW.setdefault(ip_address, [])
+        request_attempts[:] = [stamp for stamp in request_attempts if now - stamp < 60]
+        if len(request_attempts) >= MAX_REQUESTS_PER_MINUTE:
+            return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded; retry after one minute"}, headers={"Retry-After": "60"})
+        request_attempts.append(now)
     suspicious = any(marker in path for marker in ("/.env", "/.git", "/wp-admin", "/wp-login", "/etc/passwd", "/debug", "/phpmyadmin"))
     attempts = SECURITY_EVENT_WINDOW.setdefault(ip_address, [])
     SECURITY_EVENT_WINDOW[ip_address] = [stamp for stamp in attempts if now - stamp < 60]
@@ -503,7 +518,12 @@ async def security_guard(request: Request, call_next):
             with get_db() as db:
                 db.execute("INSERT OR REPLACE INTO blocked_ips (ip_address, reason, blocked_at) VALUES (?, ?, ?)", (ip_address, "Repeated protected-path probing", datetime.now(timezone.utc).isoformat()))
             return JSONResponse(status_code=403, content={"detail": "IP blocked by CyberGuard", "containment": "internal sinkhole preview"})
-    return await call_next(request)
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 def current_user(authorization: Optional[str] = Header(default=None)) -> dict[str, str]:
@@ -835,7 +855,7 @@ def approve_access_request(token: str = Query(..., min_length=20)):
 
 @app.get("/api/v1/demo/scenarios")
 def demo_scenarios(user: dict[str, str] = Depends(current_user)):
-    return {"scenarios": DEMO_SCENARIOS}
+    return {"scenarios": DEMO_SCENARIOS if DEMO_SEED_ENABLED else [], "enabled": DEMO_SEED_ENABLED}
 
 
 @app.post("/api/v1/auth/login")
@@ -1337,10 +1357,16 @@ async def media_trust(file: UploadFile = File(...), user: dict[str, str] = Depen
 
 @app.websocket("/api/v1/ws/events")
 async def events_socket(websocket: WebSocket):
+    token = websocket.query_params.get("token", "")
+    try:
+        user = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+    except jwt.PyJWTError:
+        await websocket.close(code=1008, reason="Authentication required")
+        return
     await websocket.accept()
     try:
         while True:
-            await websocket.send_json({"type": "heartbeat", "status": "connected"})
+            await websocket.send_json({"type": "heartbeat", "status": "connected", "user": user.get("username", "unknown")})
             await websocket.receive_text()
     except WebSocketDisconnect:
         return
@@ -1696,10 +1722,16 @@ def system_health(user: dict[str, str] = Depends(current_user)):
 def model_status(user: dict[str, str] = Depends(current_user)):
     return {
         "text_classifier": {"loaded": TEXT_MODEL is not None or FALLBACK_TEXT_MODEL is not None, "algorithm": "TF-IDF + Logistic Regression" if TEXT_MODEL is not None else "Bernoulli Naive Bayes fallback", "samples": FALLBACK_TEXT_MODEL.get("samples") if FALLBACK_TEXT_MODEL else None},
-        "media_inspection": {"loaded": True, "algorithm": "Lightweight Isolation Forest over image/audio features plus video metadata"},
+        "media_inspection": {"loaded": True, "algorithm": "Lightweight Isolation Forest over image/audio features plus sampled video-frame temporal analysis"},
         "deep_learning_adapter": pretrained_media_status(),
         "threat_intelligence": {"loaded": True, "algorithm": "Local IOC reputation with optional external provider", "external_configured": bool(os.getenv("CYBERGUARD_THREAT_INTEL_URL"))},
     }
+
+
+@app.get("/api/v1/models/registry")
+def models_registry(user: dict[str, str] = Depends(current_user)):
+    """Return provenance and artifact identity for every detector in use."""
+    return {"models": model_registry(), "media_runtime": pretrained_media_status()}
 
 
 @app.get("/api/v1/compliance/controls")
@@ -1731,7 +1763,7 @@ def integration_status(user: dict[str, str] = Depends(current_user)):
         {"name": "Response Webhook", "configured": bool(os.getenv("CYBERGUARD_RESPONSE_WEBHOOK_URL"))},
         {"name": "Alert Webhook", "configured": bool(os.getenv("CYBERGUARD_ALERT_WEBHOOK_URL"))},
         {"name": "SIEM Ingestion", "configured": bool(os.getenv("CYBERGUARD_SIEM_URL"))},
-    ], "providers": provider_integration_status()}
+    ], "providers": provider_integration_status(), "readiness": provider_readiness()}
 
 
 @app.post("/api/v1/integrations/siem/ingest")
@@ -1753,6 +1785,22 @@ def ingest_siem_event_route(request: ThreatAnalysisRequest, user: dict[str, str]
 @app.post("/api/v1/siem/log")
 def siem_ingest_event_route_json(payload: dict, user: dict[str, str] = Depends(current_user)):
     return siem_ingest_event(payload, user)
+
+
+@app.post("/api/v1/siem/demo-seed")
+def siem_demo_seed(user: dict[str, str] = Depends(current_user)):
+    """Seed safe, clearly synthetic telemetry so the live SOC view is demonstrable."""
+    if SIEM_EVENT_STORE:
+        return read_siem_events(user) | {"seeded": False}
+    seed_events = [
+        {"source_ip": "192.168.1.99", "event_type": "suspicious_login", "severity": "CRITICAL", "details": "Synthetic demo event: unauthorized admin access from an untrusted host.", "source_host": "Unknown-Kali-Linux"},
+        {"source_ip": "192.168.1.25", "event_type": "data_access", "severity": "MEDIUM", "details": "Synthetic demo event: unusual finance-server access volume under review.", "source_host": "Finance-Server"},
+        {"source_ip": "192.168.1.10", "event_type": "authentication_success", "severity": "LOW", "details": "Synthetic demo event: trusted administrator session observed.", "source_host": "Admin-Workstation"},
+    ]
+    for event in seed_events:
+        siem_ingest_event(event, user)
+    write_audit(user, "siem_demo_seed", "siem", f"seeded:{len(seed_events)}")
+    return read_siem_events(user) | {"seeded": True}
 
 
 @app.get("/api/v1/siem/logs")

@@ -1,0 +1,51 @@
+{
+  "model_id": "Hemgg/Deepfake-audio-detection",
+  "kind": "audio",
+  "files": [
+    {
+      "path": ".cache\\huggingface\\.gitignore",
+      "bytes": 1,
+      "sha256": "684888c0ebb17f374298b65ee2807526c066094c701bcc7ebbe1c1095f494fc1"
+    },
+    {
+      "path": ".cache\\huggingface\\CACHEDIR.TAG",
+      "bytes": 195,
+      "sha256": "e8893e2dcb3f4545ef67a0a5b7b769113d38eef1aa61c7c7ba14659b02af955f"
+    },
+    {
+      "path": ".cache\\huggingface\\trees\\0d75271368ef2c7efd14831dc503c431f6aab0eb.json",
+      "bytes": 1074,
+      "sha256": "3053cbca769a7735921b7b843d0cdba83c706412413bafe54b80fff4e8b7c10a"
+    },
+    {
+      "path": ".gitattributes",
+      "bytes": 1519,
+      "sha256": "11ad7efa24975ee4b0c3c3a38ed18737f0658a5f75a0a96787b576a78a023361"
+    },
+    {
+      "path": "config.json",
+      "bytes": 2511,
+      "sha256": "e255226e51da3e7b11620e90fe17e1d1847694f9008275132e1bb138b55e134f"
+    },
+    {
+      "path": "model.safetensors",
+      "bytes": 378302360,
+      "sha256": "858de147e3a2da6b0603061386da0b518463bb365be92e6c9c8797c50d334e50"
+    },
+    {
+      "path": "preprocessor_config.json",
+      "bytes": 215,
+      "sha256": "8cdfd65ff4115423185a1512bdae100e2e0cd744f5b322417429944aaafd0827"
+    },
+    {
+      "path": "README.md",
+      "bytes": 1324,
+      "sha256": "59b1d47a9b4b70f2bd1e311880db7dcc4c57e508b0bdfe47ffaf372e09059c96"
+    },
+    {
+      "path": "training_args.bin",
+      "bytes": 4920,
+      "sha256": "b6b6e6dc88a2ec888a63325d95fa4c42c4a71cd51faf388472852de6191e48c6"
+    }
+  ]
+}

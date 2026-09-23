@@ -162,7 +162,7 @@ export default function App() {
 
   React.useEffect(() => {
     if (!session || typeof WebSocket === 'undefined') return undefined;
-    const socketUrl = `${apiBaseUrl.replace(/^http/, 'ws')}/api/v1/ws/events`;
+    const socketUrl = `${apiBaseUrl.replace(/^http/, 'ws')}/api/v1/ws/events?token=${encodeURIComponent(session.access_token)}`;
     let socket;
     try {
       socket = new WebSocket(socketUrl);

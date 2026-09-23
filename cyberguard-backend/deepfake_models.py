@@ -19,6 +19,22 @@ _PROCESSORS: dict[str, Any] = {}
 _LOAD_ERRORS: dict[str, str] = {}
 
 
+def _weights_integrity(model: str) -> dict[str, Any]:
+    model_path = Path(model)
+    if not model_path.is_dir():
+        return {"local": False, "usable": False, "weight_bytes": 0, "reason": "remote model requires explicit download"}
+    weight_files = [path for path in model_path.rglob("*") if path.is_file() and path.suffix in {".bin", ".safetensors", ".pt", ".pth"}]
+    weight_bytes = sum(path.stat().st_size for path in weight_files)
+    manifest = model_path / "cyberguard-manifest.json"
+    return {
+        "local": True,
+        "usable": bool(weight_files) and weight_bytes >= 1_000_000 and manifest.exists(),
+        "weight_bytes": weight_bytes,
+        "manifest": str(manifest) if manifest.exists() else None,
+        "reason": None if weight_files and weight_bytes >= 1_000_000 and manifest.exists() else "missing verified weight manifest or non-trivial weight artifact",
+    }
+
+
 def _pipeline(kind: str):
     if os.getenv("CYBERGUARD_ENABLE_PRETRAINED_MEDIA", "true").lower() not in {"1", "true", "yes"}:
         return None
@@ -94,6 +110,6 @@ def analyze_pretrained(content: bytes, kind: str) -> dict[str, Any] | None:
 
 def model_status() -> dict[str, Any]:
     enabled = os.getenv("CYBERGUARD_ENABLE_PRETRAINED_MEDIA", "true").lower() in {"1", "true", "yes"}
-    cached = {"image": Path(_IMAGE_MODEL).exists(), "audio": Path(_AUDIO_MODEL).exists()}
+    integrity = {"image": _weights_integrity(_IMAGE_MODEL), "audio": _weights_integrity(_AUDIO_MODEL)}
     blocked = any("DLL load failed" in error or "Application Control" in error for error in _LOAD_ERRORS.values())
-    return {"enabled": enabled, "image_model": _IMAGE_MODEL, "audio_model": _AUDIO_MODEL, "weights_cached": cached, "loaded": sorted(_PIPELINES), "load_errors": _LOAD_ERRORS, "runtime_blocked": blocked, "mode": "pretrained" if _PIPELINES else "heuristic-fallback"}
+    return {"enabled": enabled, "image_model": _IMAGE_MODEL, "audio_model": _AUDIO_MODEL, "weights_cached": {kind: item["local"] for kind, item in integrity.items()}, "integrity": integrity, "loaded": sorted(_PIPELINES), "load_errors": _LOAD_ERRORS, "runtime_blocked": blocked, "mode": "pretrained" if _PIPELINES else "heuristic-fallback"}

@@ -1,0 +1,17 @@
+{
+  "dataset_id": "replace-with-authorised-dataset-id",
+  "source": "organisation or public repository URL",
+  "licence": " SPDX or contract reference",
+  "collection_date": "YYYY-MM-DD",
+  "split": {
+    "validation": "source/time/campaign-separated validation snapshot",
+    "test": "source/time/campaign-separated test snapshot"
+  },
+  "label_definition": {
+    "real": "authentic media under the dataset policy",
+    "fake": "synthetic or manipulated media under the dataset policy"
+  },
+  "deduplication": "Describe perceptual/hash deduplication and near-duplicate exclusion.",
+  "permitted_use": "Document the approved evaluation and deployment use.",
+  "notes": "Copy to dataset-manifest.json beside validation/ and test/ only after completing every field."
+}

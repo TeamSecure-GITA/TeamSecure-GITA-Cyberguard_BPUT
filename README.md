@@ -68,8 +68,10 @@ python federated_training.py --data data/training_data.csv
 python evaluate_public_datasets.py --data data/training_data.csv --output evaluation-results.json
 python data/download_public_dataset.py --output data/uci_sms_spam.csv
 python evaluate_public_datasets.py --data data/uci_sms_spam.csv --output data/uci-sms-results.json
-python evaluate_media_dataset.py --data path\to\authorised\media-dataset
+python evaluate_media_dataset.py --data path\to\authorised\media-dataset --calibrate --require-provenance --fpr-budget 0.05 --output evaluation-results.json
 ```
+
+Media production evaluation requires `validation/real`, `validation/fake`, `test/real`, and `test/fake` folders plus a completed `dataset-manifest.json`. Copy `data/authorised-media-dataset-manifest.example.json`, record the dataset source, licence, collection date, label policy, deduplication, and permitted use, then run the command above. The threshold is selected only on validation data and all reported test metrics come from the untouched test split.
 
 For submission, replace the bundled demonstration CSV with licensed public snapshots and preserve their licence, collection date, split, and results file. The evaluation script never downloads data implicitly.
 
