@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import axios from 'axios';
-import { Activity, AudioLines, BrainCircuit, Cable, Clock3, Code2, KeyRound, Network, Orbit, ShieldCheck, Sparkles, Waves, Zap } from 'lucide-react';
+import { Activity, AudioLines, BrainCircuit, Clock3, Code2, KeyRound, Network, Orbit, ShieldCheck, Sparkles, Waves, Zap } from 'lucide-react';
 
 const DEMOS = [
   ['heartbeat-keying', 'Heartbeat keying', KeyRound, { telemetry: { heart_rate: 74, hrv: .56, micro_tremor: .08, presence_confidence: .96 } }],

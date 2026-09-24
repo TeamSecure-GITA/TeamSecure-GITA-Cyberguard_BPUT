@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertCircle, CheckCircle2, Clock, GitCommit, Shield, ShieldCheck } from 'lucide-react';
+import { Clock, GitCommit } from 'lucide-react';
 
 export default function AttackChainTimeline({ timeline }) {
   if (!timeline || timeline.length === 0) {

@@ -36,7 +36,6 @@ export default function ThreatIntelligence({ accessToken, incidents = [] }) {
   const [battle, setBattle] = useState(null);
   const [intent, setIntent] = useState(null);
   const [drift, setDrift] = useState(null);
-  const [memory, setMemory] = useState(null);
   const [explainability, setExplainability] = useState(null);
   const [alertQuality, setAlertQuality] = useState(null);
   const [counterfactual, setCounterfactual] = useState(null);
@@ -67,7 +66,7 @@ export default function ThreatIntelligence({ accessToken, incidents = [] }) {
       return;
     }
     const id = selectedIncident.database_id;
-    Promise.all([
+    Promise.allSettled([
       axios.get(`${apiBaseUrl}/api/v1/incidents/${id}/dna`, config),
       axios.get(`${apiBaseUrl}/api/v1/incidents/${id}/correlations`, config),
       axios.get(`${apiBaseUrl}/api/v1/incidents/${id}/attack-chain`, config),
@@ -77,23 +76,23 @@ export default function ThreatIntelligence({ accessToken, incidents = [] }) {
       axios.post(`${apiBaseUrl}/api/v1/self-heal`, { incident_id: id }, config),
       axios.get(`${apiBaseUrl}/api/v1/incidents/${id}/intent`, config),
       axios.get(`${apiBaseUrl}/api/v1/incidents/${id}/drift`, config),
-      axios.get(`${apiBaseUrl}/api/v1/incidents/${id}/memory`, config),
       axios.get(`${apiBaseUrl}/api/v1/incidents/${id}/explainability`, config),
       axios.get(`${apiBaseUrl}/api/v1/alert-quality`, config),
-    ]).then(([genomeResponse, correlationResponse, timelineResponse, psychologyResponse, twinResponse, forecastResponse, healingResponse, intentResponse, driftResponse, memoryResponse, explainabilityResponse, alertResponse]) => {
-      setGenome(genomeResponse.data.genome);
-      setCorrelations(correlationResponse.data);
-      setTimeline(timelineResponse.data.events);
-      setPsychology(psychologyResponse.data);
-      setTwin(twinResponse.data);
-      setForecast(forecastResponse.data);
-      setHealing(healingResponse.data);
-      setIntent(intentResponse.data);
-      setDrift(driftResponse.data);
-      setMemory(memoryResponse.data);
-      setExplainability(explainabilityResponse.data);
-      setAlertQuality(alertResponse.data);
-    }).catch(() => {});
+    ]).then((results) => {
+      const data = results.map((result) => result.status === 'fulfilled' ? result.value.data : null);
+      const [genome, correlations, timeline, psychology, twin, forecast, healing, intent, drift, explainability, alertQuality] = data;
+      if (genome) setGenome(genome.genome);
+      if (correlations) setCorrelations(correlations);
+      if (timeline) setTimeline(timeline.events || []);
+      if (psychology) setPsychology(psychology);
+      if (twin) setTwin(twin);
+      if (forecast) setForecast(forecast);
+      if (healing) setHealing(healing);
+      if (intent) setIntent(intent);
+      if (drift) setDrift(drift);
+      if (explainability) setExplainability(explainability);
+      if (alertQuality) setAlertQuality(alertQuality);
+    });
   }, [selectedIncident?.database_id, accessToken]);
 
   const runBattle = async () => {

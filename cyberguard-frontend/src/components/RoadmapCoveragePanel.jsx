@@ -32,7 +32,7 @@ export default function RoadmapCoveragePanel({ apiBaseUrl, accessToken, userRole
       axios.post(`${apiBaseUrl}/api/v1/roadmap/compliance-diff`, { cves: [] }, { headers }),
     ]).then((responses) => {
       const [statusResponse, ...featureResponses] = responses;
-      if (statusResponse.status === 'fulfilled') setProviders(statusResponse.value.data.providers);
+      if (statusResponse.status === 'fulfilled') setProviders(statusResponse.value.data);
       const keys = Object.keys(emptyState);
       const next = { ...emptyState };
       featureResponses.forEach((response, index) => {

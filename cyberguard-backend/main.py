@@ -90,6 +90,7 @@ from prevention_engine import (
 from production_integrations import IntegrationNotConfigured, create_ticket, disable_identity, isolate_endpoint, provider_status
 from operations import backup_database, prometheus_metrics
 from database import connect_database, database_backend
+from account_rescue_engine import blast_radius, consent_record, contact_warning_draft, evidence_snapshot, fleet_summary, guardian_contact, guardian_watch, lockdown_plan, locked_out_recovery, offline_rescue_card, provider_capabilities, rescue_plan, rescue_report, rescue_simulation, rollback_record, scan_account, execute_step
 from models import AccessRequestCreate, AdvancedTelemetryRequest, AgentConsensusRequest, AlertRequest, AnalystLoadRequest, BattleRequest, CognitiveEchoRequest, DarkMeshRequest, DeceptionRequest, ForecastRequest, IncidentComment, IncidentUpdate, InfrastructureEchoRequest, LoginRequest, NeuromorphicRequest, NotificationUpdate, OtpVerificationRequest, PasskeyCredentialRequest, PermissionRequest, PolymorphismRequest, PsychologyRequest, QStateRequest, QuantumDecoyRequest, ResponseExecutionRequest, SatelliteRequest, ScannerRequest, SimulationRequest, SpeculativeTelemetryRequest, TemporalHealingRequest, ThreatAnalysisRequest, ThreatIntelLookup, TopologyMorphRequest, ThreatPhysicsRequest, UserCreate, VaccineRequest
 
 DB_PATH = Path(os.getenv("CYBERGUARD_DB_PATH", str(Path(__file__).with_name("cyberguard.db"))))
@@ -502,6 +503,8 @@ app.add_middleware(
 async def security_guard(request: Request, call_next):
     global HTTP_REQUEST_COUNT, HTTP_ERROR_COUNT
     HTTP_REQUEST_COUNT += 1
+    if request.method.upper() == "OPTIONS":
+        return await call_next(request)
     ip_address = request_ip(request)
     path = request.url.path.lower()
     now = time.time()
@@ -1653,8 +1656,29 @@ def dashboard_graph(user: dict[str, str] = Depends(current_user)):
 def system_health(user: dict[str, str] = Depends(current_user)):
     with get_db() as db:
         event_count = db.execute("SELECT COUNT(*) AS count FROM incidents").fetchone()["count"]
+        recent_created = [row["created_at"] for row in db.execute("SELECT created_at FROM incidents ORDER BY id DESC LIMIT 200").fetchall()]
     uptime = (datetime.now(timezone.utc) - STARTED_AT).total_seconds()
-    return {"status": "healthy", "uptime_seconds": round(uptime), "events_stored": event_count, "model_loaded": TEXT_MODEL is not None, "database": database_backend(), "response_integrations": bool(os.getenv("CYBERGUARD_RESPONSE_WEBHOOK_URL"))}
+    one_minute_ago = datetime.now(timezone.utc) - timedelta(minutes=1)
+    events_per_minute = 0
+    for value in recent_created:
+        try:
+            if datetime.fromisoformat(value) >= one_minute_ago:
+                events_per_minute += 1
+        except (TypeError, ValueError):
+            continue
+    quality = alert_quality_report()
+    return {
+        "status": "healthy",
+        "uptime_seconds": round(uptime),
+        "events_stored": event_count,
+        "model_loaded": TEXT_MODEL is not None,
+        "model_confidence": "loaded" if TEXT_MODEL is not None else "heuristics active",
+        "api_latency_ms": 0,
+        "events_per_minute": events_per_minute,
+        "threat_accuracy": quality.get("overall_score", 0),
+        "database": database_backend(),
+        "response_integrations": bool(os.getenv("CYBERGUARD_RESPONSE_WEBHOOK_URL")),
+    }
 
 
 @app.get("/api/v1/system/production-readiness")
@@ -1894,6 +1918,117 @@ def prevention_deception_status(user: dict[str, str] = Depends(current_user)):
 @app.get("/api/v1/prevention/policies")
 def prevention_policies(user: dict[str, str] = Depends(current_user)):
     return {"policy_rules": ["strict_admin_controls", "phishing_blocking", "device_revalidation"], "department_profile": user.get("role", "analyst"), "enforcement_level": "strict"}
+
+
+@app.post("/api/v1/rescue/scan")
+def rescue_scan(request: dict, user: dict[str, str] = Depends(current_user)):
+    result = scan_account(request)
+    write_audit(user, "account_rescue_scan", result["scan_id"], f"risk={result['score']} level={result['risk_level']}")
+    return result
+
+
+@app.post("/api/v1/rescue/plan")
+def rescue_plan_route(request: dict, user: dict[str, str] = Depends(current_user)):
+    scan = request.get("scan") if isinstance(request.get("scan"), dict) else scan_account(request)
+    result = rescue_plan(scan)
+    write_audit(user, "account_rescue_plan", result["plan_id"], "Personalized rescue plan generated")
+    return result
+
+
+@app.post("/api/v1/rescue/step")
+def rescue_step(request: dict, user: dict[str, str] = Depends(current_user)):
+    plan = request.get("plan") or {}
+    result = execute_step(plan, str(request.get("step_id", "")), bool(request.get("confirmed", False)))
+    write_audit(user, "account_rescue_step", str(request.get("step_id", "unknown")), result["status"])
+    return result
+
+
+@app.post("/api/v1/rescue/evidence")
+def rescue_evidence(request: dict, user: dict[str, str] = Depends(current_user)):
+    result = evidence_snapshot(request.get("scan") or scan_account(request), str(request.get("account_label") or user.get("username", "connected-account")))
+    write_audit(user, "account_rescue_evidence", result["evidence_id"], "Pre-action security snapshot created")
+    return result
+
+
+@app.post("/api/v1/rescue/lockdown")
+def rescue_lockdown(request: dict, user: dict[str, str] = Depends(current_user)):
+    if not request.get("confirmed"):
+        return lockdown_plan(request.get("scan") or scan_account(request))
+    if user.get("role") not in {"lead", "head_admin", "admin"}:
+        raise HTTPException(status_code=403, detail="SOC lead approval required for emergency lockdown")
+    result = lockdown_plan(request.get("scan") or scan_account(request))
+    result.update({"status": "queued", "confirmed_by": user.get("username")})
+    write_audit(user, "account_rescue_lockdown", result["lockdown_id"], "Emergency lockdown confirmed")
+    return result
+
+
+@app.post("/api/v1/rescue/guardian")
+def rescue_guardian(request: dict, user: dict[str, str] = Depends(current_user)):
+    result = guardian_watch(request.get("scan") or scan_account(request), bool(request.get("enabled", True)))
+    write_audit(user, "guardian_mode", result["watch_id"], result["status"])
+    return result
+
+
+@app.get("/api/v1/rescue/locked-out")
+def rescue_locked_out(provider: str = Query("generic"), user: dict[str, str] = Depends(current_user)):
+    return locked_out_recovery(provider)
+
+
+@app.get("/api/v1/rescue/blast-radius")
+def rescue_blast_radius(provider: str = Query("generic"), user: dict[str, str] = Depends(current_user)):
+    return blast_radius(provider)
+
+
+@app.get("/api/v1/rescue/offline-card")
+def rescue_offline_card(provider: str = Query("generic"), user: dict[str, str] = Depends(current_user)):
+    return offline_rescue_card(provider)
+
+
+@app.get("/api/v1/rescue/capabilities")
+def rescue_capabilities(provider: str = Query("generic"), user: dict[str, str] = Depends(current_user)):
+    return provider_capabilities(provider)
+
+
+@app.post("/api/v1/rescue/simulate")
+def rescue_simulate(request: dict, user: dict[str, str] = Depends(current_user)):
+    return rescue_simulation(request.get("scan") or scan_account(request))
+
+
+@app.post("/api/v1/rescue/report")
+def rescue_report_route(request: dict, user: dict[str, str] = Depends(current_user)):
+    result = rescue_report(request.get("scan") or scan_account(request), request.get("plan") or rescue_plan(request.get("scan") or scan_account(request)), request.get("actions", []))
+    write_audit(user, "account_rescue_report", result["report_id"], "Incident rescue report generated")
+    return result
+
+
+@app.post("/api/v1/rescue/rollback")
+def rescue_rollback(request: dict, user: dict[str, str] = Depends(current_user)):
+    result = rollback_record(str(request.get("action_id", "unknown")), request.get("snapshot", {}))
+    write_audit(user, "account_rescue_rollback", result["action_id"], "Rollback record prepared; provider restore requires authorization")
+    return result
+
+
+@app.post("/api/v1/rescue/consent")
+def rescue_consent(request: dict, user: dict[str, str] = Depends(current_user)):
+    return consent_record(str(request.get("provider", "generic")), [str(scope) for scope in request.get("scopes", [])], str(request.get("action", "scan")), bool(request.get("confirmed", False)))
+
+
+@app.post("/api/v1/rescue/contact-warning")
+def rescue_contact_warning(request: dict, user: dict[str, str] = Depends(current_user)):
+    return contact_warning_draft(str(request.get("account_label", user.get("username", "account"))), request.get("contacts", []))
+
+
+@app.post("/api/v1/rescue/guardian-contact")
+def rescue_guardian_contact(request: dict, user: dict[str, str] = Depends(current_user)):
+    contact = str(request.get("contact", "")).strip()
+    if not contact:
+        raise HTTPException(status_code=422, detail="contact is required")
+    return guardian_contact(contact, bool(request.get("enabled", True)))
+
+
+@app.post("/api/v1/rescue/fleet")
+def rescue_fleet(request: dict, user: dict[str, str] = Depends(current_user)):
+    return fleet_summary(request.get("accounts", []))
 
 
 def _roadmap_incidents() -> list[dict[str, Any]]:

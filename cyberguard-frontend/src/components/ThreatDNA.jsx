@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { BrainCircuit, Check, Copy, Dna, ShieldAlert, Sparkles } from 'lucide-react';
+import { Check, Copy, Dna, Sparkles } from 'lucide-react';
 
-export default function ThreatDNA({ genome, incidentId }) {
+export default function ThreatDNA({ genome, _incidentId }) {
   const [copied, setCopied] = useState(false);
 
   if (!genome) {

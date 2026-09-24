@@ -38,6 +38,7 @@ from prevention_engine import (
     policy_aware_prevention,
     risk_aware_prevention_decision,
 )
+from account_rescue_engine import consent_record, contact_warning_draft, execute_step, fleet_summary, provider_capabilities, rescue_plan, rescue_report, rescue_simulation, scan_account
 
 
 def test_core_operator_workflow():
@@ -246,3 +247,29 @@ def test_prevention_engine_features_are_functional():
 
     policy = policy_aware_prevention({"role": "admin"}, {"criticality": "critical"}, {"category": "url"})
     assert policy["enforcement_level"] in {"strict", "standard", "monitor"}
+
+
+def test_account_rescue_engine_scans_plans_and_requires_confirmation():
+    scan = scan_account({"provider": "google", "forwarding_rule": True, "mfa_enabled": False, "new_oauth_app": True})
+    assert scan["risk_level"] in {"HIGH", "CRITICAL"}
+    assert scan["top_contributors"]
+    plan = rescue_plan(scan)
+    assert plan["honesty_note"]
+    step = execute_step(plan, "remove_forwarding")
+    assert step["status"] == "confirmation_required"
+    manual = execute_step(plan, "remove_forwarding", confirmed=True)
+    assert manual["status"] == "manual_required"
+
+
+def test_account_rescue_supporting_features_are_safe_and_explicit():
+    scan = scan_account({"provider": "microsoft", "mfa_enabled": False})
+    plan = rescue_plan(scan)
+    simulation = rescue_simulation(scan)
+    report = rescue_report(scan, plan)
+    assert simulation["side_effects"] is False
+    assert simulation["risk_after"] <= simulation["risk_before"]
+    assert report["export_format"]
+    assert provider_capabilities("microsoft")["passwords_collected"] is False
+    assert consent_record("google", ["readonly"], "scan")["status"] == "awaiting_confirmation"
+    assert contact_warning_draft("demo", ["a@example.com"])["requires_explicit_send"] is True
+    assert fleet_summary([{"label": "finance", "risk": 90, "consent": True}])["accounts"][0]["rescue_available"] is True

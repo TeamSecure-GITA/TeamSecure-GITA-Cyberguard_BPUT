@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowDown, Check, Loader2, Play, ShieldAlert, Sparkles } from 'lucide-react';
+import { ArrowDown, Loader2, Play } from 'lucide-react';
 import axios from 'axios';
 
 const AVAILABLE_ACTIONS = [

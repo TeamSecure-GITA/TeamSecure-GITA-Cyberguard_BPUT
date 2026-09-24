@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Bell, Search, Shield, Radio, UserCheck, Orbit, LogOut } from 'lucide-react';
+import { Bell, Search, UserCheck, Orbit, LogOut } from 'lucide-react';
 
 export default function Header({ userRole, unread = 0, onSearch, onOpenNotifications, onReturnToPortal, onLogout }) {
   const [query, setQuery] = useState('');
@@ -82,4 +82,4 @@ export default function Header({ userRole, unread = 0, onSearch, onOpenNotificat
       </div>
     </header>
   );
-}
+}

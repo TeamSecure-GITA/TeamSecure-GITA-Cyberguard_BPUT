@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import ReactFlow, { Background, Controls, MarkerType } from 'reactflow';
 import axios from 'axios';
-import { BrainCircuit, GitBranch, GitGraph, Layers, RefreshCw } from 'lucide-react';
+import { GitBranch, RefreshCw } from 'lucide-react';
 import 'reactflow/dist/style.css';
 
 const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';

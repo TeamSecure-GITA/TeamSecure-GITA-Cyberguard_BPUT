@@ -35,6 +35,7 @@ import DeceptionPanel from './components/DeceptionPanel';
 import InsiderRiskPanel from './components/InsiderRiskPanel';
 import ContainmentQueue from './components/ContainmentQueue';
 import PolicyEnginePanel from './components/PolicyEnginePanel';
+import AccountRescueCenter from './components/AccountRescueCenter';
 import { LanguageProvider } from './i18n';
 
 export default function App() {
@@ -54,11 +55,44 @@ export default function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [demoSeeded, setDemoSeeded] = useState(false);
   const [routingInfo, setRoutingInfo] = useState(null);
+  const authFailureHandled = React.useRef(false);
   const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+
+  React.useEffect(() => {
+    const interceptorId = axios.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        if (error.response?.status === 401) {
+          window.dispatchEvent(new Event('cyberguard:auth-expired'));
+        }
+        return Promise.reject(error);
+      },
+    );
+    const handleAuthExpired = () => {
+      if (authFailureHandled.current) return;
+      authFailureHandled.current = true;
+      setSession(null);
+      setViewMode('portal');
+      setRoutingInfo(null);
+      setMetrics(null);
+      setIncidents([]);
+      setTimeline([]);
+      setHealth(null);
+      setModelStatus(null);
+      setUnread(0);
+      setDemoSeeded(false);
+    };
+    window.addEventListener('cyberguard:auth-expired', handleAuthExpired);
+    return () => {
+      axios.interceptors.response.eject(interceptorId);
+      window.removeEventListener('cyberguard:auth-expired', handleAuthExpired);
+    };
+  }, []);
 
   const handleQuickLogin = async (username, password) => {
     const response = await axios.post(`${apiBaseUrl}/api/v1/auth/login`, { username, password });
     if (!response.data.requires_otp) {
+      authFailureHandled.current = false;
       setSession(response.data);
       setViewMode('workspace');
       setActiveTab('dashboard');
@@ -68,6 +102,7 @@ export default function App() {
 
   const handleVerifyOtp = async (challengeId, otp) => {
     const response = await axios.post(`${apiBaseUrl}/api/v1/auth/verify-otp`, { challenge_id: challengeId, otp });
+    authFailureHandled.current = false;
     setSession(response.data);
     setViewMode('workspace');
     setActiveTab('dashboard');
@@ -76,6 +111,7 @@ export default function App() {
 
   const handleVerifyPasskey = async (challengeId, credential) => {
     const response = await axios.post(`${apiBaseUrl}/api/v1/auth/passkey`, { challenge_id: challengeId, credential });
+    authFailureHandled.current = false;
     setSession(response.data);
     setViewMode('workspace');
     setActiveTab('dashboard');
@@ -273,6 +309,7 @@ export default function App() {
                 <PreventionCenter accessToken={session?.access_token} />
                 <CampaignWatchlist accessToken={session?.access_token} />
               </div>
+              <AccountRescueCenter accessToken={session?.access_token} />
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
                 <IdentityTrustPanel accessToken={session?.access_token} />
                 <DeceptionPanel accessToken={session?.access_token} />

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
-import { Activity, Atom, AudioLines, Boxes, BrainCircuit, Cable, CircleDot, Code2, Gauge, Globe2, KeyRound, Network, Orbit, Radio, ShieldCheck, Sparkles, Waves, Zap } from 'lucide-react';
+import { Atom, AudioLines, Boxes, BrainCircuit, Cable, CircleDot, Gauge, KeyRound, Network, Orbit, Radio, ShieldCheck, Sparkles, Zap } from 'lucide-react';
 
 const DEMOS = [
   ['chrono-causal', 'Chrono-causal trap', Zap, { exploit_probability: 82, header_jitter: 55, bus_anomaly: 64, route_noise: 30 }],

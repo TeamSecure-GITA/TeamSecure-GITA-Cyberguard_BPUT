@@ -2,20 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { 
   Shield, 
   ArrowRight, 
-  Radio, 
   Lock, 
-  Globe, 
-  Cpu, 
-  Activity, 
-  Terminal, 
-  Eye, 
-  Zap, 
   AlertTriangle,
-  Server,
-  Layers,
   ChevronRight,
-  Sparkles,
-  ExternalLink
 } from 'lucide-react';
 import LanguageToggle from './LanguageToggle';
 
@@ -57,7 +46,6 @@ export default function CyberRadarPortal({ onOpenWorkspace, onQuickLogin, onVeri
     status: 'OPTIMAL'
   });
 
-  const [activeBlip, setActiveBlip] = useState(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');

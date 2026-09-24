@@ -1,7 +1,7 @@
 import React from 'react';
-import { AlertCircle, ArrowUpRight, GitFork, Link2, ShieldAlert } from 'lucide-react';
+import { GitFork, Link2 } from 'lucide-react';
 
-export default function CampaignCorrelation({ correlations, onSelectIncident }) {
+export default function CampaignCorrelation({ correlations, _onSelectIncident }) {
   if (!correlations) {
     return (
       <div className="p-6 text-center text-xs text-slate-500 bg-slate-900/40 rounded-xl border border-slate-800">
