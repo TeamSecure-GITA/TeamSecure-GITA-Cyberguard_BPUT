@@ -121,6 +121,7 @@ def analyze_audio(content: bytes) -> dict[str, Any]:
 
 def analyze_video(content: bytes) -> dict[str, Any]:
     import cv2
+    from deepfake_models import analyze_pretrained
 
     with tempfile.NamedTemporaryFile(suffix=".video", delete=False) as temporary_file:
         temporary_file.write(content)
@@ -129,36 +130,31 @@ def analyze_video(content: bytes) -> dict[str, Any]:
     frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
     width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
     height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-    sample_count = min(12, frame_count)
-    frame_scores = []
-    if sample_count:
-        interval = max(frame_count // sample_count, 1)
-        for frame_index in range(0, frame_count, interval):
+    sampled_frames = []
+    if frame_count > 0:
+        for frame_index in {0, max(0, frame_count // 2), max(0, frame_count - 1)}:
             capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-            success, frame = capture.read()
-            if not success:
-                continue
-            encoded, buffer = cv2.imencode(".jpg", frame)
-            if encoded:
-                frame_result = analyze_image(buffer.tobytes())
-                frame_scores.append(frame_result["score"])
-            if len(frame_scores) >= sample_count:
-                break
+            ok, frame = capture.read()
+            if ok:
+                encoded, buffer = cv2.imencode(".jpg", frame)
+                if encoded:
+                    sampled_frames.append(buffer.tobytes())
     capture.release()
     os.unlink(temporary_path)
-    score = round(sum(frame_scores) / len(frame_scores)) if frame_scores else 20
-    temporal_variance = max(frame_scores) - min(frame_scores) if frame_scores else 0
-    reasons = [f"Video sampled {len(frame_scores)} of {frame_count} frames at {width}x{height}." ]
-    indicators = [
-        {"name": "Video Frame Integrity", "score": f"{min(frame_count, 99)}%"},
-        {"name": "Temporal Score Variance", "score": f"{min(temporal_variance, 99)}%"},
-    ]
-    if temporal_variance >= 30:
-        reasons.append("Frame-to-frame synthetic-media scores vary materially; manual temporal review is required.")
+    score = 20
+    reasons = [f"Video container inspected at {width}x{height} with {frame_count} frames."]
+    indicators = [{"name": "Video Frame Integrity", "score": f"{min(frame_count, 99)}%"}]
     if frame_count == 0 or width == 0 or height == 0:
         score += 35
         reasons.append("Video stream metadata could not be decoded reliably.")
-    return {"score": min(score, 99), "reasons": reasons, "indicators": indicators, "method": "video-frame-temporal-analysis", "frame_scores": frame_scores}
+    frame_results = [analyze_pretrained(frame, "image") for frame in sampled_frames]
+    frame_results = [result for result in frame_results if result]
+    if frame_results:
+        pretrained_score = round(sum(result["score"] for result in frame_results) / len(frame_results))
+        score = max(score, pretrained_score)
+        reasons.append(f"Pretrained image detector analyzed {len(frame_results)} sampled video frame(s) at {pretrained_score}% synthetic-media confidence.")
+        indicators.append({"name": "Sampled Frame Deepfake Detector", "score": f"{pretrained_score}%", "frames": len(frame_results)})
+    return {"score": min(score, 99), "reasons": reasons, "indicators": indicators, "method": "pretrained-video-frame-detector" if frame_results else "video-metadata", "pretrained_model": frame_results[0] if frame_results else None}
 
 
 def analyze_qr(content: bytes) -> dict[str, Any]:

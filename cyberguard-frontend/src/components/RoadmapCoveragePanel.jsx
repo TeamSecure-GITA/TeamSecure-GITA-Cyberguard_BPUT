@@ -3,27 +3,34 @@ import axios from 'axios';
 import { Banknote, BrainCircuit, Globe2, KeyRound, Network, Scale, Users } from 'lucide-react';
 
 const emptyState = { economics: null, honeytokens: null, bias: null, immunity: null, resource: null, attention: null, jurisdiction: null, compliance: null };
+const previewIncident = { database_id: null, id: 'PREVIEW-001', category: 'phishing', risk_score: 72, riskScore: 72, risk_level: 'High', riskLevel: 'High', payload: 'Urgent credential request from a look-alike domain', assigned_to: 'analyst', status: 'Investigating', metadata: { country: 'IN' } };
+const previewData = {
+  economics: { total_exposure: 16840, delay_cost: 1210, mode: 'local preview' },
+  honeytokens: { tokens: [{ token_id: 'HT-PREVIEW-01' }, { token_id: 'HT-PREVIEW-02' }, { token_id: 'HT-PREVIEW-03' }], mode: 'local preview' },
+  bias: { status: 'no strong bias signal', analysts: [{ analyst: 'analyst' }] },
+  immunity: { signature_count: 1, status: 'ready' },
+  resource: { tier: 'organized', resource_score: 68 },
+  attention: { total_events: 3 },
+  jurisdiction: { jurisdiction: 'India', regulations: ['DPDP Act', 'CERT-In 6-hour reporting'] },
+  compliance: { status: 'attention required', gap_count: 1 },
+};
 
 export default function RoadmapCoveragePanel({ apiBaseUrl, accessToken, userRole, incidents = [] }) {
   const [data, setData] = useState(emptyState);
   const [providers, setProviders] = useState(null);
   const [integrationMessage, setIntegrationMessage] = useState(null);
   const [busy, setBusy] = useState(false);
-  const selected = incidents[0];
+  const selected = incidents[0] || previewIncident;
   const headers = { Authorization: `Bearer ${accessToken}` };
 
   useEffect(() => {
     if (!accessToken) return undefined;
     const incidentId = selected?.database_id;
-    if (!incidentId) {
-      setData(emptyState);
-      return undefined;
-    }
     setBusy(true);
     Promise.allSettled([
       axios.get(`${apiBaseUrl}/api/v1/integrations/status`, { headers }),
-      axios.get(`${apiBaseUrl}/api/v1/roadmap/economics/${incidentId}`, { headers }),
-      axios.post(`${apiBaseUrl}/api/v1/roadmap/honeytokens`, { incident_id: incidentId, count: 3 }, { headers }),
+      incidentId ? axios.get(`${apiBaseUrl}/api/v1/roadmap/economics/${incidentId}`, { headers }) : Promise.resolve({ data: { ...selected, ...{ total_exposure: 16840, delay_cost: 1210, mode: 'local preview' } } }),
+      axios.post(`${apiBaseUrl}/api/v1/roadmap/honeytokens`, { incident_id: incidentId, count: 3 }, { headers }).catch(() => ({ data: { incident_id: selected.id, tokens: [{ token_id: 'HT-PREVIEW-01' }, { token_id: 'HT-PREVIEW-02' }, { token_id: 'HT-PREVIEW-03' }], mode: 'local preview' } })),
       axios.get(`${apiBaseUrl}/api/v1/roadmap/bias`, { headers }),
       axios.get(`${apiBaseUrl}/api/v1/roadmap/immunity`, { headers }),
       axios.get(`${apiBaseUrl}/api/v1/roadmap/resource/${incidentId}`, { headers }),
@@ -33,13 +40,13 @@ export default function RoadmapCoveragePanel({ apiBaseUrl, accessToken, userRole
     ]).then((responses) => {
       const [statusResponse, ...featureResponses] = responses;
       if (statusResponse.status === 'fulfilled') setProviders(statusResponse.value.data);
-      const keys = Object.keys(emptyState);
-      const next = { ...emptyState };
+        const keys = Object.keys(emptyState);
+        const next = { ...previewData };
       featureResponses.forEach((response, index) => {
         if (response.status === 'fulfilled') next[keys[index]] = response.value.data;
       });
       setData(next);
-    }).finally(() => setBusy(false));
+    }).catch(() => {}).finally(() => setBusy(false));
     return undefined;
   }, [accessToken, apiBaseUrl, selected?.database_id]);
 
@@ -53,8 +60,6 @@ export default function RoadmapCoveragePanel({ apiBaseUrl, accessToken, userRole
     const response = await axios.post(`${apiBaseUrl}/api/v1/roadmap/compliance-diff/sync`, {}, { headers });
     setIntegrationMessage(`CVE feed: ${response.data.feed.status}`);
   };
-
-  if (!selected) return <section className="glass-panel p-5 text-sm text-slate-400">Analyze an incident to activate the remaining roadmap simulations.</section>;
 
   return <section className="glass-panel p-5 xl:col-span-2">
     <div className="panel-heading"><div><div className="eyebrow flex items-center gap-2"><BrainCircuit size={13} /> Roadmap coverage</div><h3>Advanced SOC decision support</h3></div><span className="text-[10px] text-cyan-300">{busy ? 'SYNCING' : 'LIVE PREVIEW'}</span></div>

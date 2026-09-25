@@ -1,5 +1,9 @@
 # CYBERGUARD Evaluation
 
+## Current implementation status
+
+This document supersedes the original 104-row-only assessment. The repository now includes QR decoding, EML authentication analysis, SSRF-safe website inspection, Isolation Forest login scoring, pretrained image/audio adapters, sampled video-frame inference, entity/campaign graph analytics, an OpenAI-compatible analyst assistant with offline fallback, Flower federation entry points, and Locust load-test scenarios.
+
 ## Trained Text Model
 
 The baseline text model uses a TF-IDF vectorizer with word unigrams/bigrams and Logistic Regression. The training command is:
@@ -9,7 +13,7 @@ cd cyberguard-backend
 .\venv\Scripts\python.exe train_model.py
 ```
 
-The bundled demonstration dataset contains 104 labeled examples covering phishing, URL intelligence, behavioural account takeover, impersonation, deepfake language, and benign counterexamples. The current fixed holdout evaluation is:
+The bundled demonstration dataset contains 104 labeled examples covering phishing, URL intelligence, behavioural account takeover, impersonation, deepfake language, and benign counterexamples. Its original fixed holdout evaluation was:
 
 - Accuracy: 84.6%
 - Suspicious-class precision: 77.8%
@@ -17,6 +21,12 @@ The bundled demonstration dataset contains 104 labeled examples covering phishin
 - Suspicious-class F1: 87.5%
 
 These figures are only a baseline because the bundled examples are synthetic and the expanded set intentionally favors catching suspicious activity. Production evaluation must use a separated, verified, representative dataset and should report precision, recall, F1, confusion matrix, false-positive rate, inference latency, and drift over time.
+
+The current live text artifact is trained from the authorised UCI SMS Spam Collection snapshot when `threat_text_model_fallback.json` is present. It is loaded by the detector when the joblib model is unavailable.
+
+## UCI SMS benchmark result
+
+The checked-in result at `cyberguard-backend/data/uci-sms-results.json` contains 5,574 messages with a stratified 1,394-message holdout. On this Windows host the standard-library fallback backend was used because scikit-learn's OpenMP helper was blocked. Results: TN=688, FP=9, FN=409, TP=288, precision=96.97%, recall=41.32%, F1=57.95%, false-positive rate=1.29%, and approximately 0.019 ms per sample. ROC-AUC is unavailable in fallback mode. The low recall is a known model-quality limitation, not hidden by the dashboard.
 
 ## Reproducible evaluation workflow
 
@@ -29,9 +39,13 @@ python evaluate_public_datasets.py --data path\to\authorised\dataset.csv --outpu
 
 Do not report the bundled 104 synthetic examples as public-data performance. Preserve the dataset licence, source URL, collection date, deduplication policy, and untouched test split beside each generated result.
 
-## Optional pretrained media evaluation
+## Pretrained media evaluation
 
-The image and audio adapters in `deepfake_models.py` use configurable Hugging Face model IDs only when `CYBERGUARD_ENABLE_PRETRAINED_MEDIA=true` and `requirements-ai.txt` is installed. `/api/v1/models/status` reports the loaded model and any loading error. The current heuristic result must not be labelled as pretrained output. Before production use, calibrate both modalities on an authorised holdout and publish per-modality confusion matrices, ROC-AUC, PR-AUC, and p95 latency.
+The image and audio adapters in `deepfake_models.py` load the cached Hugging Face weights under `models/pretrained`; video samples frames and reuses the image detector. `/api/v1/models/status` reports cached weights, loaded modalities, and runtime errors. The current model outputs are pretrained inference, but not production-calibrated deepfake claims. Before consequential use, calibrate all modalities on authorised holdouts and publish per-modality confusion matrices, ROC-AUC, PR-AUC, and p95 latency.
+
+## Graph analytics
+
+`/api/v1/dashboard/graph` extracts domains, IPs, email addresses, incident categories, and incident nodes from the last 100 incidents. It returns weighted edges, connected-component campaign communities, and analytics counts. This is a deterministic explainable campaign baseline; a large-scale Neo4j/Louvain deployment is not claimed.
 
 ## Federated and analyst-assistant workflows
 

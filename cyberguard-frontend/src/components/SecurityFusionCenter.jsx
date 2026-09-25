@@ -32,7 +32,7 @@ export default function SecurityFusionCenter({ apiBaseUrl, accessToken }) {
       } else {
         setLogs(events);
       }
-    } catch {
+    } catch (error) {
       setLogs([
         {
           timestamp: new Date().toISOString(),
@@ -63,7 +63,7 @@ export default function SecurityFusionCenter({ apiBaseUrl, accessToken }) {
         { headers: { Authorization: `Bearer ${accessToken}` } }
       );
       setAuthResult(response.data);
-    } catch {
+    } catch (error) {
       setAuthResult({
         auth_status: 'DENIED',
         reason: 'Identity Provider simulation unavailable',

@@ -9,6 +9,90 @@ from typing import Any
 import requests
 
 
+def _safe_url(value: str | None) -> str:
+    if not value:
+        return ""
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(value)
+        host = parsed.netloc or parsed.path
+        if host:
+            safe_host = host.split("@")[-1]
+            return safe_host.split(":")[0]
+        return value
+    except Exception:
+        return ""
+
+
+def _is_effective_config(value: str | None) -> bool:
+    if value is None:
+        return False
+    text = str(value).strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    blocked_tokens = (
+        "your-",
+        "placeholder",
+        "sample",
+        "demo",
+        "dummy",
+        "changeme",
+        "replace-me",
+        "not-set",
+        "unknown",
+    )
+    return not any(token in lowered for token in blocked_tokens)
+
+
+def provider_readiness() -> dict[str, Any]:
+    honey_url = os.getenv("CYBERGUARD_HONEYTOKEN_WEBHOOK_URL")
+    cve_url = os.getenv("CYBERGUARD_CVE_FEED_URL")
+    tenant_url = os.getenv("CYBERGUARD_TENANT_IMMUNITY_URL")
+    response_url = os.getenv("CYBERGUARD_RESPONSE_WEBHOOK_URL")
+    alert_url = os.getenv("CYBERGUARD_ALERT_WEBHOOK_URL")
+
+    checks = {
+        "honeytokens": {
+            "configured": _is_effective_config(honey_url)
+            and _is_effective_config(os.getenv("CYBERGUARD_HONEYTOKEN_API_TOKEN"))
+            and _is_effective_config(os.getenv("CYBERGUARD_HONEYTOKEN_SIGNING_SECRET")),
+            "provider": os.getenv("CYBERGUARD_HONEYTOKEN_PROVIDER", "generic-webhook"),
+            "source": _safe_url(honey_url),
+        },
+        "cve_feed": {
+            "configured": _is_effective_config(cve_url),
+            "source": _safe_url(cve_url),
+        },
+        "tenant_immunity": {
+            "configured": _is_effective_config(tenant_url) and _is_effective_config(os.getenv("CYBERGUARD_TENANT_IMMUNITY_SECRET")),
+            "provider": "signed-tenant-exchange",
+            "source": _safe_url(tenant_url),
+        },
+        "response_webhook": {
+            "configured": _is_effective_config(response_url),
+            "source": _safe_url(response_url),
+        },
+        "alert_webhook": {
+            "configured": _is_effective_config(alert_url),
+            "source": _safe_url(alert_url),
+        },
+        "urlhaus": {
+            "configured": bool(os.getenv("CYBERGUARD_URLHAUS_AUTH_KEY")),
+            "source": "https://urlhaus.abuse.ch",
+        },
+        "abuseipdb": {
+            "configured": bool(os.getenv("CYBERGUARD_ABUSEIPDB_KEY")),
+            "source": "https://www.abuseipdb.com",
+        },
+    }
+    ready = all(
+        checks.get(name, {}).get("configured", False)
+        for name in ("honeytokens", "cve_feed", "tenant_immunity", "response_webhook", "alert_webhook")
+    )
+    return {"ready": ready, "checks": checks}
+
+
 def _post_json(url: str, payload: dict[str, Any], token: str | None = None, secret: str | None = None) -> dict[str, Any]:
     body = json.dumps(payload, separators=(",", ":"), sort_keys=True)
     headers = {"Content-Type": "application/json"}
@@ -67,32 +151,6 @@ def integration_status() -> dict[str, Any]:
         "tenant_immunity": tenant_exchange_status(),
         "response_webhook": {"configured": bool(os.getenv("CYBERGUARD_RESPONSE_WEBHOOK_URL"))},
         "alert_webhook": {"configured": bool(os.getenv("CYBERGUARD_ALERT_WEBHOOK_URL"))},
-    }
-
-
-def provider_readiness() -> dict[str, Any]:
-    checks = integration_status()
-    placeholder_markers = ("your-", "your_", "example.", "example/", "change-me")
-    configured_checks = []
-    for name, status in checks.items():
-        if not status.get("configured"):
-            continue
-        values = " ".join(str(value).lower() for key, value in status.items() if key != "configured")
-        if any(marker in values for marker in placeholder_markers):
-            continue
-        configured_checks.append(name)
-    required_values = [
-        os.getenv("CYBERGUARD_HONEYTOKEN_WEBHOOK_URL", ""),
-        os.getenv("CYBERGUARD_CVE_FEED_URL", ""),
-        os.getenv("CYBERGUARD_TENANT_IMMUNITY_URL", ""),
-        os.getenv("CYBERGUARD_TENANT_IMMUNITY_SECRET", ""),
-        os.getenv("CYBERGUARD_RESPONSE_WEBHOOK_URL", ""),
-        os.getenv("CYBERGUARD_ALERT_WEBHOOK_URL", ""),
-    ]
-    ready = bool(checks) and len(configured_checks) == len(checks) and all(value and not any(marker in value.lower() for marker in placeholder_markers) for value in required_values)
-    return {
-        "ready": ready,
-        "checks": checks,
-        "configured_count": len(configured_checks),
-        "total_checks": len(checks),
+        "urlhaus": {"configured": bool(os.getenv("CYBERGUARD_URLHAUS_AUTH_KEY")), "source": "https://urlhaus.abuse.ch"},
+        "abuseipdb": {"configured": bool(os.getenv("CYBERGUARD_ABUSEIPDB_KEY")), "source": "https://www.abuseipdb.com"},
     }

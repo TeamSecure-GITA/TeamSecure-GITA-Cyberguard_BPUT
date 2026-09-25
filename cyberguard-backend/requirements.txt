@@ -8,11 +8,9 @@ scikit-learn
 joblib
 PyJWT
 python-dotenv
-webauthn>=2.8,<3
-cryptography>=46.0.7,<47
+webauthn
 Pillow
 numpy
 opencv-python-headless
 bcrypt
 PyYAML
-psycopg[binary]>=3.2,<4

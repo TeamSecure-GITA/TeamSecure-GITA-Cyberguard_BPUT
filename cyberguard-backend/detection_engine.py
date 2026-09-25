@@ -6,6 +6,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import List
 from urllib.parse import parse_qs, urlparse
+from regional_scam_detector import analyze_regional_scam
 
 import tldextract
 
@@ -15,20 +16,48 @@ except ImportError:
     joblib = None
 
 MODEL_PATH = Path(__file__).parent / "models" / "threat_text_model.joblib"
+FALLBACK_MODEL_PATH = Path(__file__).parent / "models" / "threat_text_model_fallback.json"
 TEXT_MODEL = None
-if os.getenv("CYBERGUARD_LOAD_TEXT_MODEL", "false").lower() in {"1", "true", "yes"} and joblib and MODEL_PATH.exists():
+FALLBACK_TEXT_MODEL = None
+if os.getenv("CYBERGUARD_LOAD_TEXT_MODEL", "true").lower() in {"1", "true", "yes"} and joblib and MODEL_PATH.exists():
     try:
         TEXT_MODEL = joblib.load(MODEL_PATH)
     except Exception:
         TEXT_MODEL = None
+if os.getenv("CYBERGUARD_LOAD_TEXT_MODEL", "true").lower() in {"1", "true", "yes"} and FALLBACK_MODEL_PATH.exists():
+    try:
+        FALLBACK_TEXT_MODEL = json.loads(FALLBACK_MODEL_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        FALLBACK_TEXT_MODEL = None
 
 
 def model_signal(payload: str) -> tuple[int, dict | None]:
-    if TEXT_MODEL is None:
+    try:
+        from transformer_text import classify
+        transformer_result = classify(payload)
+    except Exception:
+        transformer_result = None
+    if transformer_result:
+        return transformer_result["score"], {"name": "Fine-tuned Transformer Confidence", "score": f"{transformer_result['score']}%", "model": transformer_result["model"]}
+    if TEXT_MODEL is not None:
+        probability = float(TEXT_MODEL.predict_proba([payload])[0][1])
+    elif FALLBACK_TEXT_MODEL is not None:
+        words = set(re.findall(r"[a-z0-9]{2,}", payload.lower()))
+        likelihoods = FALLBACK_TEXT_MODEL["likelihoods"]
+        log_scores = {}
+        for label in ("0", "1"):
+            prior = max(float(FALLBACK_TEXT_MODEL["priors"].get(label, 0.5)), 1e-9)
+            score = math.log(prior)
+            for word, probability in likelihoods[label].items():
+                score += math.log(max(probability if word in words else 1 - probability, 1e-9))
+            log_scores[label] = score
+        maximum = max(log_scores.values())
+        denominator = sum(math.exp(value - maximum) for value in log_scores.values())
+        probability = math.exp(log_scores["1"] - maximum) / max(denominator, 1e-9)
+    else:
         return 0, None
-    probability = float(TEXT_MODEL.predict_proba([payload])[0][1])
     score = round(probability * 100)
-    return score, {"name": "Trained Text Model Confidence", "score": f"{score}%"}
+    return score, {"name": "Trained Text Model Confidence", "score": f"{score}%", "model": "TF-IDF + Logistic Regression" if TEXT_MODEL is not None else FALLBACK_TEXT_MODEL["algorithm"]}
 
 def analyze_phishing_and_url(payload: str) -> tuple[int, List[str], List[dict]]:
     score = 6
@@ -331,8 +360,39 @@ def adversarial_self_test(category: str, payload: str) -> dict:
     }
 
 
+def analyze_login_anomaly(payload: str) -> tuple[int, list[str], list[dict]]:
+    """Score structured login telemetry against a deterministic low-risk baseline."""
+    try:
+        event = json.loads(payload) if isinstance(payload, str) else payload
+    except (TypeError, json.JSONDecodeError):
+        event = {}
+    if not isinstance(event, dict):
+        return 0, [], []
+    values = [float(event.get(key, 0) or 0) for key in ("failed_attempts", "distinct_accounts", "distinct_countries", "mfa_denials")]
+    if not any(values) and not event.get("impossible_travel") and not event.get("new_device"):
+        return 0, [], []
+    try:
+        from sklearn.ensemble import IsolationForest
+        import numpy as np
+        reference = np.array([[0, 1, 1, 0], [1, 1, 1, 0], [0, 1, 1, 1], [2, 2, 1, 1], [1, 1, 2, 0], [3, 2, 1, 1]])
+        model = IsolationForest(n_estimators=48, contamination=0.2, random_state=42).fit(reference)
+        anomaly = max(1, min(99, round(50 - float(model.decision_function(np.array([values]))[0]) * 80)))
+    except Exception:
+        anomaly = min(99, 20 + round(sum(values) * 4))
+    reasons = ["Login telemetry deviates from the shared low-risk authentication baseline."]
+    indicators = [{"name": "Isolation Forest Login Anomaly", "score": f"{anomaly}%", "weight": 30}]
+    if event.get("impossible_travel"):
+        reasons.append("Impossible-travel activity is inconsistent with the user baseline.")
+        indicators.append({"name": "Impossible Travel", "score": "94%", "weight": 25})
+    return round(anomaly * 0.7), reasons, indicators
+
+
 def evaluate_threat_payload(category: str, payload: str) -> dict:
-    if category == "url":
+    if category in {"auth_logs", "anomaly"}:
+        score, reasons, indicators = analyze_login_anomaly(payload)
+        detection_method = "isolation-forest-behavioral-baseline"
+        mitre_techniques = ["T1078", "T1110.003"]
+    elif category == "url":
         score, reasons, indicators = analyze_url_intelligence(payload)
         detection_method = "url-intelligence"
         mitre_techniques = ["T1566.002", "T1583.001"]
@@ -365,6 +425,18 @@ def evaluate_threat_payload(category: str, payload: str) -> dict:
         detection_method = "synthetic-media-triage"
         mitre_techniques = ["T1036", "T1585"]
 
+    regional_score, regional_reasons, regional_indicators, plain_language, regional_categories = analyze_regional_scam(payload)
+    if regional_score:
+        score = max(score, regional_score)
+        reasons.extend(regional_reasons)
+        indicators.extend(regional_indicators)
+        if "upi-fraud" in regional_categories:
+            detection_method = f"{detection_method}+upi-fraud"
+        if "digital-arrest" in regional_categories:
+            detection_method = f"{detection_method}+digital-arrest"
+        if regional_categories and any(language in regional_categories for language in ("Hindi/Hinglish", "Odia")):
+            detection_method = f"{detection_method}+regional-language"
+
     model_score, model_indicator = model_signal(payload)
     if model_indicator:
         indicators.append(model_indicator)
@@ -385,6 +457,8 @@ def evaluate_threat_payload(category: str, payload: str) -> dict:
         level = "Safe"
         
     explanation = f"{level} Risk: " + (" ".join(reasons) if reasons else "No anomalous threat signatures detected.")
+    for indicator in indicators:
+        indicator.setdefault("weight", max(1, round(score / max(len(indicators), 1))))
     
     # Intelligent Playbook Mappings
     actions = []
@@ -407,4 +481,8 @@ def evaluate_threat_payload(category: str, payload: str) -> dict:
         "detection_method": detection_method,
         "mitre_techniques": mitre_techniques,
         "signal_count": len(indicators),
+        "explanation_summary": " ".join(reasons[:3]) or "No anomalous threat signatures detected.",
+        "scoring_formula": "bounded rule evidence + calibrated text/media/model signal; final score capped at 99",
+        "plain_language_explanation": plain_language or "This content did not trigger a strong scam pattern. Continue to verify unexpected requests through an official channel.",
+        "regional_categories": regional_categories,
     }

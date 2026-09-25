@@ -13,6 +13,11 @@ import base64
 from email.message import EmailMessage
 
 try:
+    import bcrypt
+except ImportError:
+    bcrypt = None
+
+try:
     from dotenv import load_dotenv
     load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 except ImportError:
@@ -45,11 +50,11 @@ import requests
 import jwt
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from webauthn import generate_authentication_options, generate_registration_options, options_to_json, verify_authentication_response, verify_registration_response
 from webauthn.helpers.structs import PublicKeyCredentialDescriptor, UserVerificationRequirement
 
-from detection_engine import TEXT_MODEL, adversarial_self_test, evaluate_threat_payload
+from detection_engine import FALLBACK_TEXT_MODEL, TEXT_MODEL, adversarial_self_test, evaluate_threat_payload
 from battle_simulator import run_battle
 from campaign_engine import correlate_incident
 from digital_twin import build_twin
@@ -59,6 +64,14 @@ from psychology_detector import analyze_psychology
 from response_simulator import simulate_response
 from self_healing import recommend_healing
 from threat_intel import enrich_iocs, extract_iocs
+from email_authenticity import analyze_eml
+from website_inspector import inspect_website
+from playbook_engine import load_playbooks, plan_playbook, validate_playbook
+from llm_assistant import generate_analysis
+from deepfake_models import model_status as pretrained_media_status
+from graph_analytics import build_incident_graph
+from transformer_text import status as transformer_status
+from complaint_generator import build_cybercrime_complaint
 from threat_fusion import (
     alert_quality_report,
     build_genome,
@@ -77,34 +90,20 @@ from speculative_defense_engine import chrono_causal_trap, cognitive_poisoning, 
 from cloudflare_waf import block_ip as cloudflare_block_ip, configuration as cloudflare_configuration
 from roadmap_features import analyst_bias_report, attention_heatmap, attacker_resource_cost, breach_economics, compliance_diff, counterfactual_replay, cross_modal_consistency, jurisdiction_route, seed_honeytokens, shared_immunity
 from provider_integrations import deploy_honeytokens, integration_status as provider_integration_status, publish_tenant_signatures, sync_cve_feed
-from prevention_engine import (
-    campaign_aware_prevention,
-    containment_action_plan,
-    cross_channel_prevention_score,
-    deception_trigger_check,
-    identity_trust_evaluation,
-    insider_threat_risk,
-    policy_aware_prevention,
-    risk_aware_prevention_decision,
-)
-from production_integrations import IntegrationNotConfigured, create_ticket, disable_identity, isolate_endpoint, provider_status
-from operations import backup_database, prometheus_metrics
-from database import connect_database, database_backend
-from account_rescue_engine import blast_radius, consent_record, contact_warning_draft, evidence_snapshot, fleet_summary, guardian_contact, guardian_watch, lockdown_plan, locked_out_recovery, offline_rescue_card, provider_capabilities, rescue_plan, rescue_report, rescue_simulation, rollback_record, scan_account, execute_step
 from models import AccessRequestCreate, AdvancedTelemetryRequest, AgentConsensusRequest, AlertRequest, AnalystLoadRequest, BattleRequest, CognitiveEchoRequest, DarkMeshRequest, DeceptionRequest, ForecastRequest, IncidentComment, IncidentUpdate, InfrastructureEchoRequest, LoginRequest, NeuromorphicRequest, NotificationUpdate, OtpVerificationRequest, PasskeyCredentialRequest, PermissionRequest, PolymorphismRequest, PsychologyRequest, QStateRequest, QuantumDecoyRequest, ResponseExecutionRequest, SatelliteRequest, ScannerRequest, SimulationRequest, SpeculativeTelemetryRequest, TemporalHealingRequest, ThreatAnalysisRequest, ThreatIntelLookup, TopologyMorphRequest, ThreatPhysicsRequest, UserCreate, VaccineRequest
 
 DB_PATH = Path(os.getenv("CYBERGUARD_DB_PATH", str(Path(__file__).with_name("cyberguard.db"))))
-CYBERGUARD_ENV = os.getenv("CYBERGUARD_ENV", "development").lower()
-JWT_SECRET = os.getenv("CYBERGUARD_JWT_SECRET", "development-only-change-me-use-a-long-secret-key")
-if CYBERGUARD_ENV in {"production", "prod"} and (len(JWT_SECRET) < 32 or JWT_SECRET.startswith("development-only")):
-    raise RuntimeError("CYBERGUARD_JWT_SECRET must be a unique secret of at least 32 characters in production")
-JWT_ALGORITHM = "HS256"
-JWT_TTL_MINUTES = max(5, int(os.getenv("CYBERGUARD_JWT_TTL_MINUTES", "30")))
+JWT_SECRET = os.getenv("CYBERGUARD_JWT_SECRET", "").strip()
+if not JWT_SECRET:
+    if os.getenv("CYBERGUARD_ENV", "development").lower() == "production":
+        raise RuntimeError("CYBERGUARD_JWT_SECRET must be set to a unique value in production")
+    JWT_SECRET = secrets.token_urlsafe(48)
 SECURITY_OWNER_EMAIL = os.getenv("CYBERGUARD_SECURITY_OWNER_EMAIL", "teamsecure.project@gmail.com")
 PUBLIC_APP_URL = os.getenv("CYBERGUARD_PUBLIC_APP_URL", "http://127.0.0.1:5173")
 ACCESS_REQUEST_TTL_HOURS = max(1, int(os.getenv("CYBERGUARD_ACCESS_REQUEST_TTL_HOURS", "24")))
 HEAD_ADMIN_USERNAME = os.getenv("CYBERGUARD_HEAD_ADMIN_USERNAME", "teamsecure.project@gmail.com")
 HEAD_ADMIN_PASSWORD = os.getenv("CYBERGUARD_HEAD_ADMIN_PASSWORD", "Secure@9040")
+MAX_UPLOAD_BYTES = max(1_000_000, int(os.getenv("CYBERGUARD_MAX_UPLOAD_BYTES", "10485760")))
 STARTED_AT = datetime.now(timezone.utc)
 SECURITY_EVENT_WINDOW: dict[str, list[float]] = {}
 OTP_CHALLENGES: dict[str, dict[str, Any]] = {}
@@ -149,15 +148,12 @@ IDP_USER_REGISTRY = {
 }
 
 SIEM_EVENT_STORE: list[dict] = []
-RATE_LIMIT_WINDOW_SECONDS = max(10, int(os.getenv("CYBERGUARD_RATE_LIMIT_WINDOW_SECONDS", "60")))
-RATE_LIMIT_MAX_REQUESTS = max(30, int(os.getenv("CYBERGUARD_RATE_LIMIT_MAX_REQUESTS", "120")))
-RATE_LIMIT_STORE: dict[str, list[float]] = {}
-HTTP_REQUEST_COUNT = 0
-HTTP_ERROR_COUNT = 0
 
 
 def get_db():
-    return connect_database(DB_PATH)
+    connection = sqlite3.connect(DB_PATH)
+    connection.row_factory = sqlite3.Row
+    return connection
 
 
 def correlate_dhcp_ip(source_ip: str) -> dict:
@@ -194,11 +190,7 @@ def siem_ingest_event(payload: dict | None, user: dict[str, str] | None = None):
         "severity": severity,
         "details": details,
     }
-    with get_db() as db:
-        db.execute(
-            "INSERT INTO siem_events (timestamp, source_ip, source_host, mac_address, hostname, event, severity, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (log_entry["timestamp"], source_ip, log_entry["source_host"], log_entry["mac_address"], hostname, event_type, severity, details),
-        )
+    SIEM_EVENT_STORE.insert(0, log_entry)
 
     if severity == "CRITICAL" or "kali" in hostname.lower() or "unknown" in hostname.lower():
         action_taken = f"ALERT: SIEM triggered DHCP isolation protocol. Cutting network lease for {hostname}."
@@ -222,8 +214,7 @@ def siem_ingest_event(payload: dict | None, user: dict[str, str] | None = None):
 def read_siem_events(user: dict[str, str] | None = None):
     if user is None:
         user = {"username": "system", "role": "lead"}
-    with get_db() as db:
-        events = [dict(row) for row in db.execute("SELECT timestamp, source_ip, source_host, mac_address, hostname, event, severity, details FROM siem_events ORDER BY id DESC LIMIT 20").fetchall()]
+    events = sorted(SIEM_EVENT_STORE, key=lambda item: item["timestamp"], reverse=True)[:20]
     high_risk = [event for event in events if event["severity"] in {"HIGH", "CRITICAL"}]
     return {"events": events, "count": len(events), "high_risk_count": len(high_risk), "user": user.get("username", "unknown")}
 
@@ -284,7 +275,15 @@ def idp_authenticate_user(payload: dict | None, user: dict[str, str] | None = No
 
 
 def hash_password(password: str) -> str:
+    if bcrypt:
+        return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    if stored_hash.startswith("$2") and bcrypt:
+        return bcrypt.checkpw(password.encode("utf-8"), stored_hash.encode("utf-8"))
+    return secrets.compare_digest(stored_hash, hashlib.sha256(password.encode("utf-8")).hexdigest())
 
 
 def initialize_database():
@@ -429,17 +428,6 @@ def initialize_database():
                 details TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS siem_events (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                source_ip TEXT NOT NULL,
-                source_host TEXT NOT NULL,
-                mac_address TEXT NOT NULL,
-                hostname TEXT NOT NULL,
-                event TEXT NOT NULL,
-                severity TEXT NOT NULL,
-                details TEXT NOT NULL
-            );
             CREATE TABLE IF NOT EXISTS blocked_ips (
                 ip_address TEXT PRIMARY KEY,
                 reason TEXT NOT NULL,
@@ -501,10 +489,6 @@ app.add_middleware(
 
 @app.middleware("http")
 async def security_guard(request: Request, call_next):
-    global HTTP_REQUEST_COUNT, HTTP_ERROR_COUNT
-    HTTP_REQUEST_COUNT += 1
-    if request.method.upper() == "OPTIONS":
-        return await call_next(request)
     ip_address = request_ip(request)
     path = request.url.path.lower()
     now = time.time()
@@ -512,12 +496,6 @@ async def security_guard(request: Request, call_next):
         blocked = db.execute("SELECT ip_address FROM blocked_ips WHERE ip_address = ?", (ip_address,)).fetchone()
     if blocked and ip_address not in {"127.0.0.1", "::1", "localhost"}:
         return JSONResponse(status_code=403, content={"detail": "Access denied by CyberGuard security controls", "containment": "internal sinkhole preview"})
-    request_times = RATE_LIMIT_STORE.setdefault(ip_address, [])
-    RATE_LIMIT_STORE[ip_address] = [stamp for stamp in request_times if now - stamp < RATE_LIMIT_WINDOW_SECONDS]
-    if len(RATE_LIMIT_STORE[ip_address]) >= RATE_LIMIT_MAX_REQUESTS:
-        record_security_event("rate-limit-exceeded", ip_address, request.url.path, "Request rate exceeded configured limit.")
-        return JSONResponse(status_code=429, content={"detail": "Request rate limit exceeded"}, headers={"Retry-After": str(RATE_LIMIT_WINDOW_SECONDS)})
-    RATE_LIMIT_STORE[ip_address].append(now)
     suspicious = any(marker in path for marker in ("/.env", "/.git", "/wp-admin", "/wp-login", "/etc/passwd", "/debug", "/phpmyadmin"))
     attempts = SECURITY_EVENT_WINDOW.setdefault(ip_address, [])
     SECURITY_EVENT_WINDOW[ip_address] = [stamp for stamp in attempts if now - stamp < 60]
@@ -526,18 +504,9 @@ async def security_guard(request: Request, call_next):
         record_security_event("suspicious-code-or-admin-probe", ip_address, request.url.path, "Protected path probing detected.")
         if len(SECURITY_EVENT_WINDOW[ip_address]) >= 3 and ip_address not in {"127.0.0.1", "::1", "localhost"}:
             with get_db() as db:
-                db.execute("INSERT INTO blocked_ips (ip_address, reason, blocked_at) VALUES (?, ?, ?) ON CONFLICT (ip_address) DO UPDATE SET reason = excluded.reason, blocked_at = excluded.blocked_at", (ip_address, "Repeated protected-path probing", datetime.now(timezone.utc).isoformat()))
+                db.execute("INSERT OR REPLACE INTO blocked_ips (ip_address, reason, blocked_at) VALUES (?, ?, ?)", (ip_address, "Repeated protected-path probing", datetime.now(timezone.utc).isoformat()))
             return JSONResponse(status_code=403, content={"detail": "IP blocked by CyberGuard", "containment": "internal sinkhole preview"})
-    response = await call_next(request)
-    if response.status_code >= 400:
-        HTTP_ERROR_COUNT += 1
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Referrer-Policy"] = "no-referrer"
-    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-    if request.url.scheme == "https" or CYBERGUARD_ENV in {"production", "prod"}:
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    return response
+    return await call_next(request)
 
 
 def current_user(authorization: Optional[str] = Header(default=None)) -> dict[str, str]:
@@ -546,10 +515,7 @@ def current_user(authorization: Optional[str] = Header(default=None)) -> dict[st
             return {"username": "evaluator", "role": "lead"}
         raise HTTPException(status_code=401, detail="Authentication required")
     try:
-        claims = jwt.decode(authorization.removeprefix("Bearer "), JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        if not claims.get("username") or not claims.get("role"):
-            raise HTTPException(status_code=401, detail="Invalid session claims")
-        return claims
+        return jwt.decode(authorization.removeprefix("Bearer "), JWT_SECRET, algorithms=["HS256"])
     except jwt.PyJWTError as error:
         if os.getenv("CYBERGUARD_ALLOW_ANONYMOUS_EVAL", "false").lower() in {"true", "1", "yes"}:
             return {"username": "evaluator", "role": "lead"}
@@ -611,8 +577,7 @@ def issue_admin_otp(username: str, recipient: str) -> dict[str, str]:
 
 
 def issue_session(user: sqlite3.Row) -> dict[str, Any]:
-    now = datetime.now(timezone.utc)
-    token = jwt.encode({"username": user["username"], "role": user["role"], "iat": int(now.timestamp()), "exp": int((now + timedelta(minutes=JWT_TTL_MINUTES)).timestamp())}, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    token = jwt.encode({"username": user["username"], "role": user["role"], "iat": int(datetime.now(timezone.utc).timestamp())}, JWT_SECRET, algorithm="HS256")
     return {"access_token": token, "token_type": "bearer", "user": {"username": user["username"], "role": user["role"]}}
 
 
@@ -801,7 +766,7 @@ def persist_cyberguard_x(incident_id: int, incident: dict):
     campaign = correlate_incident(incident, [item for item in related if item["id"] != incident_id])
     with get_db() as db:
         now = datetime.now(timezone.utc).isoformat()
-        db.execute("INSERT INTO threat_fingerprints (incident_id, fingerprint, genome_json, created_at) VALUES (?, ?, ?, ?) ON CONFLICT (incident_id) DO UPDATE SET fingerprint = excluded.fingerprint, genome_json = excluded.genome_json, created_at = excluded.created_at", (incident_id, genome["fingerprint"], serialize_genome(genome), now))
+        db.execute("INSERT OR REPLACE INTO threat_fingerprints (incident_id, fingerprint, genome_json, created_at) VALUES (?, ?, ?, ?)", (incident_id, genome["fingerprint"], serialize_genome(genome), now))
         db.execute("INSERT OR IGNORE INTO campaigns (campaign_id, confidence, stage, created_at) VALUES (?, ?, ?, ?)", (campaign["campaign_id"], campaign["confidence"], campaign["stage"], now))
         for match in campaign["related_incidents"]:
             db.execute("INSERT OR IGNORE INTO campaign_incidents (campaign_id, incident_id, score) VALUES (?, ?, ?)", (campaign["campaign_id"], match["incident_id"], match["score"]))
@@ -882,7 +847,7 @@ def login(request: LoginRequest):
     username = request.username.strip()
     with get_db() as db:
         user = db.execute("SELECT username, role, password_hash, email FROM users WHERE lower(username) = lower(?)", (username,)).fetchone()
-    if not user or user["password_hash"] != hash_password(request.password):
+    if not user or not verify_password(request.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid username or password")
     return issue_session(user)
 
@@ -979,28 +944,87 @@ def preview_threat(request: ThreatAnalysisRequest, user: dict[str, str] = Depend
     return {"status": "success", "category": request.category, "assessment": assessment}
 
 
+@app.post("/api/v1/assistant/analyze")
+def analyst_assistant(payload: dict[str, Any], user: dict[str, str] = Depends(current_user)):
+    assessment = payload.get("assessment")
+    if not isinstance(assessment, dict):
+        raise HTTPException(status_code=400, detail="An assessment object is required.")
+    result = generate_analysis(assessment, payload.get("incident"))
+    write_audit(user, "llm_assistant", "analyst-assistant", result.get("model", "offline-template"))
+    return {"status": "success", "assistant": result}
+
+
 @app.post("/api/v1/analyze/file")
 async def analyze_file(category: str = Form(...), file: UploadFile = File(...), user: dict[str, str] = Depends(current_user)):
-    content = await file.read()
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded file cannot be empty.")
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"Uploaded file exceeds the {MAX_UPLOAD_BYTES // 1_000_000} MB limit.")
     file_hash = hashlib.sha256(content).hexdigest()
-    is_text = (file.content_type or "").startswith("text/") or (file.filename or "").lower().endswith((".txt", ".log", ".json", ".csv"))
-    payload = content.decode("utf-8", errors="replace") if is_text else f"Uploaded {file.content_type or 'media'} file: {file.filename}"
+    filename = file.filename or "upload"
+    is_eml = (file.content_type or "").lower() == "message/rfc822" or filename.lower().endswith(".eml")
+    is_text = (file.content_type or "").startswith("text/") or filename.lower().endswith((".txt", ".log", ".json", ".csv"))
+    email_result = analyze_eml(content) if is_eml else None
+    payload = email_result["payload"] if email_result else (content.decode("utf-8", errors="replace") if is_text else f"Uploaded {file.content_type or 'media'} file: {filename}")
     assessment = evaluate_threat_payload(category, payload)
     assessment["iocs"] = enrich_iocs(extract_iocs(payload))
-    if not is_text:
-        media_result = analyze_media(content, file.content_type or "", file.filename or "upload", category)
+    if email_result:
+        assessment["risk_score"] = max(assessment["risk_score"], email_result["score"])
+        assessment["indicators"].extend(email_result["indicators"])
+        assessment["xai_explanation"] += " " + " ".join(email_result["reasons"])
+        assessment["sender_authenticity"] = email_result["metadata"]
+    if not is_text and not email_result:
+        media_result = analyze_media(content, file.content_type or "", filename, category)
         assessment["risk_score"] = max(assessment["risk_score"], media_result["score"])
         assessment["indicators"].extend(media_result["indicators"])
         assessment["xai_explanation"] += " " + " ".join(media_result["reasons"])
         assessment["media_method"] = media_result["method"]
-    incident_id = store_incident(category, payload, assessment, file.filename, file_hash)
+        if media_result.get("decoded_payload"):
+            qr_assessment = evaluate_threat_payload("url", media_result["decoded_payload"])
+            assessment["qr_payload"] = media_result["decoded_payload"]
+            assessment["risk_score"] = max(assessment["risk_score"], qr_assessment["risk_score"])
+            assessment["indicators"].extend(qr_assessment["indicators"])
+            assessment["xai_explanation"] += " " + qr_assessment["xai_explanation"]
+    score = int(assessment["risk_score"])
+    assessment["risk_level"] = "Critical" if score >= 80 else "High" if score >= 60 else "Medium" if score >= 40 else "Low" if score >= 20 else "Safe"
+    incident_id = store_incident(category, payload, assessment, filename, file_hash)
     persist_cyberguard_x(incident_id, {"id": incident_id, "category": category, "payload": payload, "risk_score": assessment["risk_score"], "risk_level": assessment["risk_level"], "assessment": assessment, "created_at": datetime.now(timezone.utc).isoformat()})
-    write_audit(user, "analyze_file", f"incident:{incident_id}", file.filename or category)
+    write_audit(user, "analyze_file", f"incident:{incident_id}", filename)
     if assessment["risk_level"] in ["High", "Critical"]:
         create_notification(user["username"], f"{assessment['risk_level']} media threat detected", f"Incident INC-{incident_id:04d} requires review.", assessment["risk_level"])
-    return {"status": "success", "incident_id": incident_id, "filename": file.filename, "file_hash": file_hash, "assessment": assessment, "media_method": assessment.get("media_method"), "user": user["username"]}
+    return {"status": "success", "incident_id": incident_id, "filename": filename, "file_hash": file_hash, "assessment": assessment, "media_method": assessment.get("media_method"), "user": user["username"]}
+
+
+@app.post("/api/v1/analyze/website")
+def analyze_website(payload: dict[str, str], user: dict[str, str] = Depends(current_user)):
+    url = str(payload.get("url", "")).strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="A website URL is required.")
+    try:
+        inspection = inspect_website(url)
+    except (ValueError, requests.RequestException, OSError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    text = " ".join([inspection["final_url"], inspection["title"], *inspection["findings"]])
+    assessment = evaluate_threat_payload("url", text)
+    assessment["website_inspection"] = inspection
+    write_audit(user, "analyze_website", url, "website")
+    return {"status": "success", "assessment": assessment, "inspection": inspection}
+
+
+@app.get("/api/v1/playbooks")
+def list_playbooks(user: dict[str, str] = Depends(current_user)):
+    return {"playbooks": load_playbooks()}
+
+
+@app.post("/api/v1/playbooks/plan")
+def preview_playbook(payload: dict[str, Any], user: dict[str, str] = Depends(current_user)):
+    try:
+        result = plan_playbook(payload.get("playbook", {}), payload.get("assessment", {}), bool(payload.get("approved", False)))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    write_audit(user, "playbook_plan", result["playbook_id"], result["mode"])
+    return result
 
 
 @app.get("/api/v1/incidents")
@@ -1124,6 +1148,11 @@ def incident_memory_route(incident_id: int, user: dict[str, str] = Depends(curre
 @app.get("/api/v1/incidents/{incident_id}/explainability")
 def incident_explainability_route(incident_id: int, user: dict[str, str] = Depends(current_user)):
     return incident_explainability(incident_id, user)
+
+
+@app.get("/api/v1/incidents/{incident_id}/complaint-draft")
+def incident_complaint_draft(incident_id: int, user: dict[str, str] = Depends(current_user)):
+    return build_cybercrime_complaint(incident_context(incident_id))
 
 
 @app.post("/api/v1/alert-routing")
@@ -1558,7 +1587,7 @@ def security_events(user: dict[str, str] = Depends(admin_user)):
 @app.post("/api/v1/admin/security-events/block")
 def block_ip(ip_address: str = Query(...), reason: str = Query("Head-admin containment"), user: dict[str, str] = Depends(head_admin_user)):
     with get_db() as db:
-        db.execute("INSERT INTO blocked_ips (ip_address, reason, blocked_at) VALUES (?, ?, ?) ON CONFLICT (ip_address) DO UPDATE SET reason = excluded.reason, blocked_at = excluded.blocked_at", (ip_address, reason, datetime.now(timezone.utc).isoformat()))
+        db.execute("INSERT OR REPLACE INTO blocked_ips (ip_address, reason, blocked_at) VALUES (?, ?, ?)", (ip_address, reason, datetime.now(timezone.utc).isoformat()))
     record_security_event("manual-ip-block", ip_address, "admin-console", reason)
     return {"status": "blocked", "ip_address": ip_address}
 
@@ -1641,126 +1670,44 @@ def dashboard_timeline(user: dict[str, str] = Depends(current_user)):
 @app.get("/api/v1/dashboard/graph")
 def dashboard_graph(user: dict[str, str] = Depends(current_user)):
     with get_db() as db:
-        rows = db.execute("SELECT category, risk_level, COUNT(*) AS count FROM incidents GROUP BY category, risk_level").fetchall()
-    nodes = [{"id": "origin", "position": {"x": 20, "y": 120}, "data": {"label": "External Threat Sources"}, "style": {"background": "#b91c1c", "color": "#fff"}}]
-    edges = []
-    for index, row in enumerate(rows):
-        node_id = f"category-{index}"
-        label = f"{row['category'].replace('_', ' ').title()} ({row['count']})"
-        nodes.append({"id": node_id, "position": {"x": 260, "y": index * 80}, "data": {"label": label}, "style": {"background": "#0e7490", "color": "#fff"}})
-        edges.append({"id": f"origin-{node_id}", "source": "origin", "target": node_id, "animated": row["risk_level"] in ["High", "Critical"], "label": row["risk_level"]})
-    return {"nodes": nodes, "edges": edges}
+        rows = db.execute("SELECT id, category, payload, risk_score, risk_level FROM incidents ORDER BY id DESC LIMIT 100").fetchall()
+    result = build_incident_graph([dict(row) for row in rows])
+    for index, node in enumerate(result["nodes"]):
+        node["position"] = {"x": 40 + (index % 5) * 190, "y": 60 + (index // 5) * 90}
+        node["data"] = {"label": f"{node['label']} ({node['incidents']})"}
+        node["style"] = {"background": "#b91c1c" if node["kind"] == "origin" else "#0e7490", "color": "#fff"}
+    for index, edge in enumerate(result["edges"]):
+        edge["id"] = f"edge-{index}"
+        edge["animated"] = edge["weight"] > 1
+    return result
 
 
 @app.get("/api/v1/system/health")
 def system_health(user: dict[str, str] = Depends(current_user)):
+    request_started = time.perf_counter()
     with get_db() as db:
         event_count = db.execute("SELECT COUNT(*) AS count FROM incidents").fetchone()["count"]
-        recent_created = [row["created_at"] for row in db.execute("SELECT created_at FROM incidents ORDER BY id DESC LIMIT 200").fetchall()]
+        recent_count = db.execute("SELECT COUNT(*) AS count FROM incidents WHERE created_at >= ?", ((datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),)).fetchone()["count"]
     uptime = (datetime.now(timezone.utc) - STARTED_AT).total_seconds()
-    one_minute_ago = datetime.now(timezone.utc) - timedelta(minutes=1)
-    events_per_minute = 0
-    for value in recent_created:
+    model_loaded = TEXT_MODEL is not None or FALLBACK_TEXT_MODEL is not None
+    media_status = pretrained_media_status()
+    evaluation_path = Path(__file__).parent / "data" / "uci-sms-results.json"
+    evaluation = {}
+    if evaluation_path.exists():
         try:
-            if datetime.fromisoformat(value) >= one_minute_ago:
-                events_per_minute += 1
-        except (TypeError, ValueError):
-            continue
-    quality = alert_quality_report()
-    return {
-        "status": "healthy",
-        "uptime_seconds": round(uptime),
-        "events_stored": event_count,
-        "model_loaded": TEXT_MODEL is not None,
-        "model_confidence": "loaded" if TEXT_MODEL is not None else "heuristics active",
-        "api_latency_ms": 0,
-        "events_per_minute": events_per_minute,
-        "threat_accuracy": quality.get("overall_score", 0),
-        "database": database_backend(),
-        "response_integrations": bool(os.getenv("CYBERGUARD_RESPONSE_WEBHOOK_URL")),
-    }
-
-
-@app.get("/api/v1/system/production-readiness")
-def production_readiness(user: dict[str, str] = Depends(head_admin_user)):
-    integrations = provider_status()
-    configured = [name for name, status in integrations.items() if status["configured"]]
-    missing = [name for name, status in integrations.items() if not status["configured"]]
-    return {
-        "environment": CYBERGUARD_ENV,
-        "status": "ready" if not missing else "configuration_required",
-        "configured": configured,
-        "configuration_required": missing,
-        "database": database_backend(),
-        "https_required_in_production": CYBERGUARD_ENV in {"production", "prod"},
-    }
-
-
-@app.get("/metrics", include_in_schema=False)
-def metrics():
-    with get_db() as db:
-        active_incidents = db.execute("SELECT COUNT(*) AS count FROM incidents WHERE status NOT IN ('Closed', 'Mitigated')").fetchone()["count"]
-    provider_count = sum(1 for status in provider_status().values() if status.get("configured"))
-    return PlainTextResponse(prometheus_metrics(HTTP_REQUEST_COUNT, HTTP_ERROR_COUNT, active_incidents, provider_count), media_type="text/plain; version=0.0.4")
-
-
-@app.post("/api/v1/admin/backup")
-def create_database_backup(user: dict[str, str] = Depends(head_admin_user)):
-    try:
-        result = backup_database()
-    except (OSError, RuntimeError, sqlite3.Error) as error:
-        raise HTTPException(status_code=503, detail=f"Database backup unavailable: {error}") from error
-    write_audit(user, "database_backup", result["destination"], "Online database backup completed")
-    return result
-
-
-@app.get("/api/v1/integrations/status")
-def integrations_status(user: dict[str, str] = Depends(head_admin_user)):
-    return provider_status()
-
-
-@app.post("/api/v1/integrations/ticket")
-def integrations_ticket(request: dict, user: dict[str, str] = Depends(head_admin_user)):
-    try:
-        result = create_ticket(request)
-    except IntegrationNotConfigured as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
-    write_audit(user, "ticket_created", str(request.get("incident_id", "unknown")), result["provider"])
-    return result
-
-
-@app.post("/api/v1/integrations/identity/disable")
-def integrations_disable_identity(request: dict, user: dict[str, str] = Depends(head_admin_user)):
-    identity = str(request.get("identity", "")).strip()
-    if not identity:
-        raise HTTPException(status_code=422, detail="identity is required")
-    try:
-        result = disable_identity(identity)
-    except IntegrationNotConfigured as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
-    write_audit(user, "identity_disabled", identity, result["provider"])
-    return result
-
-
-@app.post("/api/v1/integrations/endpoint/isolate")
-def integrations_isolate_endpoint(request: dict, user: dict[str, str] = Depends(head_admin_user)):
-    endpoint_id = str(request.get("endpoint_id", "")).strip()
-    if not endpoint_id:
-        raise HTTPException(status_code=422, detail="endpoint_id is required")
-    try:
-        result = isolate_endpoint(endpoint_id)
-    except IntegrationNotConfigured as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
-    write_audit(user, "endpoint_isolated", endpoint_id, result["provider"])
-    return result
+            evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            evaluation = {}
+    return {"status": "healthy", "uptime_seconds": round(uptime), "api_latency_ms": round((time.perf_counter() - request_started) * 1000, 2), "events_stored": event_count, "events_per_minute": recent_count, "model_loaded": model_loaded, "model_confidence": "pretrained-media" if media_status.get("mode") == "pretrained" else "trained-fallback", "media_models": media_status, "threat_accuracy": round(float(evaluation.get("f1", 0)) * 100, 1), "evaluation_backend": evaluation.get("backend", "baseline"), "database": "sqlite", "response_integrations": bool(os.getenv("CYBERGUARD_RESPONSE_WEBHOOK_URL"))}
 
 
 @app.get("/api/v1/models/status")
 def model_status(user: dict[str, str] = Depends(current_user)):
     return {
-        "text_classifier": {"loaded": TEXT_MODEL is not None, "algorithm": "TF-IDF + Logistic Regression"},
+        "text_classifier": {"loaded": TEXT_MODEL is not None or FALLBACK_TEXT_MODEL is not None, "algorithm": "TF-IDF + Logistic Regression" if TEXT_MODEL is not None else "Bernoulli Naive Bayes fallback", "samples": FALLBACK_TEXT_MODEL.get("samples") if FALLBACK_TEXT_MODEL else None},
+        "text_transformer": transformer_status(),
         "media_inspection": {"loaded": True, "algorithm": "Lightweight Isolation Forest over image/audio features plus video metadata"},
-        "deep_learning_adapter": {"loaded": bool(os.getenv("CYBERGUARD_MEDIA_MODEL_PATH")), "path_configured": bool(os.getenv("CYBERGUARD_MEDIA_MODEL_PATH"))},
+        "deep_learning_adapter": pretrained_media_status(),
         "threat_intelligence": {"loaded": True, "algorithm": "Local IOC reputation with optional external provider", "external_configured": bool(os.getenv("CYBERGUARD_THREAT_INTEL_URL"))},
     }
 
@@ -1818,6 +1765,22 @@ def siem_ingest_event_route_json(payload: dict, user: dict[str, str] = Depends(c
     return siem_ingest_event(payload, user)
 
 
+@app.post("/api/v1/siem/demo-seed")
+def siem_demo_seed(user: dict[str, str] = Depends(current_user)):
+    """Seed safe, clearly synthetic telemetry so the live SOC view is demonstrable."""
+    if SIEM_EVENT_STORE:
+        return read_siem_events(user) | {"seeded": False}
+    seed_events = [
+        {"source_ip": "192.168.1.99", "event_type": "suspicious_login", "severity": "CRITICAL", "details": "Synthetic demo event: unauthorized admin access from an untrusted host.", "source_host": "Unknown-Kali-Linux"},
+        {"source_ip": "192.168.1.25", "event_type": "data_access", "severity": "MEDIUM", "details": "Synthetic demo event: unusual finance-server access volume under review.", "source_host": "Finance-Server"},
+        {"source_ip": "192.168.1.10", "event_type": "authentication_success", "severity": "LOW", "details": "Synthetic demo event: trusted administrator session observed.", "source_host": "Admin-Workstation"},
+    ]
+    for event in seed_events:
+        siem_ingest_event(event, user)
+    write_audit(user, "siem_demo_seed", "siem", f"seeded:{len(seed_events)}")
+    return read_siem_events(user) | {"seeded": True}
+
+
 @app.get("/api/v1/siem/logs")
 def siem_logs(user: dict[str, str] = Depends(current_user)):
     return read_siem_events(user)
@@ -1857,178 +1820,6 @@ def dispatch_alert(request: AlertRequest, user: dict[str, str] = Depends(current
         except requests.RequestException as error:
             raise HTTPException(status_code=502, detail=f"Alert integration failed: {error}") from error
     return {"status": "recorded", "channel": request.channel, "delivery": "simulation", "user": user["username"]}
-
-
-@app.post("/api/v1/prevention/decision")
-def prevention_decision(request: dict, user: dict[str, str] = Depends(current_user)):
-    decision = risk_aware_prevention_decision(
-        {
-            "risk_score": request.get("risk_score", 0),
-            "category": request.get("category", "unknown"),
-            "payload": request.get("payload", ""),
-            "asset_criticality": request.get("asset_criticality", "medium"),
-        },
-        {
-            "role": request.get("user", {}).get("role") if isinstance(request.get("user"), dict) else user.get("role"),
-            "team": request.get("user", {}).get("team") if isinstance(request.get("user"), dict) else user.get("username"),
-        },
-    )
-    write_audit(user, "prevention_decision", str(request.get("category", "unknown")), decision["action"])
-    return decision
-
-
-@app.post("/api/v1/prevention/containment")
-def prevention_containment(request: dict, user: dict[str, str] = Depends(current_user)):
-    risk_score = int(request.get("risk_score", 0))
-    if risk_score >= 85 and user.get("role") not in {"lead", "head_admin"}:
-        write_audit(user, "prevention_containment_denied", str(request.get("incident_id", "unknown")), "High-impact containment requires SOC lead approval")
-        raise HTTPException(status_code=403, detail="SOC lead approval required for high-impact containment")
-    result = containment_action_plan({
-        "risk_score": risk_score,
-        "source_ip": request.get("source_ip", "unknown"),
-        "category": request.get("category", "unknown"),
-    })
-    write_audit(user, "prevention_containment", str(request.get("incident_id", "unknown")), ",".join(result["actions"]))
-    return result
-
-
-@app.post("/api/v1/prevention/campaign-watch")
-def prevention_campaign_watch(request: dict, user: dict[str, str] = Depends(current_user)):
-    incidents = request.get("incidents", [])
-    return campaign_aware_prevention(incidents)
-
-
-@app.get("/api/v1/prevention/identity-trust")
-def prevention_identity_trust(user: dict[str, str] = Depends(current_user)):
-    return identity_trust_evaluation({"country": "US", "device": "new-device", "login_count": 3, "source_ip": "203.0.113.14"})
-
-
-@app.get("/api/v1/prevention/insider-risk")
-def prevention_insider_risk(user: dict[str, str] = Depends(current_user)):
-    return insider_threat_risk({"downloads": 8, "off_hours": True, "privilege_change": True, "sensitive_access": 5})
-
-
-@app.get("/api/v1/prevention/deception-status")
-def prevention_deception_status(user: dict[str, str] = Depends(current_user)):
-    return {"active_decoys": [{"type": "honeytoken", "host": "finance-host-01", "user": user.get("username", "analyst")}], "triggered_decoys": [
-        {"type": "honeytoken", "host": "finance-host-01", "user": user.get("username", "analyst")}
-    ], "compromised_assets": ["finance-host-01"]}
-
-
-@app.get("/api/v1/prevention/policies")
-def prevention_policies(user: dict[str, str] = Depends(current_user)):
-    return {"policy_rules": ["strict_admin_controls", "phishing_blocking", "device_revalidation"], "department_profile": user.get("role", "analyst"), "enforcement_level": "strict"}
-
-
-@app.post("/api/v1/rescue/scan")
-def rescue_scan(request: dict, user: dict[str, str] = Depends(current_user)):
-    result = scan_account(request)
-    write_audit(user, "account_rescue_scan", result["scan_id"], f"risk={result['score']} level={result['risk_level']}")
-    return result
-
-
-@app.post("/api/v1/rescue/plan")
-def rescue_plan_route(request: dict, user: dict[str, str] = Depends(current_user)):
-    scan = request.get("scan") if isinstance(request.get("scan"), dict) else scan_account(request)
-    result = rescue_plan(scan)
-    write_audit(user, "account_rescue_plan", result["plan_id"], "Personalized rescue plan generated")
-    return result
-
-
-@app.post("/api/v1/rescue/step")
-def rescue_step(request: dict, user: dict[str, str] = Depends(current_user)):
-    plan = request.get("plan") or {}
-    result = execute_step(plan, str(request.get("step_id", "")), bool(request.get("confirmed", False)))
-    write_audit(user, "account_rescue_step", str(request.get("step_id", "unknown")), result["status"])
-    return result
-
-
-@app.post("/api/v1/rescue/evidence")
-def rescue_evidence(request: dict, user: dict[str, str] = Depends(current_user)):
-    result = evidence_snapshot(request.get("scan") or scan_account(request), str(request.get("account_label") or user.get("username", "connected-account")))
-    write_audit(user, "account_rescue_evidence", result["evidence_id"], "Pre-action security snapshot created")
-    return result
-
-
-@app.post("/api/v1/rescue/lockdown")
-def rescue_lockdown(request: dict, user: dict[str, str] = Depends(current_user)):
-    if not request.get("confirmed"):
-        return lockdown_plan(request.get("scan") or scan_account(request))
-    if user.get("role") not in {"lead", "head_admin", "admin"}:
-        raise HTTPException(status_code=403, detail="SOC lead approval required for emergency lockdown")
-    result = lockdown_plan(request.get("scan") or scan_account(request))
-    result.update({"status": "queued", "confirmed_by": user.get("username")})
-    write_audit(user, "account_rescue_lockdown", result["lockdown_id"], "Emergency lockdown confirmed")
-    return result
-
-
-@app.post("/api/v1/rescue/guardian")
-def rescue_guardian(request: dict, user: dict[str, str] = Depends(current_user)):
-    result = guardian_watch(request.get("scan") or scan_account(request), bool(request.get("enabled", True)))
-    write_audit(user, "guardian_mode", result["watch_id"], result["status"])
-    return result
-
-
-@app.get("/api/v1/rescue/locked-out")
-def rescue_locked_out(provider: str = Query("generic"), user: dict[str, str] = Depends(current_user)):
-    return locked_out_recovery(provider)
-
-
-@app.get("/api/v1/rescue/blast-radius")
-def rescue_blast_radius(provider: str = Query("generic"), user: dict[str, str] = Depends(current_user)):
-    return blast_radius(provider)
-
-
-@app.get("/api/v1/rescue/offline-card")
-def rescue_offline_card(provider: str = Query("generic"), user: dict[str, str] = Depends(current_user)):
-    return offline_rescue_card(provider)
-
-
-@app.get("/api/v1/rescue/capabilities")
-def rescue_capabilities(provider: str = Query("generic"), user: dict[str, str] = Depends(current_user)):
-    return provider_capabilities(provider)
-
-
-@app.post("/api/v1/rescue/simulate")
-def rescue_simulate(request: dict, user: dict[str, str] = Depends(current_user)):
-    return rescue_simulation(request.get("scan") or scan_account(request))
-
-
-@app.post("/api/v1/rescue/report")
-def rescue_report_route(request: dict, user: dict[str, str] = Depends(current_user)):
-    result = rescue_report(request.get("scan") or scan_account(request), request.get("plan") or rescue_plan(request.get("scan") or scan_account(request)), request.get("actions", []))
-    write_audit(user, "account_rescue_report", result["report_id"], "Incident rescue report generated")
-    return result
-
-
-@app.post("/api/v1/rescue/rollback")
-def rescue_rollback(request: dict, user: dict[str, str] = Depends(current_user)):
-    result = rollback_record(str(request.get("action_id", "unknown")), request.get("snapshot", {}))
-    write_audit(user, "account_rescue_rollback", result["action_id"], "Rollback record prepared; provider restore requires authorization")
-    return result
-
-
-@app.post("/api/v1/rescue/consent")
-def rescue_consent(request: dict, user: dict[str, str] = Depends(current_user)):
-    return consent_record(str(request.get("provider", "generic")), [str(scope) for scope in request.get("scopes", [])], str(request.get("action", "scan")), bool(request.get("confirmed", False)))
-
-
-@app.post("/api/v1/rescue/contact-warning")
-def rescue_contact_warning(request: dict, user: dict[str, str] = Depends(current_user)):
-    return contact_warning_draft(str(request.get("account_label", user.get("username", "account"))), request.get("contacts", []))
-
-
-@app.post("/api/v1/rescue/guardian-contact")
-def rescue_guardian_contact(request: dict, user: dict[str, str] = Depends(current_user)):
-    contact = str(request.get("contact", "")).strip()
-    if not contact:
-        raise HTTPException(status_code=422, detail="contact is required")
-    return guardian_contact(contact, bool(request.get("enabled", True)))
-
-
-@app.post("/api/v1/rescue/fleet")
-def rescue_fleet(request: dict, user: dict[str, str] = Depends(current_user)):
-    return fleet_summary(request.get("accounts", []))
 
 
 def _roadmap_incidents() -> list[dict[str, Any]]:
