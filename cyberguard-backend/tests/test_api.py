@@ -1,8 +1,20 @@
+import io
+import json
+import sqlite3
+import sys
+import types
+
+import pytest
+import numpy as np
+from fastapi import HTTPException
+
 from main import (
     admin_users,
     analyze_threat,
     compliance_controls,
     dashboard_metrics,
+    get_db,
+    summarize_dashboard_targets,
     initialize_database,
     incident_detail,
     login,
@@ -15,6 +27,7 @@ from main import (
     incident_simulation,
     siem_ingest_event,
     read_siem_events,
+    siem_demo_seed,
     idp_authenticate_user,
     adversarial_self_test,
     fatigue_routing,
@@ -24,9 +37,24 @@ from main import (
     incident_explainability,
     alert_quality,
     record_alert_outcome,
+    create_provider_ticket_route,
+    disable_provider_identity_route,
+    isolate_provider_endpoint_route,
+    system_health,
 )
+from database import PostgresConnection, _postgresql_statement
+from ephemeral_store import EphemeralStore
+from cloudflare_waf import block_ip as cloudflare_block_ip
+from production_integrations import IntegrationNotConfigured, create_ticket as create_production_ticket
+from email_authenticity import analyze_eml, verify_sender_identity
+from deepfake_models import _is_suspicious_label, _prepare_audio_waveform
+from evaluate_media_dataset import calculate_metrics as calculate_media_metrics
+from evaluate_public_datasets import evaluate as evaluate_public_text_dataset
+import detection_engine
+from train_model import DEFAULT_DATASET, train as train_text_model
 from extended_intel import scan_payload
 from models import ForecastRequest, LoginRequest, SimulationRequest, ThreatAnalysisRequest, ThreatIntelLookup
+from models import ProviderEndpointIsolationRequest, ProviderIdentityDisableRequest, ProviderTicketRequest
 from roadmap_features import analyst_bias_report, attention_heatmap, attacker_resource_cost, breach_economics, compliance_diff, counterfactual_replay, cross_modal_consistency, jurisdiction_route, seed_honeytokens, shared_immunity
 from prevention_engine import (
     campaign_aware_prevention,
@@ -57,6 +85,453 @@ def test_core_operator_workflow():
     assert incident_detail(result["incident_id"], lead)["incident"]["actions"] == []
     assert notifications(lead)["unread"] >= 0
     assert dashboard_metrics(lead)["totalEvents"] >= 1
+
+
+def test_database_adapter_selects_postgresql_from_environment(monkeypatch):
+    sentinel = object()
+    monkeypatch.setenv("CYBERGUARD_DATABASE_URL", "postgresql://user:pass@localhost/cyberguard")
+    monkeypatch.setattr("database.PostgresConnection", lambda url: (url, sentinel))
+
+    connection = get_db()
+
+    assert connection == ("postgresql://user:pass@localhost/cyberguard", sentinel)
+
+
+def test_ephemeral_store_expires_challenges_and_tracks_atomic_operations():
+    clock = [1_000.0]
+    store = EphemeralStore(clock=lambda: clock[0])
+    store.set("passkey:one", {"challenge": b"nonce", "expires_at": 1_030}, ttl_seconds=30)
+    assert store.get("passkey:one")["challenge"] == b"nonce"
+    assert store.pop("passkey:one")["challenge"] == b"nonce"
+    assert store.pop("passkey:one") is None
+
+    store.set("otp:one", {"otp_hash": "digest", "attempts": 0, "expires_at": 1_030}, ttl_seconds=30)
+    assert store.increment_field("otp:one", "attempts") == 1
+    assert store.increment_field("otp:one", "attempts") == 2
+    assert store.pop_if("otp:one", "otp_hash", "wrong") is None
+    assert store.pop_if("otp:one", "otp_hash", "digest")["attempts"] == 2
+
+    assert store.record_window_event("security:ip", 1_000, 60) == 1
+    assert store.record_window_event("security:ip", 1_030, 60) == 2
+    assert store.record_window_event("security:ip", 1_061, 60) == 2
+
+    store.set("short-lived", {"value": True}, ttl_seconds=2)
+    clock[0] += 3
+    assert store.get("short-lived") is None
+
+
+def test_ephemeral_store_redis_operations_use_atomic_scripts():
+    class RedisDouble:
+        def __init__(self):
+            self.values = {}
+            self.sorted_sets = {}
+
+        def set(self, key, value, ex=None):
+            self.values[key] = value.encode() if isinstance(value, str) else value
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def eval(self, script, key_count, key, *args):
+            raw = self.values.get(key)
+            if "ZREMRANGEBYSCORE" in script:
+                now, window, member = float(args[0]), float(args[1]), args[2]
+                events = self.sorted_sets.setdefault(key, {})
+                self.sorted_sets[key] = {name: score for name, score in events.items() if score > now - window}
+                self.sorted_sets[key][member] = now
+                return len(self.sorted_sets[key])
+            if "tostring(value[ARGV[1]])" in script:
+                if raw is None:
+                    return None
+                value = json.loads(raw)
+                if str(value.get(args[0])) != args[1]:
+                    return None
+                return self.values.pop(key)
+            if "value[ARGV[1]] =" in script:
+                if raw is None:
+                    return None
+                value = json.loads(raw)
+                value[args[0]] = int(value.get(args[0], 0)) + 1
+                self.values[key] = json.dumps(value).encode()
+                return value[args[0]]
+            if "redis.call('DEL', KEYS[1])" in script:
+                return self.values.pop(key, None)
+            raise AssertionError("Unexpected Redis script")
+
+    redis_double = RedisDouble()
+    store = EphemeralStore(redis_client=redis_double, clock=lambda: 1_000.0)
+    store.set("passkey:redis", {"challenge": b"nonce", "expires_at": 1_030}, ttl_seconds=30)
+    assert store.get("passkey:redis")["challenge"] == b"nonce"
+    assert store.pop("passkey:redis")["challenge"] == b"nonce"
+
+    store.set("otp:redis", {"otp_hash": "digest", "attempts": 0}, ttl_seconds=30)
+    assert store.increment_field("otp:redis", "attempts") == 1
+    assert store.pop_if("otp:redis", "otp_hash", "digest")["attempts"] == 1
+
+    assert store.record_window_event("security:redis", 1_000, 60) == 1
+    assert store.record_window_event("security:redis", 1_030, 60) == 2
+
+
+def test_ephemeral_store_requires_redis_in_production_and_selects_configured_client(monkeypatch):
+    monkeypatch.setenv("CYBERGUARD_ENV", "production")
+    monkeypatch.delenv("CYBERGUARD_REDIS_URL", raising=False)
+    with pytest.raises(RuntimeError, match="required in production"):
+        EphemeralStore.from_environment()
+
+    class RedisClient:
+        def ping(self):
+            return True
+
+    client = RedisClient()
+    redis_module = types.ModuleType("redis")
+    redis_module.RedisError = type("RedisError", (Exception,), {})
+    redis_module.Redis = types.SimpleNamespace(from_url=lambda url, **kwargs: client)
+    monkeypatch.setitem(sys.modules, "redis", redis_module)
+    monkeypatch.setenv("CYBERGUARD_REDIS_URL", "redis://redis:6379/0")
+
+    store = EphemeralStore.from_environment()
+
+    assert store.backend == "redis"
+
+
+def test_system_health_reports_ephemeral_state_backend():
+    initialize_database()
+    health = system_health({"username": "lead", "role": "lead"})
+
+    assert health["ephemeral_state"] in {"redis", "process-local-memory"}
+
+
+def test_cloudflare_block_validates_and_normalizes_ip_before_calling_provider(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "test-token")
+    monkeypatch.setenv("CLOUDFLARE_ZONE_ID", "test-zone")
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"success": True, "result": {"id": "rule-1"}}
+
+    def fake_post(url, **kwargs):
+        captured.update({"url": url, **kwargs})
+        return Response()
+
+    monkeypatch.setattr("cloudflare_waf.requests.post", fake_post)
+    result = cloudflare_block_ip(" 2001:0db8::1 ", "incident containment")
+
+    assert result["status"] == "blocked"
+    assert result["ip_address"] == "2001:db8::1"
+    assert captured["json"]["configuration"]["value"] == "2001:db8::1"
+    with pytest.raises(ValueError, match="valid IPv4 or IPv6"):
+        cloudflare_block_ip("not-an-ip", "invalid target")
+
+
+def test_cloudflare_block_rejects_provider_success_false(monkeypatch):
+    monkeypatch.setenv("CLOUDFLARE_API_TOKEN", "test-token")
+    monkeypatch.setenv("CLOUDFLARE_ZONE_ID", "test-zone")
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"success": False, "errors": [{"message": "denied"}]}
+
+    monkeypatch.setattr("cloudflare_waf.requests.post", lambda *args, **kwargs: Response())
+    with pytest.raises(RuntimeError, match="denied"):
+        cloudflare_block_ip("192.0.2.10", "test containment")
+
+
+def test_provider_action_routes_require_confirmation_and_return_provider_status(monkeypatch):
+    admin = {"username": "root@example.org", "role": "head_admin"}
+    monkeypatch.setattr("main.create_provider_ticket", lambda payload: {"provider": "jira", "status": "created", "result": {"key": "SEC-1"}})
+    monkeypatch.setattr("main.disable_provider_identity", lambda identity: {"provider": "okta", "status": "suspended", "identity": identity})
+    monkeypatch.setattr("main.isolate_provider_endpoint", lambda endpoint_id: {"provider": "edr", "status": "isolated", "endpoint_id": endpoint_id})
+
+    assert create_provider_ticket_route(ProviderTicketRequest(summary="Investigation"), admin)["status"] == "created"
+    with pytest.raises(HTTPException) as identity_error:
+        disable_provider_identity_route(ProviderIdentityDisableRequest(identity="user-1"), admin)
+    assert identity_error.value.status_code == 409
+    with pytest.raises(HTTPException) as endpoint_error:
+        isolate_provider_endpoint_route(ProviderEndpointIsolationRequest(endpoint_id="host-1"), admin)
+    assert endpoint_error.value.status_code == 409
+    assert disable_provider_identity_route(ProviderIdentityDisableRequest(identity="user-1", confirmed=True), admin)["status"] == "suspended"
+    assert isolate_provider_endpoint_route(ProviderEndpointIsolationRequest(endpoint_id="host-1", confirmed=True), admin)["status"] == "isolated"
+
+
+def test_jira_ticket_uses_api_token_basic_auth_and_requires_account_email(monkeypatch):
+    monkeypatch.setenv("CYBERGUARD_JIRA_URL", "https://example.atlassian.net")
+    monkeypatch.setenv("CYBERGUARD_JIRA_TOKEN", "api-token")
+    monkeypatch.setenv("CYBERGUARD_JIRA_PROJECT", "SEC")
+    monkeypatch.delenv("CYBERGUARD_JIRA_EMAIL", raising=False)
+    with pytest.raises(IntegrationNotConfigured, match="CYBERGUARD_JIRA_EMAIL"):
+        create_production_ticket({"summary": "Test issue"})
+
+    monkeypatch.setenv("CYBERGUARD_JIRA_EMAIL", "soc@example.org")
+    captured = {}
+
+    class Response:
+        content = b'{"key":"SEC-42"}'
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"key": "SEC-42"}
+
+    def fake_request(method, url, **kwargs):
+        captured.update({"method": method, "url": url, **kwargs})
+        return Response()
+
+    monkeypatch.setattr("production_integrations.requests.request", fake_request)
+    result = create_production_ticket({"summary": "Test issue"})
+
+    assert result["status"] == "created"
+    assert captured["url"] == "https://example.atlassian.net/rest/api/3/issue"
+    assert captured["headers"]["Authorization"].startswith("Basic ")
+    assert captured["json"]["fields"]["project"]["key"] == "SEC"
+
+
+def test_postgresql_sql_translation_preserves_insert_conflicts():
+    assert _postgresql_statement("INSERT INTO users (username) VALUES (?)") == "INSERT INTO users (username) VALUES (%s)"
+    assert _postgresql_statement("INSERT OR IGNORE INTO users (username) VALUES (?)") == "INSERT INTO users (username) VALUES (%s) ON CONFLICT DO NOTHING"
+    assert _postgresql_statement("INSERT INTO blocked_ips (ip_address) VALUES (?) ON CONFLICT(ip_address) DO UPDATE SET ip_address = excluded.ip_address") == "INSERT INTO blocked_ips (ip_address) VALUES (%s) ON CONFLICT(ip_address) DO UPDATE SET ip_address = excluded.ip_address"
+
+
+def test_postgresql_integrity_errors_match_existing_api_handling():
+    class DatabaseConflict(Exception):
+        pass
+
+    class ConflictCursor:
+        def execute(self, statement, parameters):
+            raise DatabaseConflict("duplicate key")
+
+    class ConflictConnection:
+        def cursor(self):
+            return ConflictCursor()
+
+    connection = PostgresConnection.__new__(PostgresConnection)
+    connection._integrity_error = DatabaseConflict
+    connection._connection = ConflictConnection()
+
+    with pytest.raises(sqlite3.IntegrityError, match="duplicate key"):
+        connection.execute("INSERT INTO users (username) VALUES (?)")
+
+
+def test_sender_identity_verification_checks_authentication_domain_alignment():
+    aligned = verify_sender_identity(
+        "Finance <alerts@bput.ac.in>",
+        "alerts@bput.ac.in",
+        "bounce@mailer.bput.ac.in",
+        "mx; spf=pass smtp.mailfrom=mailer.bput.ac.in; dkim=pass header.d=bput.ac.in; dmarc=pass header.from=bput.ac.in",
+        {"mx"},
+    )
+    spoofed = verify_sender_identity(
+        "Finance <alerts@bput.ac.in>",
+        "alerts@attacker.example",
+        "bounce@attacker.example",
+        "mx; spf=pass smtp.mailfrom=attacker.example; dkim=pass header.d=attacker.example; dmarc=pass header.from=attacker.example",
+        {"mx"},
+    )
+    insufficient = verify_sender_identity("alerts@bput.ac.in", "", "", "")
+    forged = verify_sender_identity(
+        "alerts@bput.ac.in", "", "", "attacker.example; spf=pass smtp.mailfrom=bput.ac.in; dkim=pass header.d=bput.ac.in; dmarc=pass header.from=bput.ac.in", {"mx"}
+    )
+
+    assert aligned["status"] == "verified"
+    assert aligned["risk_score"] < spoofed["risk_score"]
+    assert spoofed["status"] == "mismatch"
+    assert insufficient["status"] == "insufficient_evidence"
+    assert forged["status"] == "untrusted_evidence"
+    assert forged["risk_score"] > aligned["risk_score"]
+
+
+def test_eml_analysis_exposes_sender_identity_assessment(monkeypatch):
+    monkeypatch.setenv("CYBERGUARD_TRUSTED_AUTHSERV_IDS", "mx")
+    result = analyze_eml(
+        b"From: Finance <alerts@bput.ac.in>\r\n"
+        b"Authentication-Results: mx; spf=pass smtp.mailfrom=bput.ac.in; dkim=pass header.d=bput.ac.in; dmarc=pass header.from=bput.ac.in\r\n"
+        b"Subject: Account notice\r\n\r\nPlease review the account."
+    )
+
+    assert result["identity_verification"]["status"] == "verified"
+    assert any(item["name"] == "Sender Identity Verification" for item in result["indicators"])
+
+
+def test_pretrained_detector_maps_ai_voice_and_real_labels_correctly():
+    assert _is_suspicious_label("AIVoice")
+    assert _is_suspicious_label("AI-generated speech")
+    assert _is_suspicious_label("Fake")
+    assert not _is_suspicious_label("HumanVoice")
+    assert not _is_suspicious_label("Real")
+
+
+def test_pretrained_audio_input_is_downmixed_and_resampled():
+    time = np.arange(44100, dtype=np.float32) / 44100
+    stereo = np.column_stack((np.sin(2 * np.pi * 440 * time), np.sin(2 * np.pi * 440 * time)))
+
+    mono, sample_rate = _prepare_audio_waveform(stereo, 44100, 16000)
+
+    assert sample_rate == 16000
+    assert mono.ndim == 1
+    assert abs(len(mono) - 16000) <= 1
+
+
+def test_media_engine_decodes_flac_audio(monkeypatch):
+    soundfile = pytest.importorskip("soundfile")
+    import media_engine
+    import deepfake_models
+
+    monkeypatch.setattr(deepfake_models, "analyze_pretrained", lambda content, kind: None)
+    waveform = np.column_stack((np.zeros(4410), np.zeros(4410))).astype(np.float32)
+    audio = io.BytesIO()
+    soundfile.write(audio, waveform, 44100, format="FLAC")
+
+    result = media_engine.analyze_media(audio.getvalue(), "application/octet-stream", "voice.flac", "audio")
+
+    assert result["method"] == "audio-anomaly-model"
+    assert any("44100 Hz" in reason for reason in result["reasons"])
+
+
+def test_media_evaluation_reports_rank_and_threshold_metrics():
+    metrics = calculate_media_metrics([
+        {"label": 0, "score": 10},
+        {"label": 0, "score": 80},
+        {"label": 1, "score": 60},
+        {"label": 1, "score": 90},
+    ])
+
+    assert metrics["confusion_matrix"] == {"tn": 1, "fp": 1, "fn": 0, "tp": 2}
+    assert metrics["precision"] == pytest.approx(2 / 3)
+    assert metrics["recall"] == 1
+    assert metrics["f1"] == pytest.approx(0.8)
+    assert metrics["roc_auc"] == pytest.approx(0.75)
+    assert metrics["pr_auc"] == pytest.approx(5 / 6)
+
+
+def test_media_evaluation_rejects_single_class_or_invalid_threshold():
+    with pytest.raises(ValueError, match="both real and fake"):
+        calculate_media_metrics([{"label": 0, "score": 5}])
+    with pytest.raises(ValueError, match="between 0 and 100"):
+        calculate_media_metrics([{"label": 0, "score": 5}, {"label": 1, "score": 90}], 101)
+
+
+def test_public_text_evaluation_reports_real_latency_percentiles_and_threshold(tmp_path):
+    pytest.importorskip("sklearn")
+    dataset = tmp_path / "text.csv"
+    dataset.write_text(
+        "text,label\n" + "".join(f"normal campus announcement number {index},0\n" for index in range(20))
+        + "".join(f"urgent prize claim verify account number {index},1\n" for index in range(20)),
+        encoding="utf-8",
+    )
+
+    result = evaluate_public_text_dataset(dataset, threshold=40)
+
+    assert result["decision_threshold"] == 40
+    assert result["fit_time_ms"] >= 0
+    assert result["median_latency_ms_per_sample"] >= 0
+    assert result["p95_latency_ms_per_sample"] >= result["median_latency_ms_per_sample"]
+    with pytest.raises(ValueError, match="between 0 and 100"):
+        evaluate_public_text_dataset(dataset, threshold=101)
+
+
+def test_text_model_risk_gate_uses_configured_confidence_threshold(monkeypatch):
+    monkeypatch.setattr(detection_engine, "model_signal", lambda payload: (55, {"name": "test model", "score": "55%"}))
+    monkeypatch.setattr(detection_engine, "TEXT_MODEL_THRESHOLD", 50)
+    enabled = detection_engine.evaluate_threat_payload("email", "A routine note")
+    monkeypatch.setattr(detection_engine, "TEXT_MODEL_THRESHOLD", 60)
+    gated = detection_engine.evaluate_threat_payload("email", "A routine note")
+
+    assert enabled["risk_score"] == 55
+    assert gated["risk_score"] == 6
+
+
+def test_text_training_defaults_to_uci_and_saves_a_usable_artifact(tmp_path):
+    assert DEFAULT_DATASET.name == "uci_sms_spam.csv"
+    dataset = tmp_path / "messages.csv"
+    dataset.write_text(
+        "text,label\n" + "".join(f"normal campus notice {index},0\n" for index in range(20))
+        + "".join(f"urgent prize claim verify account {index},1\n" for index in range(20)),
+        encoding="utf-8",
+    )
+    model_path = tmp_path / "model.joblib"
+
+    model = train_text_model(dataset, model_path)
+
+    assert model_path.exists()
+    assert model.predict_proba(["urgent verify account"])[0][1] > model.predict_proba(["normal campus notice"])[0][1]
+
+
+def test_flower_client_redacts_local_data_and_requires_both_labels(tmp_path):
+    pytest.importorskip("flwr")
+    from flower_federated import load_local_dataset
+
+    dataset = tmp_path / "client.csv"
+    dataset.write_text(
+        "text,label\nContact alice@example.org with code 12345678,1\nNormal campus notice,0\n",
+        encoding="utf-8",
+    )
+    texts, labels = load_local_dataset(dataset)
+
+    assert "alice@example.org" not in texts[0]
+    assert "12345678" not in texts[0]
+    assert set(labels.tolist()) == {0, 1}
+
+    invalid_dataset = tmp_path / "invalid.csv"
+    invalid_dataset.write_text("text,label\nMessage,1\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="both benign"):
+        load_local_dataset(invalid_dataset)
+
+
+def test_flower_entrypoints_forward_network_addresses(monkeypatch, tmp_path):
+    pytest.importorskip("flwr")
+    import flower_federated as flower
+
+    server_call = {}
+    monkeypatch.setattr(flower.fl.server, "start_server", lambda **kwargs: server_call.update(kwargs))
+    with pytest.raises(ValueError, match="require TLS certificates"):
+        flower.start_server(2, "0.0.0.0:9010", 2)
+    certificate_paths = [tmp_path / "ca.pem", tmp_path / "server.pem", tmp_path / "server-key.pem"]
+    for path, contents in zip(certificate_paths, (b"ca", b"server-cert", b"server-key")):
+        path.write_bytes(contents)
+    certificates = flower.load_server_certificates(*certificate_paths)
+    with pytest.raises(ValueError, match="requires CA certificate"):
+        flower.load_server_certificates(certificate_paths[0], None, certificate_paths[2])
+    flower.start_server(2, "0.0.0.0:9010", 2, certificates)
+    assert server_call["server_address"] == "0.0.0.0:9010"
+    assert server_call["strategy"].min_available_clients == 2
+    assert server_call["certificates"] == (b"ca", b"server-cert", b"server-key")
+
+    dataset = tmp_path / "client.csv"
+    dataset.write_text("text,label\nurgent payment,1\nnormal notice,0\n", encoding="utf-8")
+    client_call = {}
+    monkeypatch.setattr(flower.fl.client, "start_client", lambda **kwargs: client_call.update(kwargs))
+    with pytest.raises(ValueError, match="require a trusted root certificate"):
+        flower.start_client(dataset, "10.0.0.8:9010")
+    root_certificate = tmp_path / "root.pem"
+    root_certificate.write_bytes(b"root-cert")
+    flower.start_client(dataset, "10.0.0.8:9010", root_certificate)
+    assert client_call["server_address"] == "10.0.0.8:9010"
+    assert client_call["root_certificates"] == b"root-cert"
+    assert client_call["insecure"] is False
+
+
+def test_dashboard_target_summary_ranks_entities_and_masks_identifiers():
+    targets = summarize_dashboard_targets([
+        {"payload": "Contact alice.smith@example.org at https://login.example.org/auth", "risk_score": 85},
+        {"payload": "Repeat alert for alice.smith@example.org and https://login.example.org/reset", "risk_score": 40},
+        {"payload": "Source 203.0.113.42 connected to https://other.example.net", "risk_score": 75},
+    ])
+
+    user_target = next(target for target in targets if target["type"] == "user")
+    service_target = next(target for target in targets if target["label"] == "login.example.org")
+    network_target = next(target for target in targets if target["type"] == "network")
+    assert user_target["label"] == "a***@example.org"
+    assert user_target["incident_count"] == 2
+    assert user_target["high_risk_count"] == 1
+    assert service_target["incident_count"] == 2
+    assert network_target["label"] == "203.0.113.x"
 
 
 def test_phishing_scan_scores_signal_content_not_static_baseline():
@@ -124,6 +599,19 @@ def test_siem_dhcp_and_idp_correlation_workflow():
         lead,
     )
     assert blocked["auth_status"] == "BLOCKED"
+
+
+def test_siem_demo_seed_is_persistent_and_idempotent(tmp_path, monkeypatch):
+    monkeypatch.setattr("main.DB_PATH", tmp_path / "siem.db")
+    initialize_database()
+    user = {"username": "lead", "role": "lead"}
+
+    first = siem_demo_seed(user)
+    second = siem_demo_seed(user)
+
+    assert first["seeded"] is True
+    assert second["seeded"] is False
+    assert first["count"] == second["count"] == 3
 
 
 def test_sprint_1_intelligence_signals_are_available():

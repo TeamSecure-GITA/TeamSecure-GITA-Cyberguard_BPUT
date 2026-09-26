@@ -2,16 +2,16 @@ services:
   flower-server:
     build: ./cyberguard-backend
     working_dir: /app
-    command: sh -c "pip install -r requirements-ai.txt && python flower_federated.py server --rounds 3"
+    command: sh -c "pip install -r requirements-ai.txt && python flower_federated.py server --rounds 3 --min-clients 3 --bind-address 0.0.0.0:8080 --allow-insecure"
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - ./cyberguard-backend:/app
 
   flower-client-a:
     build: ./cyberguard-backend
     working_dir: /app
-    command: sh -c "pip install -r requirements-ai.txt && python flower_federated.py client --data data/institution-a.csv"
+    command: sh -c "pip install -r requirements-ai.txt && python flower_federated.py client --server-address flower-server:8080 --allow-insecure --data data/institution-a.csv"
     depends_on:
       - flower-server
     volumes:
@@ -20,7 +20,7 @@ services:
   flower-client-b:
     build: ./cyberguard-backend
     working_dir: /app
-    command: sh -c "pip install -r requirements-ai.txt && python flower_federated.py client --data data/institution-b.csv"
+    command: sh -c "pip install -r requirements-ai.txt && python flower_federated.py client --server-address flower-server:8080 --allow-insecure --data data/institution-b.csv"
     depends_on:
       - flower-server
     volumes:
@@ -29,7 +29,7 @@ services:
   flower-client-c:
     build: ./cyberguard-backend
     working_dir: /app
-    command: sh -c "pip install -r requirements-ai.txt && python flower_federated.py client --data data/institution-c.csv"
+    command: sh -c "pip install -r requirements-ai.txt && python flower_federated.py client --server-address flower-server:8080 --allow-insecure --data data/institution-c.csv"
     depends_on:
       - flower-server
     volumes:

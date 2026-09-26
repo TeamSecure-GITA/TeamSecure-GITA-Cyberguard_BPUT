@@ -8,8 +8,21 @@ services:
       CYBERGUARD_JWT_SECRET: ${CYBERGUARD_JWT_SECRET:?Set CYBERGUARD_JWT_SECRET before starting Docker Compose}
       CYBERGUARD_FRONTEND_ORIGINS: http://localhost:5173
       CYBERGUARD_DB_PATH: /data/cyberguard.db
+      CYBERGUARD_REDIS_URL: redis://redis:6379/0
     volumes:
       - cyberguard-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   frontend:
     build: ./cyberguard-frontend

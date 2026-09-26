@@ -5,8 +5,10 @@ weights are downloaded only by the configured Hugging Face pipeline and are
 never silently substituted for the heuristic triage score.
 """
 import os
+import re
 import sys
 import types
+import math
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +19,28 @@ _AUDIO_MODEL = os.getenv("CYBERGUARD_AUDIO_MODEL", str(_AUDIO_CACHE) if _AUDIO_C
 _PIPELINES: dict[str, Any] = {}
 _PROCESSORS: dict[str, Any] = {}
 _LOAD_ERRORS: dict[str, str] = {}
+SUSPICIOUS_LABEL_TOKENS = {"fake", "spoof", "synthetic", "generated", "ai", "aivoice", "deepfake", "manipulated", "artificial", "clone", "cloned"}
+
+
+def _is_suspicious_label(label: str) -> bool:
+    tokens = set(re.findall(r"[a-z0-9]+", label.lower()))
+    return bool(tokens & SUSPICIOUS_LABEL_TOKENS)
+
+
+def _prepare_audio_waveform(waveform, sample_rate: int, target_sample_rate: int):
+    import numpy as np
+
+    if sample_rate <= 0 or target_sample_rate <= 0:
+        raise ValueError("Audio sample rates must be positive")
+    samples = np.asarray(waveform, dtype=np.float32)
+    if samples.ndim > 1:
+        samples = samples.mean(axis=1)
+    if sample_rate != target_sample_rate:
+        from scipy.signal import resample_poly
+
+        divisor = math.gcd(sample_rate, target_sample_rate)
+        samples = resample_poly(samples, target_sample_rate // divisor, sample_rate // divisor).astype(np.float32)
+    return samples, target_sample_rate
 
 
 def _pipeline(kind: str):
@@ -75,16 +99,21 @@ def analyze_pretrained(content: bytes, kind: str) -> dict[str, Any] | None:
             import io
             inputs = _PROCESSORS[kind](images=Image.open(io.BytesIO(content)).convert("RGB"), return_tensors="pt")
         else:
+            import numpy as np
             import soundfile as sf
             import io
-            waveform, sample_rate = sf.read(io.BytesIO(content), dtype="float32")
+            waveform, sample_rate = sf.read(io.BytesIO(content), dtype="float32", always_2d=True)
+            target_sample_rate = int(getattr(_PROCESSORS[kind], "sampling_rate", None) or sample_rate)
+            waveform, sample_rate = _prepare_audio_waveform(waveform, sample_rate, target_sample_rate)
             inputs = _PROCESSORS[kind](waveform, sampling_rate=sample_rate, return_tensors="pt")
         with torch.no_grad():
             logits = detector(**inputs).logits
         probabilities = torch.softmax(logits, dim=-1)[0]
         result = [{"label": detector.config.id2label.get(index, str(index)), "score": float(probabilities[index])} for index in range(len(probabilities))]
         result.sort(key=lambda item: item["score"], reverse=True)
-        suspicious = [item for item in result if any(token in item["label"].lower() for token in ("fake", "spoof", "synthetic", "generated"))]
+        for item in result:
+            item["is_suspicious"] = _is_suspicious_label(item["label"])
+        suspicious = [item for item in result if item["is_suspicious"]]
         score = round(max((float(item["score"]) for item in suspicious), default=0) * 100)
         return {"score": min(score, 99), "model": _IMAGE_MODEL if kind == "image" else _AUDIO_MODEL, "model_type": "pretrained-transformer", "predictions": result, "calibration": "model confidence; validate on an authorised holdout before production decisions"}
     except Exception as error:

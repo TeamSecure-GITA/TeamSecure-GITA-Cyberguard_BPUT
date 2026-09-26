@@ -14,3 +14,6 @@ numpy
 opencv-python-headless
 bcrypt
 PyYAML
+psycopg[binary]>=3.2
+soundfile>=0.12
+redis>=5.0

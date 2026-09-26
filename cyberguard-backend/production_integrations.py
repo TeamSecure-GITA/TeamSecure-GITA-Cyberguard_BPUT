@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import os
+from urllib.parse import quote
 from typing import Any
 
 import requests
@@ -24,7 +26,7 @@ def provider_status() -> dict[str, dict[str, Any]]:
     return {
         "cloudflare": {"configured": bool(os.getenv("CLOUDFLARE_API_TOKEN") and os.getenv("CLOUDFLARE_ZONE_ID"))},
         "siem": {"configured": bool(os.getenv("CYBERGUARD_SIEM_URL"))},
-        "jira": {"configured": bool(os.getenv("CYBERGUARD_JIRA_URL") and os.getenv("CYBERGUARD_JIRA_TOKEN") and os.getenv("CYBERGUARD_JIRA_PROJECT"))},
+        "jira": {"configured": bool(os.getenv("CYBERGUARD_JIRA_URL") and os.getenv("CYBERGUARD_JIRA_EMAIL") and os.getenv("CYBERGUARD_JIRA_TOKEN") and os.getenv("CYBERGUARD_JIRA_PROJECT"))},
         "servicenow": {"configured": bool(os.getenv("CYBERGUARD_SERVICENOW_URL") and os.getenv("CYBERGUARD_SERVICENOW_TOKEN"))},
         "microsoft_graph": {"configured": bool(os.getenv("CYBERGUARD_GRAPH_TOKEN"))},
         "okta": {"configured": bool(os.getenv("CYBERGUARD_OKTA_URL") and os.getenv("CYBERGUARD_OKTA_TOKEN"))},
@@ -37,12 +39,14 @@ def provider_status() -> dict[str, dict[str, Any]]:
 
 def create_ticket(payload: dict[str, Any]) -> dict[str, Any]:
     if os.getenv("CYBERGUARD_JIRA_URL"):
-        missing = _required("CYBERGUARD_JIRA_TOKEN", "CYBERGUARD_JIRA_PROJECT")
+        missing = _required("CYBERGUARD_JIRA_EMAIL", "CYBERGUARD_JIRA_TOKEN", "CYBERGUARD_JIRA_PROJECT")
         if missing:
             raise IntegrationNotConfigured(f"Missing Jira settings: {', '.join(missing)}")
         url = os.getenv("CYBERGUARD_JIRA_URL", "").rstrip("/") + "/rest/api/3/issue"
         body = {"fields": {"project": {"key": os.environ["CYBERGUARD_JIRA_PROJECT"]}, "summary": payload.get("summary", "CyberGuard security incident"), "description": payload.get("description", ""), "issuetype": {"name": os.getenv("CYBERGUARD_JIRA_ISSUE_TYPE", "Task")}}}
-        result = _request("POST", url, headers={"Authorization": f"Bearer {os.environ['CYBERGUARD_JIRA_TOKEN']}", "Content-Type": "application/json"}, payload=body)
+        credentials = f"{os.environ['CYBERGUARD_JIRA_EMAIL']}:{os.environ['CYBERGUARD_JIRA_TOKEN']}".encode("utf-8")
+        authorization = base64.b64encode(credentials).decode("ascii")
+        result = _request("POST", url, headers={"Authorization": f"Basic {authorization}", "Content-Type": "application/json", "Accept": "application/json"}, payload=body)
         return {"provider": "jira", "status": "created", "result": result}
     if os.getenv("CYBERGUARD_SERVICENOW_URL"):
         missing = _required("CYBERGUARD_SERVICENOW_TOKEN")
@@ -59,11 +63,13 @@ def disable_identity(identity: str) -> dict[str, Any]:
         missing = _required("CYBERGUARD_OKTA_TOKEN")
         if missing:
             raise IntegrationNotConfigured(f"Missing Okta settings: {', '.join(missing)}")
-        url = os.getenv("CYBERGUARD_OKTA_URL", "").rstrip("/") + f"/api/v1/users/{identity}/lifecycle/suspend"
+        encoded_identity = quote(identity, safe="")
+        url = os.getenv("CYBERGUARD_OKTA_URL", "").rstrip("/") + f"/api/v1/users/{encoded_identity}/lifecycle/suspend"
         result = _request("POST", url, headers={"Authorization": f"SSWS {os.environ['CYBERGUARD_OKTA_TOKEN']}", "Accept": "application/json"})
         return {"provider": "okta", "status": "suspended", "identity": identity, "result": result}
     if os.getenv("CYBERGUARD_GRAPH_TOKEN"):
-        url = f"https://graph.microsoft.com/v1.0/users/{identity}"
+        encoded_identity = quote(identity, safe="")
+        url = f"https://graph.microsoft.com/v1.0/users/{encoded_identity}"
         result = _request("PATCH", url, headers={"Authorization": f"Bearer {os.environ['CYBERGUARD_GRAPH_TOKEN']}", "Content-Type": "application/json"}, payload={"accountEnabled": False})
         return {"provider": "microsoft_graph", "status": "disabled", "identity": identity, "result": result}
     raise IntegrationNotConfigured("Configure Okta or Microsoft Graph before disabling identities")

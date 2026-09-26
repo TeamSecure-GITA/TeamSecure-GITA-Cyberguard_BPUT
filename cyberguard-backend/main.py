@@ -53,6 +53,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from webauthn import generate_authentication_options, generate_registration_options, options_to_json, verify_authentication_response, verify_registration_response
 from webauthn.helpers.structs import PublicKeyCredentialDescriptor, UserVerificationRequirement
+from database import connect_database
+from ephemeral_store import EphemeralStore
 
 from detection_engine import FALLBACK_TEXT_MODEL, TEXT_MODEL, adversarial_self_test, evaluate_threat_payload
 from battle_simulator import run_battle
@@ -90,7 +92,8 @@ from speculative_defense_engine import chrono_causal_trap, cognitive_poisoning, 
 from cloudflare_waf import block_ip as cloudflare_block_ip, configuration as cloudflare_configuration
 from roadmap_features import analyst_bias_report, attention_heatmap, attacker_resource_cost, breach_economics, compliance_diff, counterfactual_replay, cross_modal_consistency, jurisdiction_route, seed_honeytokens, shared_immunity
 from provider_integrations import deploy_honeytokens, integration_status as provider_integration_status, publish_tenant_signatures, sync_cve_feed
-from models import AccessRequestCreate, AdvancedTelemetryRequest, AgentConsensusRequest, AlertRequest, AnalystLoadRequest, BattleRequest, CognitiveEchoRequest, DarkMeshRequest, DeceptionRequest, ForecastRequest, IncidentComment, IncidentUpdate, InfrastructureEchoRequest, LoginRequest, NeuromorphicRequest, NotificationUpdate, OtpVerificationRequest, PasskeyCredentialRequest, PermissionRequest, PolymorphismRequest, PsychologyRequest, QStateRequest, QuantumDecoyRequest, ResponseExecutionRequest, SatelliteRequest, ScannerRequest, SimulationRequest, SpeculativeTelemetryRequest, TemporalHealingRequest, ThreatAnalysisRequest, ThreatIntelLookup, TopologyMorphRequest, ThreatPhysicsRequest, UserCreate, VaccineRequest
+from production_integrations import IntegrationNotConfigured, create_ticket as create_provider_ticket, disable_identity as disable_provider_identity, isolate_endpoint as isolate_provider_endpoint, provider_status as production_provider_status
+from models import AccessRequestCreate, AdvancedTelemetryRequest, AgentConsensusRequest, AlertRequest, AnalystLoadRequest, BattleRequest, CognitiveEchoRequest, DarkMeshRequest, DeceptionRequest, ForecastRequest, IncidentComment, IncidentUpdate, InfrastructureEchoRequest, LoginRequest, NeuromorphicRequest, NotificationUpdate, OtpVerificationRequest, PasskeyCredentialRequest, PermissionRequest, PolymorphismRequest, PsychologyRequest, ProviderEndpointIsolationRequest, ProviderIdentityDisableRequest, ProviderTicketRequest, QStateRequest, QuantumDecoyRequest, ResponseExecutionRequest, SatelliteRequest, ScannerRequest, SimulationRequest, SpeculativeTelemetryRequest, TemporalHealingRequest, ThreatAnalysisRequest, ThreatIntelLookup, TopologyMorphRequest, ThreatPhysicsRequest, UserCreate, VaccineRequest
 
 DB_PATH = Path(os.getenv("CYBERGUARD_DB_PATH", str(Path(__file__).with_name("cyberguard.db"))))
 JWT_SECRET = os.getenv("CYBERGUARD_JWT_SECRET", "").strip()
@@ -105,13 +108,11 @@ HEAD_ADMIN_USERNAME = os.getenv("CYBERGUARD_HEAD_ADMIN_USERNAME", "teamsecure.pr
 HEAD_ADMIN_PASSWORD = os.getenv("CYBERGUARD_HEAD_ADMIN_PASSWORD", "Secure@9040")
 MAX_UPLOAD_BYTES = max(1_000_000, int(os.getenv("CYBERGUARD_MAX_UPLOAD_BYTES", "10485760")))
 STARTED_AT = datetime.now(timezone.utc)
-SECURITY_EVENT_WINDOW: dict[str, list[float]] = {}
-OTP_CHALLENGES: dict[str, dict[str, Any]] = {}
+EPHEMERAL_STATE = EphemeralStore.from_environment()
 OTP_TTL_SECONDS = max(60, int(os.getenv("CYBERGUARD_OTP_TTL_SECONDS", "300")))
 OTP_MAX_ATTEMPTS = max(3, int(os.getenv("CYBERGUARD_OTP_MAX_ATTEMPTS", "5")))
 PASSKEY_RP_ID = os.getenv("CYBERGUARD_PASSKEY_RP_ID", "127.0.0.1")
 PASSKEY_ORIGIN = os.getenv("CYBERGUARD_PASSKEY_ORIGIN", "http://127.0.0.1:5173")
-PASSKEY_CHALLENGES: dict[str, dict[str, Any]] = {}
 DEMO_SCENARIOS = [
     {
         "id": "deepfake-authority",
@@ -147,13 +148,8 @@ IDP_USER_REGISTRY = {
     "user_student": {"name": "Rohan Das", "role": "Student", "status": "SUSPENDED", "password": "student123"},
 }
 
-SIEM_EVENT_STORE: list[dict] = []
-
-
 def get_db():
-    connection = sqlite3.connect(DB_PATH)
-    connection.row_factory = sqlite3.Row
-    return connection
+    return connect_database(DB_PATH)
 
 
 def correlate_dhcp_ip(source_ip: str) -> dict:
@@ -190,7 +186,11 @@ def siem_ingest_event(payload: dict | None, user: dict[str, str] | None = None):
         "severity": severity,
         "details": details,
     }
-    SIEM_EVENT_STORE.insert(0, log_entry)
+    with get_db() as db:
+        db.execute(
+            "INSERT INTO siem_events (timestamp, source_ip, source_host, mac_address, hostname, event, severity, details) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (timestamp, source_ip, hostname, log_entry["mac_address"], hostname, event_type, severity, details),
+        )
 
     if severity == "CRITICAL" or "kali" in hostname.lower() or "unknown" in hostname.lower():
         action_taken = f"ALERT: SIEM triggered DHCP isolation protocol. Cutting network lease for {hostname}."
@@ -214,9 +214,12 @@ def siem_ingest_event(payload: dict | None, user: dict[str, str] | None = None):
 def read_siem_events(user: dict[str, str] | None = None):
     if user is None:
         user = {"username": "system", "role": "lead"}
-    events = sorted(SIEM_EVENT_STORE, key=lambda item: item["timestamp"], reverse=True)[:20]
+    with get_db() as db:
+        total = db.execute("SELECT COUNT(*) AS count FROM siem_events").fetchone()["count"]
+        rows = db.execute("SELECT timestamp, source_ip, source_host, mac_address, hostname, event, severity, details FROM siem_events ORDER BY id DESC LIMIT 20").fetchall()
+    events = [dict(row) for row in rows]
     high_risk = [event for event in events if event["severity"] in {"HIGH", "CRITICAL"}]
-    return {"events": events, "count": len(events), "high_risk_count": len(high_risk), "user": user.get("username", "unknown")}
+    return {"events": events, "count": total, "high_risk_count": len(high_risk), "user": user.get("username", "unknown")}
 
 
 def idp_authenticate_user(payload: dict | None, user: dict[str, str] | None = None):
@@ -240,10 +243,11 @@ def idp_authenticate_user(payload: dict | None, user: dict[str, str] | None = No
 
     hardware_context = correlate_dhcp_ip(source_ip)
     suspicious_ip = source_ip in DHCP_LEASES and DHCP_LEASES[source_ip].get("hostname") == "Unknown-Kali-Linux"
-    suspicious_event = any(
-        event["source_ip"] == source_ip or event["hostname"] == hardware_context.get("hostname")
-        for event in SIEM_EVENT_STORE
-    )
+    with get_db() as db:
+        suspicious_event = db.execute(
+            "SELECT 1 FROM siem_events WHERE source_ip = ? OR hostname = ? LIMIT 1",
+            (source_ip, hardware_context.get("hostname")),
+        ).fetchone() is not None
 
     if suspicious_ip or suspicious_event:
         return {
@@ -434,6 +438,18 @@ def initialize_database():
                 blocked_at TEXT NOT NULL,
                 expires_at TEXT
             );
+            CREATE TABLE IF NOT EXISTS siem_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                source_ip TEXT NOT NULL,
+                source_host TEXT NOT NULL,
+                mac_address TEXT NOT NULL,
+                hostname TEXT NOT NULL,
+                event TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                details TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_siem_events_timestamp ON siem_events (id DESC);
             """
         )
         user_columns = {row["name"] for row in db.execute("PRAGMA table_info(users)").fetchall()}
@@ -497,14 +513,12 @@ async def security_guard(request: Request, call_next):
     if blocked and ip_address not in {"127.0.0.1", "::1", "localhost"}:
         return JSONResponse(status_code=403, content={"detail": "Access denied by CyberGuard security controls", "containment": "internal sinkhole preview"})
     suspicious = any(marker in path for marker in ("/.env", "/.git", "/wp-admin", "/wp-login", "/etc/passwd", "/debug", "/phpmyadmin"))
-    attempts = SECURITY_EVENT_WINDOW.setdefault(ip_address, [])
-    SECURITY_EVENT_WINDOW[ip_address] = [stamp for stamp in attempts if now - stamp < 60]
     if suspicious:
-        SECURITY_EVENT_WINDOW[ip_address].append(now)
+        attempts = EPHEMERAL_STATE.record_window_event(f"security:{ip_address}", now, 60)
         record_security_event("suspicious-code-or-admin-probe", ip_address, request.url.path, "Protected path probing detected.")
-        if len(SECURITY_EVENT_WINDOW[ip_address]) >= 3 and ip_address not in {"127.0.0.1", "::1", "localhost"}:
+        if attempts >= 3 and ip_address not in {"127.0.0.1", "::1", "localhost"}:
             with get_db() as db:
-                db.execute("INSERT OR REPLACE INTO blocked_ips (ip_address, reason, blocked_at) VALUES (?, ?, ?)", (ip_address, "Repeated protected-path probing", datetime.now(timezone.utc).isoformat()))
+                db.execute("INSERT INTO blocked_ips (ip_address, reason, blocked_at) VALUES (?, ?, ?) ON CONFLICT(ip_address) DO UPDATE SET reason = excluded.reason, blocked_at = excluded.blocked_at", (ip_address, "Repeated protected-path probing", datetime.now(timezone.utc).isoformat()))
             return JSONResponse(status_code=403, content={"detail": "IP blocked by CyberGuard", "containment": "internal sinkhole preview"})
     return await call_next(request)
 
@@ -556,22 +570,22 @@ def send_email(recipient: str, subject: str, details: str):
 def issue_admin_otp(username: str, recipient: str) -> dict[str, str]:
     otp = f"{secrets.randbelow(1_000_000):06d}"
     challenge_id = secrets.token_urlsafe(24)
-    OTP_CHALLENGES[challenge_id] = {
+    EPHEMERAL_STATE.set(f"otp:{challenge_id}", {
         "username": username,
         "otp_hash": hashlib.sha256(otp.encode("utf-8")).hexdigest(),
         "expires_at": time.time() + OTP_TTL_SECONDS,
         "attempts": 0,
-    }
+    }, ttl_seconds=OTP_TTL_SECONDS)
     sent = send_email(
         recipient,
         "CyberGuard administrator verification code",
         f"Your CyberGuard administrator verification code is {otp}. It expires in {OTP_TTL_SECONDS // 60} minutes. If you did not request this, ignore this message.",
     )
     if sent is None:
-        OTP_CHALLENGES.pop(challenge_id, None)
+        EPHEMERAL_STATE.pop(f"otp:{challenge_id}")
         raise HTTPException(status_code=503, detail="OTP email is not configured. Add CYBERGUARD_SMTP_HOST, CYBERGUARD_SMTP_USER, and CYBERGUARD_SMTP_PASSWORD to cyberguard-backend/.env.")
     if not sent:
-        OTP_CHALLENGES.pop(challenge_id, None)
+        EPHEMERAL_STATE.pop(f"otp:{challenge_id}")
         raise HTTPException(status_code=503, detail="OTP email could not be delivered. Check the SMTP host, port, username, and app password.")
     return {"challenge_id": challenge_id, "masked_email": f"{recipient[:2]}***@{recipient.split('@', 1)[-1]}"}
 
@@ -601,7 +615,7 @@ def passkey_options(username: str) -> dict[str, Any]:
             user_display_name="CyberGuard Administrator",
         )
         kind = "registration"
-    PASSKEY_CHALLENGES[challenge_id] = {"username": username, "kind": kind, "challenge": options.challenge, "expires_at": time.time() + 300}
+    EPHEMERAL_STATE.set(f"passkey:{challenge_id}", {"username": username, "kind": kind, "challenge": options.challenge, "expires_at": time.time() + 300}, ttl_seconds=300)
     return {"challenge_id": challenge_id, "kind": kind, "options": json.loads(options_to_json(options))}
 
 
@@ -766,7 +780,7 @@ def persist_cyberguard_x(incident_id: int, incident: dict):
     campaign = correlate_incident(incident, [item for item in related if item["id"] != incident_id])
     with get_db() as db:
         now = datetime.now(timezone.utc).isoformat()
-        db.execute("INSERT OR REPLACE INTO threat_fingerprints (incident_id, fingerprint, genome_json, created_at) VALUES (?, ?, ?, ?)", (incident_id, genome["fingerprint"], serialize_genome(genome), now))
+        db.execute("INSERT INTO threat_fingerprints (incident_id, fingerprint, genome_json, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(incident_id) DO UPDATE SET fingerprint = excluded.fingerprint, genome_json = excluded.genome_json, created_at = excluded.created_at", (incident_id, genome["fingerprint"], serialize_genome(genome), now))
         db.execute("INSERT OR IGNORE INTO campaigns (campaign_id, confidence, stage, created_at) VALUES (?, ?, ?, ?)", (campaign["campaign_id"], campaign["confidence"], campaign["stage"], now))
         for match in campaign["related_incidents"]:
             db.execute("INSERT OR IGNORE INTO campaign_incidents (campaign_id, incident_id, score) VALUES (?, ?, ?)", (campaign["campaign_id"], match["incident_id"], match["score"]))
@@ -854,7 +868,7 @@ def login(request: LoginRequest):
 
 @app.post("/api/v1/auth/passkey")
 def verify_passkey(request: PasskeyCredentialRequest):
-    challenge = PASSKEY_CHALLENGES.pop(request.challenge_id, None)
+    challenge = EPHEMERAL_STATE.pop(f"passkey:{request.challenge_id}")
     if not challenge or challenge["expires_at"] < time.time():
         raise HTTPException(status_code=401, detail="Passkey request expired. Authenticate again.")
     credential = request.credential
@@ -898,19 +912,23 @@ def verify_passkey(request: PasskeyCredentialRequest):
 
 @app.post("/api/v1/auth/verify-otp")
 def verify_admin_otp(request: OtpVerificationRequest):
-    challenge = OTP_CHALLENGES.get(request.challenge_id)
+    challenge_key = f"otp:{request.challenge_id}"
+    challenge = EPHEMERAL_STATE.get(challenge_key)
     if not challenge or challenge["expires_at"] < time.time():
-        OTP_CHALLENGES.pop(request.challenge_id, None)
+        EPHEMERAL_STATE.pop(challenge_key)
         raise HTTPException(status_code=401, detail="OTP expired. Authenticate again to request a new code.")
-    challenge["attempts"] += 1
-    if challenge["attempts"] > OTP_MAX_ATTEMPTS:
-        OTP_CHALLENGES.pop(request.challenge_id, None)
+    attempts = EPHEMERAL_STATE.increment_field(challenge_key, "attempts")
+    if attempts is None:
+        raise HTTPException(status_code=401, detail="OTP expired. Authenticate again to request a new code.")
+    if attempts > OTP_MAX_ATTEMPTS:
+        EPHEMERAL_STATE.pop(challenge_key)
         raise HTTPException(status_code=429, detail="Too many invalid OTP attempts. Authenticate again to request a new code.")
     if not secrets.compare_digest(challenge["otp_hash"], hashlib.sha256(request.otp.strip().encode("utf-8")).hexdigest()):
         raise HTTPException(status_code=401, detail="Invalid OTP.")
+    if not EPHEMERAL_STATE.pop_if(challenge_key, "otp_hash", challenge["otp_hash"]):
+        raise HTTPException(status_code=401, detail="OTP expired or was already used. Authenticate again.")
     with get_db() as db:
         user = db.execute("SELECT username, role FROM users WHERE username = ? AND role = 'head_admin'", (challenge["username"],)).fetchone()
-    OTP_CHALLENGES.pop(request.challenge_id, None)
     if not user:
         raise HTTPException(status_code=401, detail="Administrator account is unavailable.")
     return issue_session(user)
@@ -974,6 +992,7 @@ async def analyze_file(category: str = Form(...), file: UploadFile = File(...), 
         assessment["indicators"].extend(email_result["indicators"])
         assessment["xai_explanation"] += " " + " ".join(email_result["reasons"])
         assessment["sender_authenticity"] = email_result["metadata"]
+        assessment["sender_identity_verification"] = email_result["identity_verification"]
     if not is_text and not email_result:
         media_result = analyze_media(content, file.content_type or "", filename, category)
         assessment["risk_score"] = max(assessment["risk_score"], media_result["score"])
@@ -1587,7 +1606,7 @@ def security_events(user: dict[str, str] = Depends(admin_user)):
 @app.post("/api/v1/admin/security-events/block")
 def block_ip(ip_address: str = Query(...), reason: str = Query("Head-admin containment"), user: dict[str, str] = Depends(head_admin_user)):
     with get_db() as db:
-        db.execute("INSERT OR REPLACE INTO blocked_ips (ip_address, reason, blocked_at) VALUES (?, ?, ?)", (ip_address, reason, datetime.now(timezone.utc).isoformat()))
+        db.execute("INSERT INTO blocked_ips (ip_address, reason, blocked_at) VALUES (?, ?, ?) ON CONFLICT(ip_address) DO UPDATE SET reason = excluded.reason, blocked_at = excluded.blocked_at", (ip_address, reason, datetime.now(timezone.utc).isoformat()))
     record_security_event("manual-ip-block", ip_address, "admin-console", reason)
     return {"status": "blocked", "ip_address": ip_address}
 
@@ -1605,6 +1624,8 @@ def cloudflare_block(ip_address: str = Query(...), reason: str = Query("CyberGua
         raise HTTPException(status_code=502, detail=f"Cloudflare WAF request failed: {error}") from error
     except RuntimeError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     if result.get("status") == "blocked":
         record_security_event("cloudflare-waf-ip-block", ip_address, "cloudflare", reason)
     return result
@@ -1633,6 +1654,7 @@ def dashboard_metrics(user: dict[str, str] = Depends(current_user)):
         active = db.execute("SELECT COUNT(*) AS count FROM incidents WHERE status NOT IN ('Closed', 'Mitigated')").fetchone()["count"]
         safe = db.execute("SELECT COUNT(*) AS count FROM incidents WHERE risk_level = 'Safe'").fetchone()["count"]
         rows = db.execute("SELECT category, risk_level, COUNT(*) AS count FROM incidents GROUP BY category, risk_level").fetchall()
+        target_rows = db.execute("SELECT payload, risk_score FROM incidents ORDER BY id DESC LIMIT 500").fetchall()
     by_category = {}
     by_level = {}
     for row in rows:
@@ -1650,7 +1672,54 @@ def dashboard_metrics(user: dict[str, str] = Depends(current_user)):
         "atoCount": by_category.get("ato", 0) + by_category.get("auth_logs", 0),
         "byCategory": by_category,
         "byLevel": by_level,
+        "topTargets": summarize_dashboard_targets([dict(row) for row in target_rows]),
     }
+
+
+def summarize_dashboard_targets(incidents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    targets: dict[tuple[str, str], dict[str, Any]] = {}
+    for incident in incidents:
+        risk_score = int(incident.get("risk_score", 0) or 0)
+        incident_targets = set()
+        for ioc in extract_iocs(str(incident.get("payload", ""))):
+            kind = ioc["type"]
+            if kind == "url":
+                value = str(ioc.get("indicator", "")).lower()
+                label = value
+                target_type = "service"
+            elif kind == "email":
+                value = str(ioc.get("value", "")).lower()
+                local, _, domain = value.partition("@")
+                if not local or not domain:
+                    continue
+                label = f"{local[:1]}***@{domain}"
+                target_type = "user"
+            elif kind == "ip":
+                value = str(ioc.get("value", ""))
+                octets = value.split(".")
+                label = ".".join(octets[:3] + ["x"]) if len(octets) == 4 else "Unrecognized IP"
+                target_type = "network"
+            else:
+                continue
+            key = (target_type, value)
+            if key in incident_targets:
+                continue
+            incident_targets.add(key)
+            target = targets.setdefault(key, {
+                "label": label,
+                "type": target_type,
+                "incident_count": 0,
+                "high_risk_count": 0,
+                "max_risk_score": 0,
+            })
+            target["incident_count"] += 1
+            target["high_risk_count"] += int(risk_score >= 60)
+            target["max_risk_score"] = max(target["max_risk_score"], risk_score)
+    return sorted(
+        targets.values(),
+        key=lambda target: (target["incident_count"], target["high_risk_count"], target["max_risk_score"]),
+        reverse=True,
+    )[:8]
 
 
 @app.get("/api/v1/dashboard/timeline")
@@ -1698,7 +1767,7 @@ def system_health(user: dict[str, str] = Depends(current_user)):
             evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             evaluation = {}
-    return {"status": "healthy", "uptime_seconds": round(uptime), "api_latency_ms": round((time.perf_counter() - request_started) * 1000, 2), "events_stored": event_count, "events_per_minute": recent_count, "model_loaded": model_loaded, "model_confidence": "pretrained-media" if media_status.get("mode") == "pretrained" else "trained-fallback", "media_models": media_status, "threat_accuracy": round(float(evaluation.get("f1", 0)) * 100, 1), "evaluation_backend": evaluation.get("backend", "baseline"), "database": "sqlite", "response_integrations": bool(os.getenv("CYBERGUARD_RESPONSE_WEBHOOK_URL"))}
+    return {"status": "healthy", "uptime_seconds": round(uptime), "api_latency_ms": round((time.perf_counter() - request_started) * 1000, 2), "events_stored": event_count, "events_per_minute": recent_count, "model_loaded": model_loaded, "model_confidence": "pretrained-media" if media_status.get("mode") == "pretrained" else "trained-fallback", "media_models": media_status, "threat_accuracy": round(float(evaluation.get("f1", 0)) * 100, 1), "evaluation_backend": evaluation.get("backend", "baseline"), "database": "postgresql" if os.getenv("CYBERGUARD_DATABASE_URL", "").strip().startswith(("postgresql://", "postgres://")) else "sqlite", "ephemeral_state": EPHEMERAL_STATE.backend, "response_integrations": bool(os.getenv("CYBERGUARD_RESPONSE_WEBHOOK_URL"))}
 
 
 @app.get("/api/v1/models/status")
@@ -1741,7 +1810,50 @@ def integration_status(user: dict[str, str] = Depends(current_user)):
         {"name": "Response Webhook", "configured": bool(os.getenv("CYBERGUARD_RESPONSE_WEBHOOK_URL"))},
         {"name": "Alert Webhook", "configured": bool(os.getenv("CYBERGUARD_ALERT_WEBHOOK_URL"))},
         {"name": "SIEM Ingestion", "configured": bool(os.getenv("CYBERGUARD_SIEM_URL"))},
-    ], "providers": provider_integration_status()}
+    ], "providers": provider_integration_status(), "production_actions": production_provider_status()}
+
+
+def run_production_integration(action: str, operation, user: dict[str, str]):
+    try:
+        result = operation()
+    except IntegrationNotConfigured as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except requests.RequestException as error:
+        raise HTTPException(status_code=502, detail=f"{action} provider request failed: {error}") from error
+    except ValueError as error:
+        raise HTTPException(status_code=502, detail=f"{action} provider returned an invalid response: {error}") from error
+    resource = str(result.get("provider", "provider"))
+    write_audit(user, f"integration_{action}", resource, f"status:{result.get('status', 'unknown')}")
+    return result
+
+
+@app.post("/api/v1/integrations/tickets")
+def create_provider_ticket_route(request: ProviderTicketRequest, user: dict[str, str] = Depends(head_admin_user)):
+    return run_production_integration(
+        "ticket_create",
+        lambda: create_provider_ticket(request.model_dump() if hasattr(request, "model_dump") else request.dict()),
+        user,
+    )
+
+
+@app.post("/api/v1/integrations/identity/disable")
+def disable_provider_identity_route(request: ProviderIdentityDisableRequest, user: dict[str, str] = Depends(head_admin_user)):
+    if not request.confirmed:
+        raise HTTPException(status_code=409, detail="Explicit confirmation is required to disable an identity.")
+    identity = request.identity.strip()
+    if not identity:
+        raise HTTPException(status_code=400, detail="Identity must not be empty.")
+    return run_production_integration("identity_disable", lambda: disable_provider_identity(identity), user)
+
+
+@app.post("/api/v1/integrations/endpoint/isolate")
+def isolate_provider_endpoint_route(request: ProviderEndpointIsolationRequest, user: dict[str, str] = Depends(head_admin_user)):
+    if not request.confirmed:
+        raise HTTPException(status_code=409, detail="Explicit confirmation is required to isolate an endpoint.")
+    endpoint_id = request.endpoint_id.strip()
+    if not endpoint_id:
+        raise HTTPException(status_code=400, detail="Endpoint ID must not be empty.")
+    return run_production_integration("endpoint_isolate", lambda: isolate_provider_endpoint(endpoint_id), user)
 
 
 @app.post("/api/v1/integrations/siem/ingest")
@@ -1768,7 +1880,9 @@ def siem_ingest_event_route_json(payload: dict, user: dict[str, str] = Depends(c
 @app.post("/api/v1/siem/demo-seed")
 def siem_demo_seed(user: dict[str, str] = Depends(current_user)):
     """Seed safe, clearly synthetic telemetry so the live SOC view is demonstrable."""
-    if SIEM_EVENT_STORE:
+    with get_db() as db:
+        existing_events = db.execute("SELECT COUNT(*) AS count FROM siem_events").fetchone()["count"]
+    if existing_events:
         return read_siem_events(user) | {"seeded": False}
     seed_events = [
         {"source_ip": "192.168.1.99", "event_type": "suspicious_login", "severity": "CRITICAL", "details": "Synthetic demo event: unauthorized admin access from an untrusted host.", "source_host": "Unknown-Kali-Linux"},

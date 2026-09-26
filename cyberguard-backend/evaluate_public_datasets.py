@@ -6,9 +6,11 @@ The script never downloads a dataset implicitly; pass a local, licensed snapshot
 import argparse
 import csv
 import json
+import math
 import time
 import re
 from pathlib import Path
+from statistics import median
 from typing import Any
 
 try:
@@ -61,21 +63,30 @@ def load(path: Path):
     return texts, labels
 
 
-def evaluate(path: Path, seed: int = 42) -> dict[str, Any]:
+def evaluate(path: Path, seed: int = 42, threshold: float = 50) -> dict[str, Any]:
+    if not 0 <= threshold <= 100:
+        raise ValueError("Threshold must be between 0 and 100")
     texts, labels = load(path)
     if SKLEARN_AVAILABLE:
         train_texts, test_texts, train_labels, test_labels = train_test_split(texts, labels, test_size=0.25, random_state=seed, stratify=labels)
     else:
         train_texts, test_texts, train_labels, test_labels = _fallback_split(texts, labels, seed)
-    start = time.perf_counter()
+    fit_started = time.perf_counter()
     if SKLEARN_AVAILABLE:
         model = Pipeline([("tfidf", TfidfVectorizer(ngram_range=(1, 2))), ("classifier", LogisticRegression(max_iter=1000, random_state=seed))])
         model.fit(train_texts, train_labels)
-        probabilities = model.predict_proba(test_texts)[:, 1]
-    else:
-        probabilities = _fallback_predict(train_texts, train_labels, test_texts)
-    latency_ms = (time.perf_counter() - start) * 1000 / max(len(test_texts), 1)
-    predictions = [int(probability >= 0.5) for probability in probabilities]
+    fit_time_ms = (time.perf_counter() - fit_started) * 1000
+    probabilities = []
+    sample_latencies = []
+    for text in test_texts:
+        inference_started = time.perf_counter()
+        if SKLEARN_AVAILABLE:
+            probability = float(model.predict_proba([text])[0][1])
+        else:
+            probability = float(_fallback_predict(train_texts, train_labels, [text])[0])
+        sample_latencies.append((time.perf_counter() - inference_started) * 1000)
+        probabilities.append(probability)
+    predictions = [int(probability >= threshold / 100) for probability in probabilities]
     tn = sum(actual == 0 and predicted == 0 for actual, predicted in zip(test_labels, predictions))
     fp = sum(actual == 0 and predicted == 1 for actual, predicted in zip(test_labels, predictions))
     fn = sum(actual == 1 and predicted == 0 for actual, predicted in zip(test_labels, predictions))
@@ -83,18 +94,20 @@ def evaluate(path: Path, seed: int = 42) -> dict[str, Any]:
     precision = tp / max(tp + fp, 1)
     recall = tp / max(tp + fn, 1)
     f1 = 2 * precision * recall / max(precision + recall, 1e-9)
-    ranked = sorted(zip(probabilities, test_labels), reverse=True)
     positives = sum(test_labels)
+    ranked = sorted(zip(probabilities, test_labels), reverse=True)
     average_precision = sum((index + 1) for index, (_, label) in enumerate(ranked) if label) / max(positives * len(ranked), 1)
-    return {"dataset": str(path), "samples": len(texts), "holdout_samples": len(test_labels), "backend": "scikit-learn" if SKLEARN_AVAILABLE else "stdlib-fallback", "confusion_matrix": {"tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp)}, "precision": precision, "recall": recall, "f1": f1, "false_positive_rate": fp / max(fp + tn, 1), "roc_auc": None if not SKLEARN_AVAILABLE else float(roc_auc_score(test_labels, probabilities)), "pr_auc": float(average_precision if not SKLEARN_AVAILABLE else average_precision_score(test_labels, probabilities)), "median_latency_ms_per_sample": latency_ms, "p95_latency_ms_per_sample": latency_ms}
+    sorted_latencies = sorted(sample_latencies)
+    return {"dataset": str(path), "samples": len(texts), "holdout_samples": len(test_labels), "backend": "scikit-learn" if SKLEARN_AVAILABLE else "stdlib-fallback", "decision_threshold": threshold, "confusion_matrix": {"tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp)}, "precision": precision, "recall": recall, "f1": f1, "false_positive_rate": fp / max(fp + tn, 1), "roc_auc": None if not SKLEARN_AVAILABLE else float(roc_auc_score(test_labels, probabilities)), "pr_auc": float(average_precision if not SKLEARN_AVAILABLE else average_precision_score(test_labels, probabilities)), "fit_time_ms": fit_time_ms, "median_latency_ms_per_sample": median(sample_latencies), "p95_latency_ms_per_sample": sorted_latencies[max(0, math.ceil(len(sorted_latencies) * 0.95) - 1)]}
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate an authorised CyberGuard text dataset")
     parser.add_argument("--data", type=Path, required=True, help="Licensed local CSV with text,label columns")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--threshold", type=float, default=50, help="Suspicious-class probability cutoff from 0 to 100")
     args = parser.parse_args()
-    result = evaluate(args.data)
+    result = evaluate(args.data, threshold=args.threshold)
     serialized = json.dumps(result, indent=2)
     print(serialized)
     if args.output:

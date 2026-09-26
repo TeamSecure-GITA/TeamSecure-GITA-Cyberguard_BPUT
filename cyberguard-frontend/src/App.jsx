@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import MetricCards from './components/MetricCards';
+import MostTargeted from './components/MostTargeted';
 import ThreatChart from './components/ThreatChart';
 import IncidentTable from './components/IncidentTable';
 import ThreatInspector from './components/ThreatInspector';
@@ -301,6 +302,7 @@ export default function App() {
                 <div className="hero-status"><span className="hero-status-label">Posture</span><strong>{health?.status === 'healthy' ? 'Operational' : 'Checking'}</strong><span>Updated live from the AI engine</span></div>
               </section>
               <MetricCards metrics={metrics} />
+              <MostTargeted targets={metrics?.topTargets} />
               <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
                 <div className="xl:col-span-2"><ThreatCards metrics={metrics} /></div>
                 <RiskGauge metrics={metrics} />

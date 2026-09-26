@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import os
 from typing import Any
 
@@ -18,18 +19,25 @@ def configuration() -> dict[str, Any]:
 
 
 def block_ip(ip_address: str, reason: str) -> dict[str, Any]:
+    try:
+        normalized_ip = str(ipaddress.ip_address(ip_address.strip()))
+    except (AttributeError, ValueError) as error:
+        raise ValueError("A valid IPv4 or IPv6 address is required") from error
     token = os.getenv("CLOUDFLARE_API_TOKEN")
     zone_id = os.getenv("CLOUDFLARE_ZONE_ID")
     if not token or not zone_id:
-        return {"status": "not_configured", "configured": False, "ip_address": ip_address, "message": "Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ZONE_ID to enable Cloudflare blocking."}
+        return {"status": "not_configured", "configured": False, "ip_address": normalized_ip, "message": "Set CLOUDFLARE_API_TOKEN and CLOUDFLARE_ZONE_ID to enable Cloudflare blocking."}
     response = requests.post(
         f"{CLOUDFLARE_API}/zones/{zone_id}/firewall/access_rules/rules",
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        json={"mode": "block", "configuration": {"target": "ip", "value": ip_address}, "notes": reason[:500]},
+        json={"mode": "block", "configuration": {"target": "ip", "value": normalized_ip}, "notes": reason[:500]},
         timeout=10,
     )
     response.raise_for_status()
-    payload = response.json()
+    try:
+        payload = response.json()
+    except ValueError as error:
+        raise RuntimeError("Cloudflare returned an invalid JSON response") from error
     if not payload.get("success"):
         raise RuntimeError(payload.get("errors") or "Cloudflare rejected the IP block")
-    return {"status": "blocked", "configured": True, "ip_address": ip_address, "provider": "cloudflare-waf", "result": payload.get("result")}
+    return {"status": "blocked", "configured": True, "ip_address": normalized_ip, "provider": "cloudflare-waf", "result": payload.get("result")}

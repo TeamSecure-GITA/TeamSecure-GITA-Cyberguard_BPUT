@@ -17,6 +17,10 @@ except ImportError:
 
 MODEL_PATH = Path(__file__).parent / "models" / "threat_text_model.joblib"
 FALLBACK_MODEL_PATH = Path(__file__).parent / "models" / "threat_text_model_fallback.json"
+try:
+    TEXT_MODEL_THRESHOLD = max(0.0, min(100.0, float(os.getenv("CYBERGUARD_TEXT_MODEL_THRESHOLD", "50"))))
+except ValueError:
+    TEXT_MODEL_THRESHOLD = 50.0
 TEXT_MODEL = None
 FALLBACK_TEXT_MODEL = None
 if os.getenv("CYBERGUARD_LOAD_TEXT_MODEL", "true").lower() in {"1", "true", "yes"} and joblib and MODEL_PATH.exists():
@@ -440,7 +444,7 @@ def evaluate_threat_payload(category: str, payload: str) -> dict:
     model_score, model_indicator = model_signal(payload)
     if model_indicator:
         indicators.append(model_indicator)
-        if model_score >= 60:
+        if model_score >= TEXT_MODEL_THRESHOLD:
             score = max(score, model_score)
             reasons.append(f"Trained text classifier marked the payload as suspicious with {model_score}% confidence.")
         

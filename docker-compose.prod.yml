@@ -9,16 +9,29 @@ services:
       CYBERGUARD_JWT_SECRET: ${CYBERGUARD_JWT_SECRET:?Set CYBERGUARD_JWT_SECRET}
       CYBERGUARD_FRONTEND_ORIGINS: ${CYBERGUARD_FRONTEND_ORIGINS:?Set CYBERGUARD_FRONTEND_ORIGINS}
       CYBERGUARD_DB_PATH: /data/cyberguard.db
+      CYBERGUARD_REDIS_URL: redis://redis:6379/0
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
       - cyberguard-data:/data
       - cyberguard-backups:/backups
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/')"]
       interval: 30s
       timeout: 5s
       retries: 3
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   worker:
     build: ./cyberguard-backend

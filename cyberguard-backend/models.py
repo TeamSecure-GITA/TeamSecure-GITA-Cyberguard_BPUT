@@ -23,6 +23,19 @@ class ResponseExecutionRequest(BaseModel):
     action_id: str
     target: str
 
+class ProviderTicketRequest(BaseModel):
+    summary: str
+    description: str = ""
+    urgency: int = 2
+
+class ProviderIdentityDisableRequest(BaseModel):
+    identity: str
+    confirmed: bool = False
+
+class ProviderEndpointIsolationRequest(BaseModel):
+    endpoint_id: str
+    confirmed: bool = False
+
 class LoginRequest(BaseModel):
     username: str
     password: str

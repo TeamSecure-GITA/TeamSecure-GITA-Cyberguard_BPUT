@@ -37,6 +37,7 @@ class PostgresConnection:
             from psycopg.rows import dict_row
         except ImportError as error:
             raise RuntimeError("PostgreSQL requires psycopg[binary]; install backend requirements before setting CYBERGUARD_DATABASE_URL") from error
+        self._integrity_error = psycopg.IntegrityError
         self._connection = psycopg.connect(url, row_factory=dict_row)
 
     def __enter__(self):
@@ -58,14 +59,20 @@ class PostgresConnection:
         cursor = PostgresCursor(self._connection.cursor())
         if normalized.lstrip().upper().startswith("INSERT INTO ") and "RETURNING" not in normalized.upper() and re.search(r"INSERT INTO (incidents|access_requests)\b", normalized, re.IGNORECASE):
             normalized += " RETURNING id"
-        cursor._cursor.execute(normalized, parameters)
+        try:
+            cursor._cursor.execute(normalized, parameters)
+        except self._integrity_error as error:
+            raise sqlite3.IntegrityError(str(error)) from error
         if normalized.upper().endswith("RETURNING ID"):
             row = cursor._cursor.fetchone()
             cursor.lastrowid = row["id"] if row else None
         return cursor
 
     def executemany(self, statement: str, parameters):
-        self._connection.cursor().executemany(_postgresql_statement(statement), parameters)
+        try:
+            self._connection.cursor().executemany(_postgresql_statement(statement), parameters)
+        except self._integrity_error as error:
+            raise sqlite3.IntegrityError(str(error)) from error
 
     def executescript(self, script: str):
         for statement in script.split(";"):
@@ -74,11 +81,12 @@ class PostgresConnection:
 
 
 def _postgresql_statement(statement: str) -> str:
+    ignore_conflicts = bool(re.match(r"^\s*INSERT\s+OR\s+IGNORE\s+INTO\b", statement, re.IGNORECASE))
     converted = statement.replace("?", "%s")
     converted = re.sub(r"INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY", converted, flags=re.IGNORECASE)
     converted = re.sub(r"INSERT\s+OR\s+IGNORE\s+INTO", "INSERT INTO", converted, flags=re.IGNORECASE)
-    if re.match(r"^\s*INSERT INTO", converted, re.IGNORECASE) and "ON CONFLICT" not in converted.upper():
-        converted = converted.rstrip() + " ON CONFLICT DO NOTHING"
+    if ignore_conflicts and "ON CONFLICT" not in converted.upper():
+        converted = converted.rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
     return converted
 
 

@@ -352,6 +352,13 @@ export default function ThreatInspector({ accessToken }) {
           </div>
           {analysisResult.qr_payload && <div className="text-xs text-amber-200 bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">Decoded QR destination: <strong>{analysisResult.qr_payload}</strong></div>}
           {analysisResult.sender_authenticity && <div className="text-xs text-slate-300 bg-slate-800/40 border border-slate-700 rounded-lg p-3">Sender authenticity: From {analysisResult.sender_authenticity.from || 'unknown'} · Reply-To {analysisResult.sender_authenticity.reply_to || 'none'} · Return-Path {analysisResult.sender_authenticity.return_path || 'none'}</div>}
+          {analysisResult.sender_identity_verification && <div className="text-xs text-slate-200 bg-slate-800/40 border border-slate-700 rounded-lg p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <strong>Sender identity: {analysisResult.sender_identity_verification.status.replaceAll('_', ' ')}</strong>
+              <span className={analysisResult.sender_identity_verification.status === 'verified' ? 'text-emerald-300' : 'text-amber-300'}>{analysisResult.sender_identity_verification.confidence}% confidence</span>
+            </div>
+            <div className="mt-1 text-slate-400">From domain: {analysisResult.sender_identity_verification.from_domain || 'unavailable'} · Authentication server: {analysisResult.sender_identity_verification.authserv_id || 'unreported'} ({analysisResult.sender_identity_verification.authentication_trusted ? 'trusted' : 'untrusted'})</div>
+          </div>}
           <div className="pt-2">
             <span className="text-[10px] font-bold text-slate-400 uppercase">Extracted Threat Intelligence</span>
             <div className="mt-2 flex flex-wrap gap-2">

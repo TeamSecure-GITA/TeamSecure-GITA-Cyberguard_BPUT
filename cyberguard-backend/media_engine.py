@@ -5,6 +5,8 @@ import tempfile
 import wave
 from typing import Any
 
+AUDIO_SUFFIXES = {"wav", "flac", "ogg", "oga", "aiff", "aif", "mp3", "m4a", "aac"}
+
 try:
     import numpy as np
     from sklearn.ensemble import IsolationForest
@@ -74,16 +76,26 @@ def analyze_image(content: bytes) -> dict[str, Any]:
 
 def analyze_audio(content: bytes) -> dict[str, Any]:
     from deepfake_models import analyze_pretrained
-    with wave.open(io.BytesIO(content), "rb") as audio:
-        frame_count = audio.getnframes()
-        sample_width = audio.getsampwidth()
-        sample_rate = audio.getframerate()
-        frames = audio.readframes(min(frame_count, sample_rate * 10))
-    if np is not None and sample_width in {1, 2, 4}:
-        dtype = {1: np.int8, 2: np.int16, 4: np.int32}[sample_width]
-        samples_array = np.frombuffer(frames, dtype=dtype).astype(float)
-    else:
-        samples_array = np.array([int.from_bytes(frames[index:index + sample_width], "little", signed=True) for index in range(0, len(frames), sample_width)], dtype=float) if sample_width else np.array([])
+    try:
+        import soundfile as sf
+        audio_info = sf.info(io.BytesIO(content))
+        frame_count = int(audio_info.frames)
+        sample_rate = int(audio_info.samplerate)
+        frames, _ = sf.read(io.BytesIO(content), frames=min(frame_count, sample_rate * 10), dtype="float32", always_2d=True)
+        samples_array = frames.mean(axis=1).astype(float) if np is not None else [sum(frame) / len(frame) for frame in frames]
+    except (ImportError, RuntimeError, ValueError):
+        with wave.open(io.BytesIO(content), "rb") as audio:
+            frame_count = audio.getnframes()
+            sample_width = audio.getsampwidth()
+            sample_rate = audio.getframerate()
+            frames = audio.readframes(min(frame_count, sample_rate * 10))
+        if np is not None and sample_width in {1, 2, 4}:
+            dtype = {1: np.uint8, 2: np.int16, 4: np.int32}[sample_width]
+            samples_array = np.frombuffer(frames, dtype=dtype).astype(float)
+            if sample_width == 1:
+                samples_array -= 128
+        else:
+            samples_array = np.array([int.from_bytes(frames[index:index + sample_width], "little", signed=True) for index in range(0, len(frames), sample_width)], dtype=float) if sample_width else np.array([])
     samples = samples_array.tolist()
     if not samples:
         return {"score": 50, "reasons": ["Audio contained no readable waveform samples."], "indicators": [], "method": "audio-statistics"}
@@ -179,7 +191,7 @@ def analyze_media(content: bytes, content_type: str, filename: str, category: st
                 return qr_result
         if content_type.startswith("image/") or suffix in {"png", "jpg", "jpeg", "webp"}:
             return analyze_image(content)
-        if content_type.startswith("audio/") or suffix in {"wav"}:
+        if content_type.startswith("audio/") or suffix in AUDIO_SUFFIXES:
             return analyze_audio(content)
         if content_type.startswith("video/") or suffix in {"mp4", "avi", "mov"}:
             return analyze_video(content)
