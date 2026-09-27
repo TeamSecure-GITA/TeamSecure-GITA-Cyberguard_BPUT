@@ -48,11 +48,13 @@ from typing import Any, Optional
 
 import requests
 import jwt
+
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from webauthn import generate_authentication_options, generate_registration_options, options_to_json, verify_authentication_response, verify_registration_response
 from webauthn.helpers.structs import PublicKeyCredentialDescriptor, UserVerificationRequirement
+
 from database import connect_database
 from ephemeral_store import EphemeralStore
 
@@ -2027,4 +2029,9 @@ def roadmap_compliance_diff_sync(user: dict[str, str] = Depends(head_admin_user)
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "8000"))
+    reload_env = os.getenv("RELOAD")
+    is_prod = bool(os.getenv("RENDER") or os.getenv("CYBERGUARD_ENV") == "production" or "PORT" in os.environ)
+    reload = reload_env.lower() in ("true", "1") if reload_env is not None else not is_prod
+    uvicorn.run("main:app", host=host, port=port, reload=reload)

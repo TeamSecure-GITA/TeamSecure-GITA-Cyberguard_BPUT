@@ -42,5 +42,10 @@ if os.path.exists(backend_dir):
 
 if __name__ == "__main__":
     import uvicorn
-    print("[*] Starting CyberGuard AI Backend on http://127.0.0.1:8000 ...")
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "8000"))
+    reload_env = os.getenv("RELOAD")
+    is_prod = bool(os.getenv("RENDER") or os.getenv("CYBERGUARD_ENV") == "production" or "PORT" in os.environ)
+    reload = reload_env.lower() in ("true", "1") if reload_env is not None else not is_prod
+    print(f"[*] Starting CyberGuard AI Backend on http://{host}:{port} (reload={reload}) ...")
+    uvicorn.run("main:app", host=host, port=port, reload=reload)
