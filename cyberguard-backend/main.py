@@ -104,7 +104,12 @@ if not JWT_SECRET:
         raise RuntimeError("CYBERGUARD_JWT_SECRET must be set to a unique value in production")
     JWT_SECRET = secrets.token_urlsafe(48)
 SECURITY_OWNER_EMAIL = os.getenv("CYBERGUARD_SECURITY_OWNER_EMAIL", "teamsecure.project@gmail.com")
-PUBLIC_APP_URL = os.getenv("CYBERGUARD_PUBLIC_APP_URL", "http://127.0.0.1:5173")
+PUBLIC_APP_URL = os.getenv(
+    "CYBERGUARD_PUBLIC_APP_URL",
+    "https://teamsecure-gita-cyberguard.vercel.app"
+    if os.getenv("RENDER") or os.getenv("CYBERGUARD_ENV") == "production"
+    else "http://127.0.0.1:5173",
+)
 ACCESS_REQUEST_TTL_HOURS = max(1, int(os.getenv("CYBERGUARD_ACCESS_REQUEST_TTL_HOURS", "24")))
 HEAD_ADMIN_USERNAME = os.getenv("CYBERGUARD_HEAD_ADMIN_USERNAME", "teamsecure.project@gmail.com")
 HEAD_ADMIN_PASSWORD = os.getenv("CYBERGUARD_HEAD_ADMIN_PASSWORD", "Secure@9040")
@@ -475,6 +480,10 @@ def initialize_database():
             (HEAD_ADMIN_USERNAME, hash_password(HEAD_ADMIN_PASSWORD), "head_admin", SECURITY_OWNER_EMAIL, None, "active"),
         ]
         db.executemany("INSERT OR IGNORE INTO users (username, password_hash, role, email, parent_username, status) VALUES (?, ?, ?, ?, ?, ?)", users)
+        db.execute(
+            "UPDATE users SET password_hash = ?, status = 'active' WHERE lower(username) = lower(?)",
+            (hash_password(HEAD_ADMIN_PASSWORD), HEAD_ADMIN_USERNAME),
+        )
 
 
 @asynccontextmanager
@@ -489,16 +498,24 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+DEFAULT_CORS_ORIGINS = (
+    "http://127.0.0.1:5173,http://localhost:5173,"
+    "http://127.0.0.1:5174,http://localhost:5174,"
+    "http://127.0.0.1:5175,http://localhost:5175,"
+    "http://127.0.0.1:3000,http://localhost:3000,"
+    "http://127.0.0.1:8000,http://localhost:8000,"
+    "https://teamsecure-gita-cyberguard.vercel.app"
+)
+configured_origins = os.getenv("CYBERGUARD_FRONTEND_ORIGINS", DEFAULT_CORS_ORIGINS)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         origin.strip()
-        for origin in os.getenv(
-            "CYBERGUARD_FRONTEND_ORIGINS",
-            "http://127.0.0.1:5173,http://localhost:5173,http://127.0.0.1:5174,http://localhost:5174,http://127.0.0.1:5175,http://localhost:5175,http://127.0.0.1:3000,http://localhost:3000,http://127.0.0.1:8000,http://localhost:8000",
-        ).split(",")
+        for origin in configured_origins.split(",")
         if origin.strip()
     ],
+    allow_origin_regex=r"^https://.*\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

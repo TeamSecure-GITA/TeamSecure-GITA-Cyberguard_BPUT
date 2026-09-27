@@ -7,8 +7,7 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import LanguageToggle from './LanguageToggle';
-
-const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+import { getApiBaseUrl, setApiBaseUrl } from '../apiConfig';
 
 const decodeBase64Url = (value) => {
   const padded = `${value}${'='.repeat((4 - (value.length % 4)) % 4)}`.replace(/-/g, '+').replace(/_/g, '/');
@@ -37,7 +36,20 @@ const serializePasskey = (credential) => (typeof credential.toJSON === 'function
   },
 });
 
-export default function CyberRadarPortal({ onOpenWorkspace, onQuickLogin, onVerifyOtp, onVerifyPasskey, onApprovedSession, currentSession, currentLang, onLanguageChange }) {
+export default function CyberRadarPortal({
+  onOpenWorkspace,
+  onQuickLogin,
+  onVerifyOtp,
+  onVerifyPasskey,
+  onApprovedSession,
+  currentSession,
+  currentLang,
+  onLanguageChange,
+  apiBaseUrl: propApiBaseUrl,
+}) {
+  const apiBaseUrl = propApiBaseUrl || getApiBaseUrl();
+  const [serverEndpointInput, setServerEndpointInput] = useState(apiBaseUrl);
+  const [showServerConfig, setShowServerConfig] = useState(false);
   const [telemetry, setTelemetry] = useState({
     lat: 12.44,
     freq: 4.82,
@@ -102,7 +114,20 @@ export default function CyberRadarPortal({ onOpenWorkspace, onQuickLogin, onVeri
         onOpenWorkspace();
       }
     } catch (err) {
-      setAuthError(err.response?.data?.detail || 'Authentication failed. Check credentials.');
+      if (!err.response) {
+        setAuthError(`Backend unreachable at ${apiBaseUrl}. Ensure the backend service is deployed and active.`);
+      } else if (err.response.status === 401) {
+        setAuthError(err.response.data?.detail || 'Invalid username or password. Check credentials.');
+      } else if (err.response.status === 403) {
+        setAuthError(err.response.data?.detail || 'Access forbidden: Administrator authorization required.');
+      } else if (err.response.status === 502 || err.response.status === 503 || err.response.status === 504) {
+        setAuthError(`Backend is temporarily unavailable (HTTP ${err.response.status}). If deployed on Render free tier, the instance may be spinning up from idle (please wait ~30s and retry).`);
+      } else if (err.response.status >= 500) {
+        const detail = typeof err.response.data?.detail === 'string' ? err.response.data.detail : `Server error (HTTP ${err.response.status}). Check backend logs.`;
+        setAuthError(detail);
+      } else {
+        setAuthError(err.response.data?.detail || err.message || 'Authentication failed. Check credentials.');
+      }
     } finally {
       setAuthLoading(false);
     }
@@ -118,7 +143,11 @@ export default function CyberRadarPortal({ onOpenWorkspace, onQuickLogin, onVeri
       setOtpChallenge(null);
       setOtp('');
     } catch (err) {
-      setAuthError(err.response?.data?.detail || 'OTP verification failed.');
+      if (!err.response) {
+        setAuthError(`Backend unreachable at ${apiBaseUrl}. Could not verify OTP.`);
+      } else {
+        setAuthError(err.response.data?.detail || err.message || 'OTP verification failed.');
+      }
     } finally {
       setAuthLoading(false);
     }
@@ -505,15 +534,76 @@ export default function CyberRadarPortal({ onOpenWorkspace, onQuickLogin, onVeri
               </div>
 
               {authError && (
-                <div className="text-xs text-rose-400 font-mono flex items-center gap-2">
-                  <AlertTriangle size={14} />
-                  <span>{authError}</span>
+                <div className="p-3 rounded-lg bg-rose-950/40 border border-rose-500/30 text-xs text-rose-300 font-mono space-y-2">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle size={15} className="text-rose-400 mt-0.5 shrink-0" />
+                    <span className="leading-relaxed">{authError}</span>
+                  </div>
+                  {authError.includes('Backend unreachable') && (
+                    <div className="pt-2 border-t border-rose-800/40 flex items-center justify-between text-[11px]">
+                      <span className="text-slate-400">Target: <code className="text-cyan-300">{apiBaseUrl}</code></span>
+                      <button
+                        type="button"
+                        onClick={() => setShowServerConfig(!showServerConfig)}
+                        className="text-cyan-400 hover:text-cyan-300 underline font-sans"
+                      >
+                        {showServerConfig ? 'Hide Settings' : 'Change Backend URL'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {showServerConfig && (
+                <div className="p-3 rounded-lg bg-[#030914] border border-cyan-800/50 text-xs font-mono space-y-2.5">
+                  <div className="flex justify-between items-center text-slate-300 text-[11px]">
+                    <span className="font-semibold text-cyan-400">CONFIGURE BACKEND URL</span>
+                    <button type="button" onClick={() => setShowServerConfig(false)} className="text-slate-400 hover:text-white">✕</button>
+                  </div>
+                  <input
+                    type="url"
+                    value={serverEndpointInput}
+                    onChange={(e) => setServerEndpointInput(e.target.value)}
+                    placeholder="https://cyberguard-backend.onrender.com"
+                    className="w-full px-2.5 py-1.5 rounded bg-slate-900 border border-slate-700 text-white text-xs focus:border-cyan-400 focus:outline-none"
+                  />
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setApiBaseUrl(serverEndpointInput);
+                        window.location.reload();
+                      }}
+                      className="px-3 py-1 rounded bg-cyan-600 hover:bg-cyan-500 text-white text-[11px] font-bold transition-colors"
+                    >
+                      Save & Reconnect
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setApiBaseUrl('http://127.0.0.1:8000');
+                        window.location.reload();
+                      }}
+                      className="px-2.5 py-1 rounded border border-slate-700 text-slate-400 hover:text-white text-[11px] transition-colors"
+                    >
+                      Reset Local (127.0.0.1)
+                    </button>
+                  </div>
                 </div>
               )}
 
               <div className="p-3 rounded-lg bg-slate-900/80 border border-slate-800 text-[11px] font-mono text-slate-400 space-y-1">
-                <p className="text-cyan-400 font-semibold">RESTRICTED ACCESS:</p>
-                <p>Use your assigned administrator username. Credentials are never displayed in the public portal.</p>
+                <div className="flex justify-between items-center">
+                  <p className="text-cyan-400 font-semibold">RESTRICTED ACCESS:</p>
+                  <button
+                    type="button"
+                    onClick={() => setShowServerConfig(!showServerConfig)}
+                    className="text-[10px] text-slate-400 hover:text-cyan-300 underline"
+                  >
+                    API Server: {apiBaseUrl.replace(/^https?:\/\//, '')}
+                  </button>
+                </div>
+                <p>Use your assigned administrator credentials. Stored credentials update dynamically.</p>
               </div>
 
               <div className="pt-2 flex items-center gap-3">

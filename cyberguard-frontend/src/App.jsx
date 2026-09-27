@@ -12,6 +12,7 @@ import SystemHealth from './components/SystemHealth';
 import ComplianceTab from './components/ComplianceTab';
 import LanguageToggle from './components/LanguageToggle';
 import CyberRadarPortal from './components/CyberRadarPortal';
+import { getApiBaseUrl } from './apiConfig';
 import axios from 'axios';
 import NotificationsPanel from './components/NotificationsPanel';
 import AdminConsole from './components/AdminConsole';
@@ -57,7 +58,7 @@ export default function App() {
   const [demoSeeded, setDemoSeeded] = useState(false);
   const [routingInfo, setRoutingInfo] = useState(null);
   const authFailureHandled = React.useRef(false);
-  const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+  const apiBaseUrl = getApiBaseUrl();
 
   React.useEffect(() => {
     const interceptorId = axios.interceptors.response.use(
@@ -230,12 +231,17 @@ export default function App() {
     return (
       <LanguageProvider language={language}>
         <CyberRadarPortal
+          apiBaseUrl={apiBaseUrl}
           currentSession={session}
           currentLang={language}
           onLanguageChange={setLanguage}
-          onOpenWorkspace={() => {
+          onOpenWorkspace={async () => {
             if (!session) {
-              handleQuickLogin('teamsecure.project@gmail.com', 'Secure@9040');
+              try {
+                await handleQuickLogin('teamsecure.project@gmail.com', 'Secure@9040');
+              } catch (err) {
+                console.error('Quick login failed:', err);
+              }
             } else {
               setViewMode('workspace');
               setActiveTab('dashboard');

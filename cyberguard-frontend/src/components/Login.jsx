@@ -2,10 +2,11 @@ import React, { useState } from 'react';
 import axios from 'axios';
 import { LockKeyhole, LogIn, Shield } from 'lucide-react';
 
-const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+import { getApiBaseUrl } from '../apiConfig';
 
 export default function Login({ onLogin }) {
-  const [username, setUsername] = useState('lead');
+  const apiBaseUrl = getApiBaseUrl();
+  const [username, setUsername] = useState('teamsecure.project@gmail.com');
   const [password, setPassword] = useState('Secure@9040');
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -18,12 +19,16 @@ export default function Login({ onLogin }) {
       const response = await axios.post(`${apiBaseUrl}/api/v1/auth/login`, { username, password });
       onLogin(response.data);
     } catch (requestError) {
-      if (requestError.response?.data?.detail) {
+      if (!requestError.response) {
+        setError(`Cannot reach backend server (${apiBaseUrl}). Ensure the backend is running.`);
+      } else if (requestError.response.status === 401) {
+        setError(requestError.response.data?.detail || 'Invalid username or password.');
+      } else if (requestError.response.status === 502 || requestError.response.status === 503) {
+        setError(`Backend service is temporarily unavailable (HTTP ${requestError.response.status}). Please wait a few seconds and try again.`);
+      } else if (requestError.response.data?.detail) {
         setError(requestError.response.data.detail);
-      } else if (requestError.request) {
-        setError('Backend unavailable. Start FastAPI on port 8000.');
       } else {
-        setError('Unable to send the login request.');
+        setError(`Login failed with HTTP status ${requestError.response.status}.`);
       }
     } finally {
       setLoading(false);

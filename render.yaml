@@ -16,9 +16,9 @@ services:
       - key: CYBERGUARD_HEAD_ADMIN_PASSWORD
         sync: false
       - key: CYBERGUARD_FRONTEND_ORIGINS
-        sync: false
+        value: https://teamsecure-gita-cyberguard.vercel.app,http://localhost:5173,http://127.0.0.1:5173
       - key: CYBERGUARD_PUBLIC_APP_URL
-        sync: false
+        value: https://teamsecure-gita-cyberguard.vercel.app
       - key: CYBERGUARD_DB_PATH
         value: /var/data/cyberguard.db
       - key: CYBERGUARD_ALLOW_ANONYMOUS_EVAL
@@ -63,4 +63,4 @@ services:
     staticPublishPath: dist
     envVars:
       - key: VITE_API_URL
-        sync: false
+        value: https://cyberguard-backend.onrender.com
