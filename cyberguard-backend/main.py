@@ -37,9 +37,12 @@ except ImportError:
         os.path.join(os.path.dirname(backend_dir), ".venv", "bin", "python3"),
         os.path.join(os.path.dirname(backend_dir), ".venv", "Scripts", "python.exe"),
     ]
-    venv_python = next((p for p in candidates if os.path.exists(p)), None)
+    venv_python = next((p for p in candidates if os.path.isfile(p) and os.access(p, os.X_OK)), None)
     if venv_python and sys.executable != venv_python:
-        os.execv(venv_python, [venv_python] + sys.argv)
+        try:
+            os.execv(venv_python, [venv_python] + sys.argv)
+        except OSError:
+            pass
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -808,8 +811,11 @@ def persist_cyberguard_x(incident_id: int, incident: dict):
 
 
 @app.get("/")
+@app.get("/health")
+@app.get("/healthz")
 def root():
     return {"status": "Active", "system": "CYBERGUARD AI Engine v2.0"}
+
 
 
 @app.post("/api/v1/access/request")
@@ -2051,4 +2057,4 @@ if __name__ == "__main__":
     reload_env = os.getenv("RELOAD")
     is_prod = bool(os.getenv("RENDER") or os.getenv("CYBERGUARD_ENV") == "production" or "PORT" in os.environ)
     reload = reload_env.lower() in ("true", "1") if reload_env is not None else not is_prod
-    uvicorn.run("main:app", host=host, port=port, reload=reload)
+    uvicorn.run("main:app", host=host, port=port, reload=reload, proxy_headers=True, forwarded_allow_ips="*")

@@ -25,13 +25,16 @@ except ImportError:
         os.path.join(base_dir, ".venv", "bin", "python3"),
         os.path.join(base_dir, ".venv", "Scripts", "python.exe"),
     ]
-    venv_python = next((p for p in candidates if os.path.exists(p)), None)
+    venv_python = next((p for p in candidates if os.path.isfile(p) and os.access(p, os.X_OK)), None)
     if venv_python and sys.executable != venv_python:
-        os.execv(venv_python, [venv_python] + sys.argv)
-    else:
-        print("[!] FastAPI/Uvicorn not found in current environment and no venv found.")
-        print("[!] Please run: cd cyberguard-backend && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt")
-        sys.exit(1)
+        try:
+            os.execv(venv_python, [venv_python] + sys.argv)
+        except OSError:
+            pass
+
+    print("[!] FastAPI/Uvicorn not found in current environment.", flush=True)
+    print("[!] Please run: cd cyberguard-backend && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt", flush=True)
+    sys.exit(1)
 
 # Ensure backend directory is in path and working directory is cyberguard-backend
 backend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cyberguard-backend")
@@ -47,5 +50,6 @@ if __name__ == "__main__":
     reload_env = os.getenv("RELOAD")
     is_prod = bool(os.getenv("RENDER") or os.getenv("CYBERGUARD_ENV") == "production" or "PORT" in os.environ)
     reload = reload_env.lower() in ("true", "1") if reload_env is not None else not is_prod
-    print(f"[*] Starting CyberGuard AI Backend on http://{host}:{port} (reload={reload}) ...")
-    uvicorn.run("main:app", host=host, port=port, reload=reload)
+    print(f"[*] Starting CyberGuard AI Backend on http://{host}:{port} (reload={reload}) ...", flush=True)
+    uvicorn.run("main:app", host=host, port=port, reload=reload, proxy_headers=True, forwarded_allow_ips="*")
+
