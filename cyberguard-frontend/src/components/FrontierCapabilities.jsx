@@ -12,7 +12,7 @@ export default function FrontierCapabilities({ apiBaseUrl, accessToken }) {
   const headers = { Authorization: `Bearer ${accessToken}` };
 
   useEffect(() => {
-    axios.get(`${apiBaseUrl}/api/v1/frontier/overview`, { headers }).then((response) => setOverview(response.data)).catch(() => setOverview(null));
+    axios.get(`${apiBaseUrl}/api/v1/frontier/overview`, { headers: { Authorization: `Bearer ${accessToken}` } }).then((response) => setOverview(response.data)).catch(() => setOverview(null));
   }, [apiBaseUrl, accessToken]);
 
   const runDeception = async () => {

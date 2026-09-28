@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 
 const dhcpAssets = [
@@ -19,7 +19,7 @@ export default function SecurityFusionCenter({ apiBaseUrl, accessToken }) {
   });
   const [seedAttempted, setSeedAttempted] = useState(false);
 
-  const loadLogs = async () => {
+  const loadLogs = useCallback(async () => {
     try {
       const response = await axios.get(`${apiBaseUrl}/api/v1/siem/logs`, {
         headers: { Authorization: `Bearer ${accessToken}` },
@@ -32,7 +32,7 @@ export default function SecurityFusionCenter({ apiBaseUrl, accessToken }) {
       } else {
         setLogs(events);
       }
-    } catch (error) {
+    } catch {
       setLogs([
         {
           timestamp: new Date().toISOString(),
@@ -44,14 +44,17 @@ export default function SecurityFusionCenter({ apiBaseUrl, accessToken }) {
         },
       ]);
     }
-  };
+  }, [accessToken, apiBaseUrl, seedAttempted]);
 
   useEffect(() => {
     if (!accessToken) return undefined;
-    loadLogs();
+    const initialLoad = window.setTimeout(() => loadLogs(), 0);
     const interval = window.setInterval(loadLogs, 15000);
-    return () => window.clearInterval(interval);
-  }, [apiBaseUrl, accessToken, seedAttempted]);
+    return () => {
+      window.clearTimeout(initialLoad);
+      window.clearInterval(interval);
+    };
+  }, [accessToken, loadLogs]);
 
   const riskCount = useMemo(() => logs.filter((entry) => ['HIGH', 'CRITICAL'].includes(entry.severity)).length, [logs]);
 
@@ -63,7 +66,7 @@ export default function SecurityFusionCenter({ apiBaseUrl, accessToken }) {
         { headers: { Authorization: `Bearer ${accessToken}` } }
       );
       setAuthResult(response.data);
-    } catch (error) {
+    } catch {
       setAuthResult({
         auth_status: 'DENIED',
         reason: 'Identity Provider simulation unavailable',

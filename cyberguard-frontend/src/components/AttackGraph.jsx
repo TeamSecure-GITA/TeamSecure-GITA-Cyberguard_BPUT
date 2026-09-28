@@ -25,30 +25,32 @@ const initialEdges = [
 export default function AttackGraph({ accessToken }) {
   const [mode, setMode] = useState('inferred'); // 'inferred' or 'topology'
   const [incidents, setIncidents] = useState([]);
-  const [selectedIncidentId, setSelectedIncidentId] = useState(null);
+  const [selectedIncidentOverride, setSelectedIncidentOverride] = useState(null);
+  const selectedIncidentId = incidents.some((incident) => incident.database_id === selectedIncidentOverride)
+    ? selectedIncidentOverride
+    : incidents[0]?.database_id || null;
   const [graph, setGraph] = useState({ nodes: initialNodes, edges: initialEdges });
   const [chainEvents, setChainEvents] = useState([]);
-  const [loading, setLoading] = useState(false);
-
-  const config = { headers: { Authorization: `Bearer ${accessToken}` } };
+  const [loadedGraphKey, setLoadedGraphKey] = useState(null);
+  const requestKey = mode === 'topology' ? 'topology' : `incident:${selectedIncidentId ?? 'none'}`;
+  const loading = Boolean(mode === 'topology' || selectedIncidentId) && loadedGraphKey !== requestKey;
 
   // Fetch recent incidents for selection
   useEffect(() => {
+    const config = { headers: { Authorization: `Bearer ${accessToken}` } };
     axios.get(`${apiBaseUrl}/api/v1/incidents`, config)
       .then((res) => {
         const list = res.data.incidents || [];
         setIncidents(list);
-        if (list.length > 0 && !selectedIncidentId) {
-          setSelectedIncidentId(list[0].database_id);
-        }
       })
       .catch(() => {});
   }, [accessToken]);
 
   // Load either inferred attack chain or aggregate topology
   useEffect(() => {
+    const config = { headers: { Authorization: `Bearer ${accessToken}` } };
+    let active = true;
     if (mode === 'topology') {
-      setLoading(true);
       axios.get(`${apiBaseUrl}/api/v1/dashboard/graph`, config)
         .then((response) => {
           if (response.data.nodes?.length) {
@@ -56,9 +58,8 @@ export default function AttackGraph({ accessToken }) {
           }
         })
         .catch(() => {})
-        .finally(() => setLoading(false));
+        .finally(() => { if (active) setLoadedGraphKey(requestKey); });
     } else if (selectedIncidentId) {
-      setLoading(true);
       axios.get(`${apiBaseUrl}/api/v1/incidents/${selectedIncidentId}/attack-chain`, config)
         .then((res) => {
           const events = res.data.events || [];
@@ -105,9 +106,10 @@ export default function AttackGraph({ accessToken }) {
           }
         })
         .catch(() => {})
-        .finally(() => setLoading(false));
+        .finally(() => { if (active) setLoadedGraphKey(requestKey); });
     }
-  }, [mode, selectedIncidentId, accessToken]);
+    return () => { active = false; };
+  }, [mode, selectedIncidentId, accessToken, requestKey]);
 
   return (
     <div className="space-y-4">
@@ -129,7 +131,7 @@ export default function AttackGraph({ accessToken }) {
           {mode === 'inferred' && incidents.length > 0 && (
             <select
               value={selectedIncidentId || ''}
-              onChange={(e) => setSelectedIncidentId(Number(e.target.value))}
+              onChange={(e) => setSelectedIncidentOverride(Number(e.target.value))}
               className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
             >
               {incidents.map((inc) => (

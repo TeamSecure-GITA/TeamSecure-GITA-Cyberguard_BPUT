@@ -8,15 +8,16 @@ services:
       CYBERGUARD_ENV: production
       CYBERGUARD_JWT_SECRET: ${CYBERGUARD_JWT_SECRET:?Set CYBERGUARD_JWT_SECRET}
       CYBERGUARD_FRONTEND_ORIGINS: ${CYBERGUARD_FRONTEND_ORIGINS:?Set CYBERGUARD_FRONTEND_ORIGINS}
-      CYBERGUARD_DB_PATH: /data/cyberguard.db
+      CYBERGUARD_DATABASE_URL: postgresql://${CYBERGUARD_POSTGRES_USER:-cyberguard}:${CYBERGUARD_POSTGRES_PASSWORD:?Set CYBERGUARD_POSTGRES_PASSWORD}@postgres:5432/${CYBERGUARD_POSTGRES_DB:-cyberguard}
       CYBERGUARD_REDIS_URL: redis://redis:6379/0
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
       - cyberguard-data:/data
-      - cyberguard-backups:/backups
     depends_on:
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/')"]
@@ -33,18 +34,30 @@ services:
       timeout: 3s
       retries: 10
 
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${CYBERGUARD_POSTGRES_USER:-cyberguard}
+      POSTGRES_PASSWORD: ${CYBERGUARD_POSTGRES_PASSWORD:?Set CYBERGUARD_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${CYBERGUARD_POSTGRES_DB:-cyberguard}
+    volumes:
+      - cyberguard-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   worker:
     build: ./cyberguard-backend
     restart: unless-stopped
     env_file:
       - ./cyberguard-backend/.env
     environment:
-      CYBERGUARD_DB_PATH: /data/cyberguard.db
-      CYBERGUARD_BACKUP_PATH: /backups/cyberguard.backup.db
+      CYBERGUARD_DATABASE_URL: postgresql://${CYBERGUARD_POSTGRES_USER:-cyberguard}:${CYBERGUARD_POSTGRES_PASSWORD:?Set CYBERGUARD_POSTGRES_PASSWORD}@postgres:5432/${CYBERGUARD_POSTGRES_DB:-cyberguard}
+      CYBERGUARD_REDIS_URL: redis://redis:6379/0
     command: ["python", "worker.py"]
-    volumes:
-      - cyberguard-data:/data
-      - cyberguard-backups:/backups
     depends_on:
       backend:
         condition: service_healthy
@@ -60,4 +73,4 @@ services:
 
 volumes:
   cyberguard-data:
-  cyberguard-backups:
+  cyberguard-postgres:

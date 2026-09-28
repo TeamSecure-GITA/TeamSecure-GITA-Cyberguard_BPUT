@@ -2,7 +2,7 @@ fastapi
 uvicorn[standard]
 pydantic
 tldextract
-requests
+requests>=2.32.4
 python-multipart
 scikit-learn
 joblib

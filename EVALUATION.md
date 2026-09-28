@@ -45,13 +45,13 @@ Do not report the bundled 104 synthetic examples as public-data performance. Pre
 
 ## Pretrained media evaluation
 
-The image and audio adapters in `deepfake_models.py` load the cached Hugging Face weights under `models/pretrained`; video samples frames and reuses the image detector. `/api/v1/models/status` reports cached weights, loaded modalities, and runtime errors. The current model outputs are pretrained inference, but not production-calibrated deepfake claims. Before consequential use, calibrate all modalities on authorised holdouts and publish per-modality confusion matrices, ROC-AUC, PR-AUC, and p95 latency.
+The image and audio adapters in `deepfake_models.py` load the cached Hugging Face weights under `models/pretrained`; video samples frames and reuses the image detector. `/api/v1/models/status` reports cached weights, loaded modalities, and runtime errors. Cross-modal comparison requires at least two distinct image/audio/video channels with valid anomaly scores; its authenticity score is an inverse risk proxy, not a probability or production-calibrated deepfake claim. Before consequential use, calibrate all modalities on authorised holdouts and publish per-modality confusion matrices, ROC-AUC, PR-AUC, and p95 latency.
 
 `evaluate_media_dataset.py --data path\to\authorised\media --threshold 50` evaluates `real/` and `fake/` folders and reports confusion matrix, precision, recall, F1, specificity, ROC-AUC, PR-AUC, and latency. It requires both classes. Select a threshold only on a separate calibration split; keep the final evaluation holdout untouched.
 
 ## Graph analytics
 
-`/api/v1/dashboard/graph` extracts domains, IPs, email addresses, incident categories, and incident nodes from the last 100 incidents. It returns weighted edges, connected-component campaign communities, and analytics counts. This is a deterministic explainable campaign baseline; a large-scale Neo4j/Louvain deployment is not claimed.
+`/api/v1/dashboard/graph` extracts domains, IPs, email addresses, incident categories, and incident nodes from the last 100 incidents. It returns weighted edges, connected-component campaign communities, and analytics counts. Attacker-intent and fingerprint-drift summaries require shared IOC/ATT&CK evidence or strong payload similarity rather than same-category matches alone. This is a deterministic explainable campaign baseline; a large-scale Neo4j/Louvain deployment is not claimed.
 
 ## Federated and analyst-assistant workflows
 
@@ -62,6 +62,8 @@ The image and audio adapters in `deepfake_models.py` load the cached Hugging Fac
 `POST /api/v1/assistant/analyze` sends only redacted structured evidence to an OpenAI-compatible endpoint when `CYBERGUARD_LLM_ENDPOINT`, `CYBERGUARD_LLM_API_KEY`, and `CYBERGUARD_LLM_MODEL` are configured. With no provider configured it returns an explicitly labelled offline template. The rules and classifiers remain the decision-makers.
 
 Head administrators can create a Jira/ServiceNow ticket through `POST /api/v1/integrations/tickets`. Jira Cloud requires `CYBERGUARD_JIRA_URL`, `CYBERGUARD_JIRA_EMAIL`, `CYBERGUARD_JIRA_TOKEN`, and `CYBERGUARD_JIRA_PROJECT`; the account email and API token are sent with HTTP Basic authentication. `POST /api/v1/integrations/identity/disable` and `/api/v1/integrations/endpoint/isolate` require an explicit `confirmed: true` body field before calling Okta/Microsoft Graph or the configured EDR endpoint. Provider calls need real credentials and are not live-tested in this environment.
+
+Shared-immunity publishing requires `CYBERGUARD_TENANT_IMMUNITY_URL`, `CYBERGUARD_TENANT_IMMUNITY_SECRET`, and a stable installation-specific `CYBERGUARD_TENANT_ID`. Only 64-character opaque signatures are sent; the tenant ID is HMAC-pseudonymized before transmission. Incidents without a fingerprint, IOC, or ATT&CK technique do not produce a shareable signature.
 
 ## Demonstration Scenarios
 
@@ -83,10 +85,15 @@ IOC results include local reputation and risk enrichment. Set `CYBERGUARD_THREAT
 
 ## Operational Measures
 
-- API persistence: SQLite by default; set `CYBERGUARD_DATABASE_URL` to use PostgreSQL through the shared database adapter. PostgreSQL driver support is included in `requirements.txt`; live deployment still requires a configured PostgreSQL service and migration/restore validation.
+- API persistence: local/development Compose uses SQLite; `docker-compose.prod.yml` starts PostgreSQL and configures `CYBERGUARD_DATABASE_URL` for the API and worker. PostgreSQL schema creation is automatic at startup; live service and restore drills still require deployment validation.
 - SIEM history: normalized SIEM events, demo-seed state, and IdP correlation are stored in the configured application database rather than process-local memory.
+- Alert feedback: analyst outcomes and reviewer identity are persisted in the configured application database; the API attributes reviews to the authenticated account.
+- CVE compliance: successful feed syncs preserve severity details, persist the latest snapshot, and refresh the compliance diff; string-only legacy entries are counted but do not create severity-based gaps.
+- Threat immune memory: only closed and mitigated incidents are eligible historical matches; normalized exact repeats are retained as valid matches.
+- Fatigue-aware routing: active assigned incidents contribute to analyst load, closed/mitigated incidents are excluded from the queue, and an empty roster returns an explicit unassigned target.
+- Jurisdiction routing: analysis stores only optional country/region metadata for text, file, and website incidents; missing residency is reported as unknown/global review rather than guessed.
 - Ephemeral state: OTP/passkey challenges and protected-path rate windows use process memory by default in development. Production startup requires `CYBERGUARD_REDIS_URL` to share expiring, one-time state across API instances; a missing or unavailable Redis service fails startup instead of silently falling back to local memory.
 - Dashboard targeting summary: `/api/v1/dashboard/metrics` reports up to eight recurring email identities, URL hosts, and source networks from the latest 500 incidents. Email local-parts and IPv4 host octets are masked; counts are per incident, not per repeated indicator.
 - Authorization: Analyst inspection and Lead response execution.
-- Scalability path: replace SQLite with PostgreSQL, move sessions to Redis, and run the stateless FastAPI service behind a load balancer.
+- Scalability path: production Compose uses PostgreSQL and Redis; horizontal API replicas still require an external load balancer, shared uploads/artifacts, and tested connection-pool limits.
 - Deployment path: containerize backend/frontend, terminate TLS at the ingress, add structured logging, rate limits, secret management, and a SIEM connector.

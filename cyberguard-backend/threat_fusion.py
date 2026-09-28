@@ -43,10 +43,16 @@ def build_genome(incident: dict[str, Any]) -> dict[str, Any]:
 
 
 def generate_attacker_intent(incident: dict[str, Any], related: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    assessment = incident.get("assessment", {})
+    assessment = incident.get("assessment") if isinstance(incident.get("assessment"), dict) else {}
     payload = (incident.get("payload") or "").lower()
     risk_score = int(incident.get("risk_score", 0) or 0)
-    techs = assessment.get("mitre_techniques", [])
+    techs = {str(item).strip().upper() for item in (assessment.get("mitre_techniques") or []) if str(item).strip()}
+    iocs = assessment.get("iocs") or []
+    ioc_values = {
+        str(item.get("indicator") or item.get("value") or "").strip().lower()
+        for item in iocs
+        if isinstance(item, dict) and (item.get("indicator") or item.get("value"))
+    }
 
     goals = []
     if any(token in payload for token in ["verify", "password", "credential", "otp", "login"]):
@@ -57,38 +63,105 @@ def generate_attacker_intent(incident: dict[str, Any], related: list[dict[str, A
         goals.append("financial theft or exfiltration")
     if not goals:
         goals.append("reconnaissance and persistence")
-    if any(tech in {"T1078", "T1110", "T1556"} for tech in techs):
+    if techs & {"T1078", "T1110", "T1556"}:
         goals.insert(0, "identity compromise")
 
+    related_matches = []
+    for candidate in (related or [])[:50]:
+        candidate_assessment = candidate.get("assessment") if isinstance(candidate.get("assessment"), dict) else {}
+        candidate_iocs = candidate_assessment.get("iocs") or []
+        candidate_values = {
+            str(item.get("indicator") or item.get("value") or "").strip().lower()
+            for item in candidate_iocs
+            if isinstance(item, dict) and (item.get("indicator") or item.get("value"))
+        }
+        candidate_techniques = {str(item).strip().upper() for item in (candidate_assessment.get("mitre_techniques") or []) if str(item).strip()}
+        shared_techniques = sorted(techs & candidate_techniques)
+        shared_ioc_count = len(ioc_values & candidate_values)
+        if shared_ioc_count or shared_techniques:
+            related_matches.append({
+                "incident_id": candidate.get("id"),
+                "shared_ioc_count": shared_ioc_count,
+                "shared_techniques": shared_techniques,
+                "risk_score": candidate.get("risk_score", 0),
+            })
+
+    related_matches.sort(key=lambda item: (-(item["shared_ioc_count"] + len(item["shared_techniques"])), -int(item["risk_score"] or 0)))
+    related_matches = related_matches[:5]
     summary = "Likely intent: " + " -> ".join(goals[:3])
-    confidence = min(99, max(50, risk_score + len(assessment.get("iocs", [])) * 6 + len(techs) * 7))
+    if related_matches:
+        summary += f"; corroborated by {len(related_matches)} related incident(s) sharing threat evidence"
+    confidence = min(99, max(50, risk_score + len(iocs) * 6 + len(techs) * 7) + min(15, len(related_matches) * 5))
     recommended_action = "Isolate the account, revoke active sessions, and validate account ownership." if "credential" in summary.lower() or "identity" in summary.lower() else "Contain the malicious flow and review all related assets."
     evidence = []
-    for ioc in assessment.get("iocs", [])[:5]:
+    for ioc in iocs[:5]:
         value = ioc.get("value") or ioc.get("indicator") or "unknown"
         evidence.append(f"{ioc.get('type', 'indicator')}: {value}")
     if not evidence:
         evidence.append(incident.get("category", "unknown").replace("_", " ").title())
+    if related_matches:
+        evidence.append(f"Corroborated by {len(related_matches)} related incident(s) with shared IOC or ATT&CK evidence.")
     return {
         "summary": summary,
         "confidence": confidence,
         "risk_score": risk_score,
         "status": "high" if confidence >= 75 else "medium" if confidence >= 50 else "low",
         "evidence": evidence,
+        "related_incidents": related_matches,
         "recommended_action": recommended_action,
     }
 
 
 def compute_drift_snapshot(incident: dict[str, Any], related: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     current = build_genome(incident)
+    current_assessment = incident.get("assessment") if isinstance(incident.get("assessment"), dict) else {}
+    current_iocs = {
+        str(item.get("indicator") or item.get("value") or "").strip().lower()
+        for item in (current_assessment.get("iocs") or [])
+        if isinstance(item, dict) and (item.get("indicator") or item.get("value"))
+    }
+    current_techniques = {str(item).strip().upper() for item in (current_assessment.get("mitre_techniques") or []) if str(item).strip()}
+    current_tactics = set(current["vectors"].get("tactics", []))
+    current_payload = re.sub(r"\s+", " ", str(incident.get("payload") or "")).strip().lower()
     related = related or []
     matches = []
     for candidate in related[:10]:
         candidate_genome = build_genome(candidate)
-        overlap = len(set(current["vectors"].get("ioc_types", [])) & set(candidate_genome["vectors"].get("ioc_types", [])))
-        similarity = min(99, max(0, round((candidate_genome["similarity_score"] + current["similarity_score"]) / 2 - max(0, overlap * 4))))
-        if similarity >= 25:
-            matches.append({"incident_id": candidate.get("id"), "similarity": similarity, "risk_score": candidate.get("risk_score", 0)})
+        candidate_assessment = candidate.get("assessment") if isinstance(candidate.get("assessment"), dict) else {}
+        candidate_iocs = {
+            str(item.get("indicator") or item.get("value") or "").strip().lower()
+            for item in (candidate_assessment.get("iocs") or [])
+            if isinstance(item, dict) and (item.get("indicator") or item.get("value"))
+        }
+        candidate_techniques = {str(item).strip().upper() for item in (candidate_assessment.get("mitre_techniques") or []) if str(item).strip()}
+        candidate_tactics = set(candidate_genome["vectors"].get("tactics", []))
+        candidate_payload = re.sub(r"\s+", " ", str(candidate.get("payload") or "")).strip().lower()
+        shared_iocs = current_iocs & candidate_iocs
+        shared_techniques = current_techniques & candidate_techniques
+        shared_tactics = current_tactics & candidate_tactics
+        payload_similarity = SequenceMatcher(None, current_payload, candidate_payload).ratio() if current_payload and candidate_payload else 0
+        if not (shared_iocs or shared_techniques or shared_tactics or payload_similarity >= 0.82):
+            continue
+
+        evidence = []
+        if shared_iocs:
+            evidence.append("shared IOC values")
+        if shared_techniques:
+            evidence.append("shared ATT&CK techniques")
+        if shared_tactics:
+            evidence.append("shared tactics")
+        if payload_similarity >= 0.82:
+            evidence.append("similar payload language")
+        ioc_similarity_score = len(shared_iocs) / max(len(current_iocs | candidate_iocs), 1)
+        technique_similarity = len(shared_techniques) / max(len(current_techniques | candidate_techniques), 1)
+        tactic_similarity = len(shared_tactics) / max(len(current_tactics | candidate_tactics), 1)
+        similarity = round(100 * (0.4 * ioc_similarity_score + 0.3 * technique_similarity + 0.1 * tactic_similarity + 0.2 * payload_similarity))
+        matches.append({
+            "incident_id": candidate.get("id"),
+            "similarity": min(99, similarity),
+            "risk_score": candidate.get("risk_score", 0),
+            "evidence": evidence,
+        })
     drift_score = 0 if not matches else round(100 - (sum(item["similarity"] for item in matches) / len(matches)))
     drift_label = "stable" if drift_score < 25 else "mutating" if drift_score < 60 else "high-drift"
     return {
@@ -102,12 +175,15 @@ def compute_drift_snapshot(incident: dict[str, Any], related: list[dict[str, Any
 
 
 def detect_memory_hits(payload: str, history: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    history = history or []
     normalized = re.sub(r"\s+", " ", (payload or "")).strip().lower()
     matches = []
-    for item in history[:15]:
-        previous = (item.get("payload") or "").lower()
-        if not previous or previous == normalized:
+    resolved_history = [
+        item for item in (history or [])
+        if str(item.get("status") or "").strip().lower() in {"closed", "mitigated"}
+    ]
+    for item in resolved_history[:15]:
+        previous = re.sub(r"\s+", " ", (item.get("payload") or "")).strip().lower()
+        if not previous:
             continue
         score = SequenceMatcher(None, normalized, previous).ratio()
         if score >= 0.78:
@@ -149,29 +225,27 @@ def score_explainability(incident: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-_ALERT_OUTCOMES: list[dict[str, Any]] = []
-
-
 def record_alert_outcome(incident_id: int, detection_type: str, alert_risk_score: int, final_resolution: str, reviewed_by: str = "analyst") -> dict[str, Any]:
+    resolution = str(final_resolution).strip().lower()
     outcome = {
         "incident_id": incident_id,
         "detection_type": detection_type,
         "alert_risk_score": int(alert_risk_score),
-        "final_resolution": final_resolution,
-        "was_correct": final_resolution.lower() in {"true_positive", "contained", "critical", "malicious", "high-risk"},
+        "final_resolution": resolution,
+        "was_correct": resolution in {"true_positive", "contained", "critical", "malicious", "high-risk"},
         "reviewed_by": reviewed_by,
     }
-    _ALERT_OUTCOMES.append(outcome)
     return outcome
 
 
-def alert_quality_report() -> dict[str, Any]:
-    if not _ALERT_OUTCOMES:
+def alert_quality_report(outcomes: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    outcomes = outcomes or []
+    if not outcomes:
         return {"summary": "No alert outcomes recorded yet.", "overall_score": 0, "detection_types": {}, "entries": []}
-    total = len(_ALERT_OUTCOMES)
-    correct = sum(1 for item in _ALERT_OUTCOMES if item["was_correct"])
+    total = len(outcomes)
+    correct = sum(1 for item in outcomes if item["was_correct"])
     grouped: dict[str, Any] = {}
-    for item in _ALERT_OUTCOMES:
+    for item in outcomes:
         key = item["detection_type"]
         bucket = grouped.setdefault(key, {"count": 0, "correct": 0})
         bucket["count"] += 1
@@ -181,7 +255,7 @@ def alert_quality_report() -> dict[str, Any]:
         "summary": "Alert quality scoring is active.",
         "overall_score": round((correct / total) * 100),
         "detection_types": detection_types,
-        "entries": _ALERT_OUTCOMES,
+        "entries": outcomes,
     }
 
 

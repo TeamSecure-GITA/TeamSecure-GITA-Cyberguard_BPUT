@@ -4,6 +4,7 @@ import axios from 'axios';
 
 export default function ThreatInspector({ accessToken }) {
   const [activeSubTab, setActiveSubTab] = useState('email');
+  const [incidentCountry, setIncidentCountry] = useState('');
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
   const [analysisResult, setAnalysisResult] = useState(null);
@@ -11,8 +12,8 @@ export default function ThreatInspector({ accessToken }) {
   const [selectedFile, setSelectedFile] = useState(null);
   const [scanStage, setScanStage] = useState('idle');
   const [dragActive, setDragActive] = useState(false);
-  const [liveAssessment, setLiveAssessment] = useState(null);
-  const [liveLoading, setLiveLoading] = useState(false);
+  const [livePreview, setLivePreview] = useState({ payload: null, assessment: null });
+  const [liveLoadingFor, setLiveLoadingFor] = useState(null);
   const [adversarialResult, setAdversarialResult] = useState(null);
   const [adversarialLoading, setAdversarialLoading] = useState(false);
   const [assistantResult, setAssistantResult] = useState(null);
@@ -21,27 +22,26 @@ export default function ThreatInspector({ accessToken }) {
   const [complaintDraft, setComplaintDraft] = useState(null);
 
   const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+  const showLivePreview = activeSubTab === 'email' && Boolean(inputText.trim());
+  const liveAssessment = showLivePreview && livePreview.payload === inputText ? livePreview.assessment : null;
+  const liveLoading = showLivePreview && liveLoadingFor === inputText;
 
   useEffect(() => {
-    if (activeSubTab !== 'email' || !inputText.trim()) {
-      setLiveAssessment(null);
-      setLiveLoading(false);
-      return undefined;
-    }
+    if (!showLivePreview) return undefined;
 
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
-      setLiveLoading(true);
+      setLiveLoadingFor(inputText);
       try {
         const response = await axios.post(`${apiBaseUrl}/api/v1/analyze/preview`, {
           category: 'email',
           payload: inputText,
         }, { headers: { Authorization: `Bearer ${accessToken}` }, signal: controller.signal });
-        setLiveAssessment(response.data?.assessment || null);
+        setLivePreview({ payload: inputText, assessment: response.data?.assessment || null });
       } catch (previewError) {
-        if (!axios.isCancel(previewError)) setLiveAssessment(null);
+        if (!axios.isCancel(previewError)) setLivePreview({ payload: inputText, assessment: null });
       } finally {
-        if (!controller.signal.aborted) setLiveLoading(false);
+        if (!controller.signal.aborted) setLiveLoadingFor((payload) => payload === inputText ? null : payload);
       }
     }, 500);
 
@@ -49,7 +49,7 @@ export default function ThreatInspector({ accessToken }) {
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [activeSubTab, inputText, accessToken, apiBaseUrl]);
+  }, [showLivePreview, inputText, accessToken, apiBaseUrl]);
 
   const handleAnalyze = async (e) => {
     e.preventDefault();
@@ -64,16 +64,18 @@ export default function ThreatInspector({ accessToken }) {
       const config = { headers: { Authorization: `Bearer ${accessToken}` } };
       let response;
       if (activeSubTab === 'website') {
-        response = await axios.post(`${apiBaseUrl}/api/v1/analyze/website`, { url: inputText }, config);
+        response = await axios.post(`${apiBaseUrl}/api/v1/analyze/website`, { url: inputText, metadata: incidentCountry ? { country: incidentCountry } : undefined }, config);
       } else if (['image', 'audio', 'video', 'deepfake', 'email_file'].includes(activeSubTab) && selectedFile) {
         const formData = new FormData();
         formData.append('category', activeSubTab === 'email_file' ? 'email' : activeSubTab);
         formData.append('file', selectedFile);
+        if (incidentCountry) formData.append('metadata', JSON.stringify({ country: incidentCountry }));
         response = await axios.post(`${apiBaseUrl}/api/v1/analyze/file`, formData, config);
       } else {
         response = await axios.post(`${apiBaseUrl}/api/v1/analyze`, {
           category: activeSubTab,
           payload: inputText,
+          metadata: incidentCountry ? { country: incidentCountry } : undefined,
         }, config);
       }
 
@@ -224,6 +226,11 @@ export default function ThreatInspector({ accessToken }) {
 
       {/* Input Form */}
       <div className="inspector-source-label"><span>02</span> Submit evidence <small>{activeSubTab.replace('_', ' ')} channel selected</small></div>
+      <label className="mb-3 grid max-w-xs gap-1 text-xs text-slate-400">Incident residency
+        <select value={incidentCountry} onChange={(event) => setIncidentCountry(event.target.value)} className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200">
+          <option value="">Not specified</option><option value="IN">India</option><option value="US">United States</option><option value="EU">European Union</option><option value="GB">United Kingdom</option>
+        </select>
+      </label>
       <form onSubmit={handleAnalyze} className="inspector-form space-y-4">
         {['image', 'audio', 'video', 'deepfake', 'email_file'].includes(activeSubTab) ? (
           <div className={`dropzone border-2 border-dashed rounded-xl p-8 text-center ${dragActive ? 'dropzone-active' : ''}`} onDragOver={(event) => { event.preventDefault(); setDragActive(true); }} onDragLeave={() => setDragActive(false)} onDrop={(event) => { event.preventDefault(); acceptFile(event.dataTransfer.files?.[0]); }}>

@@ -1,4 +1,5 @@
 import io
+from importlib.util import find_spec
 import math
 import os
 import tempfile
@@ -13,6 +14,23 @@ try:
 except ImportError:
     np = None
     IsolationForest = None
+
+
+def media_inspection_status() -> dict[str, Any]:
+    dependencies = {
+        "numpy": np is not None,
+        "isolation_forest": IsolationForest is not None,
+        "pillow": find_spec("PIL") is not None,
+        "opencv": find_spec("cv2") is not None,
+    }
+    available = all(dependencies.values())
+    return {
+        "available": available,
+        "loaded": False,
+        "mode": "on-demand-heuristic" if available else "limited-fallback",
+        "algorithm": "Isolation Forest over image/audio features plus sampled video frames" if available else "metadata and rule fallback",
+        "dependencies": dependencies,
+    }
 
 
 def _media_anomaly_score(features: list[float], media_type: str) -> int:

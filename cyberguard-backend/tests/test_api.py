@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 import sqlite3
@@ -6,16 +7,19 @@ import types
 
 import pytest
 import numpy as np
-from fastapi import HTTPException
+from fastapi import HTTPException, UploadFile
 
 from main import (
     admin_users,
+    analyze_file,
+    analyze_website,
     analyze_threat,
     compliance_controls,
     dashboard_metrics,
     get_db,
     summarize_dashboard_targets,
     initialize_database,
+    incident_context,
     incident_detail,
     login,
     notifications,
@@ -36,7 +40,12 @@ from main import (
     incident_memory,
     incident_explainability,
     alert_quality,
+    alert_quality_record,
     record_alert_outcome,
+    roadmap_immunity_publish,
+    roadmap_counterfactual,
+    roadmap_compliance_diff,
+    roadmap_compliance_diff_sync,
     create_provider_ticket_route,
     disable_provider_identity_route,
     isolate_provider_endpoint_route,
@@ -49,9 +58,13 @@ from production_integrations import IntegrationNotConfigured, create_ticket as c
 from email_authenticity import analyze_eml, verify_sender_identity
 from deepfake_models import _is_suspicious_label, _prepare_audio_waveform
 from evaluate_media_dataset import calculate_metrics as calculate_media_metrics
+from media_engine import media_inspection_status
 from evaluate_public_datasets import evaluate as evaluate_public_text_dataset
 import detection_engine
+import deepfake_models
+from campaign_engine import correlate_incident
 from train_model import DEFAULT_DATASET, train as train_text_model
+import website_inspector
 from extended_intel import scan_payload
 from models import ForecastRequest, LoginRequest, SimulationRequest, ThreatAnalysisRequest, ThreatIntelLookup
 from models import ProviderEndpointIsolationRequest, ProviderIdentityDisableRequest, ProviderTicketRequest
@@ -66,6 +79,7 @@ from prevention_engine import (
     policy_aware_prevention,
     risk_aware_prevention_decision,
 )
+from threat_fusion import compute_drift_snapshot, detect_memory_hits, generate_attacker_intent
 from account_rescue_engine import consent_record, contact_warning_draft, execute_step, fleet_summary, provider_capabilities, rescue_plan, rescue_report, rescue_simulation, scan_account
 
 
@@ -293,6 +307,120 @@ def test_jira_ticket_uses_api_token_basic_auth_and_requires_account_email(monkey
     assert captured["json"]["fields"]["project"]["key"] == "SEC"
 
 
+def test_website_inspector_rejects_non_global_dns_answers(monkeypatch):
+    monkeypatch.setattr(website_inspector.socket, "getaddrinfo", lambda *args, **kwargs: [(None, None, None, None, ("100.64.0.1", 0))])
+
+    with pytest.raises(ValueError, match="non-public network"):
+        website_inspector._safe_addresses("public-looking.example")
+
+
+def test_website_inspector_rechecks_redirect_targets_and_closes_streams(monkeypatch):
+    requests_made = []
+
+    class Response:
+        is_redirect = True
+        headers = {"location": "http://localhost/admin"}
+        url = "https://public.example/"
+
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    response = Response()
+
+    class Session:
+        def __init__(self):
+            self.trust_env = True
+            self.adapters = {"https://": types.SimpleNamespace(close=lambda: None), "http://": types.SimpleNamespace(close=lambda: None)}
+
+        def mount(self, prefix, adapter):
+            self.adapters[prefix] = adapter
+
+        def get(self, url, **kwargs):
+            requests_made.append(url)
+            return response
+
+        def close(self):
+            self.closed = True
+
+    session = Session()
+    monkeypatch.setattr(website_inspector.requests, "Session", lambda: session)
+    monkeypatch.setattr(website_inspector.socket, "getaddrinfo", lambda hostname, *args, **kwargs: [(None, None, None, None, ("93.184.216.34", 0))] if hostname == "public.example" else [(None, None, None, None, ("127.0.0.1", 0))])
+
+    with pytest.raises(ValueError, match="non-public network"):
+        website_inspector.inspect_website("https://public.example/")
+
+    assert requests_made == ["https://public.example/"]
+    assert response.closed is True
+    assert session.closed is True
+
+
+def test_website_inspector_accepts_public_page_and_closes_response(monkeypatch):
+    class Response:
+        is_redirect = False
+        headers = {}
+        url = "https://public.example/"
+        status_code = 200
+        encoding = "utf-8"
+        closed = False
+
+        def iter_content(self, chunk_size):
+            yield b"<html><title>Safe page</title></html>"
+
+        def close(self):
+            self.closed = True
+
+    response = Response()
+
+    class Session:
+        def __init__(self):
+            self.adapters = {"https://": types.SimpleNamespace(close=lambda: None), "http://": types.SimpleNamespace(close=lambda: None)}
+
+        def mount(self, prefix, adapter):
+            self.adapters[prefix] = adapter
+
+        def get(self, url, **kwargs):
+            assert kwargs["allow_redirects"] is False
+            return response
+
+        def close(self):
+            self.closed = True
+
+    session = Session()
+    monkeypatch.setattr(website_inspector.requests, "Session", lambda: session)
+    monkeypatch.setattr(website_inspector.socket, "getaddrinfo", lambda *args, **kwargs: [(None, None, None, None, ("93.184.216.34", 0))])
+
+    result = website_inspector.inspect_website("https://public.example/")
+
+    assert result["title"] == "Safe page"
+    assert response.closed is True
+    assert session.closed is True
+
+
+def test_pinned_website_adapter_connects_to_resolved_ip_and_keeps_tls_hostname(monkeypatch):
+    captured = {}
+    adapter = website_inspector._PinnedAddressAdapter("public.example", "93.184.216.34", 443)
+
+    class PoolManager:
+        def connection_from_host(self, **kwargs):
+            captured.update(kwargs)
+            return "pinned-pool"
+
+    adapter.poolmanager = PoolManager()
+    request = website_inspector.requests.Request("GET", "https://public.example/path").prepare()
+
+    assert adapter.get_connection_with_tls_context(request, verify=True) == "pinned-pool"
+    assert captured["host"] == "93.184.216.34"
+    assert captured["port"] == 443
+    assert captured["pool_kwargs"]["assert_hostname"] == "public.example"
+    assert captured["pool_kwargs"]["server_hostname"] == "public.example"
+
+    monkeypatch.setattr(website_inspector.HTTPAdapter, "send", lambda self, prepared, **kwargs: prepared.headers.get("Host"))
+    assert adapter.send(request) == "public.example"
+
+
 def test_postgresql_sql_translation_preserves_insert_conflicts():
     assert _postgresql_statement("INSERT INTO users (username) VALUES (?)") == "INSERT INTO users (username) VALUES (%s)"
     assert _postgresql_statement("INSERT OR IGNORE INTO users (username) VALUES (?)") == "INSERT INTO users (username) VALUES (%s) ON CONFLICT DO NOTHING"
@@ -365,6 +493,36 @@ def test_pretrained_detector_maps_ai_voice_and_real_labels_correctly():
     assert _is_suspicious_label("Fake")
     assert not _is_suspicious_label("HumanVoice")
     assert not _is_suspicious_label("Real")
+
+
+def test_media_status_distinguishes_cached_from_loaded_weights(monkeypatch, tmp_path):
+    image_path = tmp_path / "image"
+    audio_path = tmp_path / "audio"
+    image_path.mkdir()
+    audio_path.mkdir()
+    monkeypatch.setattr(deepfake_models, "_IMAGE_MODEL", str(image_path))
+    monkeypatch.setattr(deepfake_models, "_AUDIO_MODEL", str(audio_path))
+    monkeypatch.setattr(deepfake_models, "_PIPELINES", {})
+    monkeypatch.setattr(deepfake_models, "_LOAD_ERRORS", {})
+    monkeypatch.setenv("CYBERGUARD_ENABLE_PRETRAINED_MEDIA", "true")
+
+    status = deepfake_models.model_status()
+
+    assert status["mode"] == "pretrained-cached"
+    assert status["weights_cached"] == {"image": True, "audio": True}
+    assert status["loaded"] == []
+
+
+def test_media_inspection_status_reflects_missing_heuristic_dependencies(monkeypatch):
+    import media_engine
+    monkeypatch.setattr(media_engine, "np", None)
+    monkeypatch.setattr(media_engine, "IsolationForest", None)
+
+    status = media_inspection_status()
+
+    assert status["available"] is False
+    assert status["mode"] == "limited-fallback"
+    assert status["dependencies"]["numpy"] is False
 
 
 def test_pretrained_audio_input_is_downmixed_and_resampled():
@@ -560,6 +718,119 @@ def test_cyberguard_x_artifacts_are_available():
     assert incident_simulation(incident_id, SimulationRequest(actions=["isolate", "revoke"]), lead)["projected_risk"] < result["assessment"]["risk_score"]
 
 
+def test_campaign_correlation_requires_shared_evidence():
+    incident = {
+        "id": 1,
+        "category": "email",
+        "payload": "unrelated account notice",
+        "assessment": {"iocs": [], "mitre_techniques": []},
+    }
+    unrelated = {
+        "id": 2,
+        "category": "email",
+        "payload": "different unrelated account notice",
+        "assessment": {"iocs": [], "mitre_techniques": []},
+    }
+    shared_indicator = {
+        **unrelated,
+        "id": 3,
+        "assessment": {"iocs": [{"type": "domain", "indicator": "login.example.test"}], "mitre_techniques": []},
+    }
+    incident["assessment"]["iocs"] = [{"type": "domain", "indicator": "login.example.test"}]
+
+    unrelated_result = correlate_incident(incident, [unrelated])
+    shared_result = correlate_incident(incident, [shared_indicator])
+
+    assert unrelated_result["related_incidents"] == []
+    assert shared_result["related_incidents"][0]["incident_id"] == 3
+
+
+def test_shared_immunity_signatures_require_evidence_and_hide_metadata():
+    incident = {
+        "id": 7,
+        "category": "phishing",
+        "risk_level": "Critical",
+        "fingerprint": "known-fingerprint",
+        "payload": "private customer credential lure",
+    }
+    result = shared_immunity([incident], signing_secret="exchange-secret")
+
+    assert result["signature_count"] == 1
+    assert set(result["shared_signatures"][0]) == {"signature"}
+    assert "private customer" not in json.dumps(result)
+    assert "Critical" not in json.dumps(result)
+    assert shared_immunity([{"category": "phishing", "payload": ""}])["signature_count"] == 0
+    evidence_only = shared_immunity([{"category": "phishing", "assessment": {"iocs": [{"type": "domain", "indicator": "login.example.test"}], "mitre_techniques": None}}], signing_secret="exchange-secret")
+    assert evidence_only["signature_count"] == 1
+
+
+def test_shared_immunity_publish_uses_configured_installation_identity(monkeypatch):
+    monkeypatch.delenv("CYBERGUARD_TENANT_ID", raising=False)
+    with pytest.raises(HTTPException) as error:
+        roadmap_immunity_publish({}, {"username": "lead", "role": "head_admin"})
+    assert error.value.status_code == 503
+
+    monkeypatch.setenv("CYBERGUARD_TENANT_ID", "stable-org-id")
+    monkeypatch.setenv("CYBERGUARD_TENANT_IMMUNITY_SECRET", "exchange-secret")
+    monkeypatch.setattr("main._roadmap_incidents", lambda: [{"id": 1, "fingerprint": "incident-fingerprint"}])
+    captured = {}
+    monkeypatch.setattr(
+        "main.publish_tenant_signatures",
+        lambda signatures, tenant_id: captured.update({"signatures": signatures, "tenant_id": tenant_id}) or {"status": "published", "published": len(signatures)},
+    )
+
+    result = roadmap_immunity_publish(
+        {"tenant_id": "caller-controlled-id", "signatures": [{"signature": "untrusted", "source_tenant": "analyst@example.org"}]},
+        {"username": "lead", "role": "head_admin"},
+    )
+
+    assert result["status"] == "published"
+    assert captured["tenant_id"] == "stable-org-id"
+    assert len(captured["signatures"]) == 1
+    assert set(captured["signatures"][0]) == {"signature"}
+
+
+def test_threat_memory_uses_resolved_history_and_matches_exact_payloads():
+    payload = "Urgent verify your credentials at login.example.test"
+    open_match = detect_memory_hits(payload, [{"id": 5, "payload": payload, "status": "Investigating", "risk_score": 90}])
+    resolved_match = detect_memory_hits(payload, [{"id": 6, "payload": payload, "status": "Closed", "risk_score": 90}])
+
+    assert open_match["status"] == "fresh-analysis"
+    assert resolved_match["status"] == "memory-hit"
+    assert resolved_match["matches"][0]["match_score"] == 100
+
+
+def test_attacker_intent_uses_shared_ioc_evidence_from_related_incidents():
+    incident = {
+        "id": 1,
+        "category": "phishing",
+        "risk_score": 50,
+        "payload": "verify credentials at login.example.test",
+        "assessment": {"iocs": [{"type": "domain", "indicator": "login.example.test"}], "mitre_techniques": []},
+    }
+    same_category_only = {"id": 2, "category": "phishing", "risk_score": 80, "assessment": {"iocs": [], "mitre_techniques": []}}
+    shared_ioc = {"id": 3, "category": "email", "risk_score": 60, "assessment": {"iocs": [{"type": "domain", "indicator": "login.example.test"}], "mitre_techniques": []}}
+
+    intent = generate_attacker_intent(incident, [same_category_only, shared_ioc])
+
+    assert [item["incident_id"] for item in intent["related_incidents"]] == [3]
+    assert intent["confidence"] > generate_attacker_intent(incident)["confidence"]
+    assert "corroborated" in intent["summary"]
+
+
+def test_fingerprint_drift_ignores_unrelated_evidence_free_incidents():
+    incident = {"id": 1, "category": "phishing", "payload": "account notice", "assessment": {"iocs": [], "mitre_techniques": []}}
+    unrelated = {"id": 2, "category": "phishing", "payload": "different notice", "assessment": {"iocs": [], "mitre_techniques": []}}
+    related = {"id": 3, "category": "email", "payload": "account notice", "assessment": {"iocs": [{"type": "domain", "indicator": "login.example.test"}], "mitre_techniques": ["T1566"]}}
+    incident["assessment"] = {"iocs": [{"type": "domain", "indicator": "login.example.test"}], "mitre_techniques": ["T1566"]}
+
+    unrelated_result = compute_drift_snapshot({**incident, "assessment": {"iocs": [], "mitre_techniques": []}}, [unrelated])
+    related_result = compute_drift_snapshot(incident, [related])
+
+    assert unrelated_result["related_incidents"] == []
+    assert related_result["related_incidents"][0]["incident_id"] == 3
+
+
 def test_siem_dhcp_and_idp_correlation_workflow():
     initialize_database()
     lead = login(LoginRequest(username="lead", password="lead123"))["user"]
@@ -637,11 +908,48 @@ def test_sprint_1_intelligence_signals_are_available():
     assert report["overall_score"] >= 0
 
 
+def test_alert_outcomes_are_persisted_in_configured_database(tmp_path, monkeypatch):
+    monkeypatch.setattr("main.DB_PATH", tmp_path / "feedback.db")
+    initialize_database()
+
+    outcome = record_alert_outcome(incident_id=77, detection_type="phishing", alert_risk_score=84, final_resolution="false_positive", reviewed_by="lead")
+    report = alert_quality()
+    with get_db() as db:
+        stored = db.execute("SELECT incident_id, final_resolution, was_correct FROM alert_outcomes WHERE incident_id = ?", (77,)).fetchone()
+
+    assert outcome["was_correct"] is False
+    assert stored["final_resolution"] == "false_positive"
+    assert report["overall_score"] == 0
+    assert report["detection_types"]["phishing"] == 0
+
+
+def test_alert_feedback_reviewer_comes_from_authenticated_user(tmp_path, monkeypatch):
+    monkeypatch.setattr("main.DB_PATH", tmp_path / "reviewer.db")
+    initialize_database()
+
+    outcome = alert_quality_record(
+        {"incident_id": 91, "detection_type": "phishing", "alert_risk_score": 84, "final_resolution": "malicious", "reviewed_by": "someone-else"},
+        {"username": "lead", "role": "lead"},
+    )
+
+    assert outcome["reviewed_by"] == "lead"
+
+
 def test_adversarial_self_test_exposes_confidence_decay():
     result = adversarial_self_test("email", "URGENT verify credentials at https://secure-login.xyz/auth?redirect=evil")
     assert result["baseline_score"] >= 0
     assert result["adversarial_probes"]
     assert result["confidence_decay"] >= 0
+
+
+def test_adversarial_self_test_excludes_unchanged_and_duplicate_probes():
+    payload = "URGENT verify your PASSWORD immediately"
+    result = adversarial_self_test("email", payload)
+    variants = [probe["variant"] for probe in result["adversarial_probes"]]
+
+    assert variants
+    assert all(variant != payload for variant in variants)
+    assert len(variants) == len(set(variants))
 
 
 def test_defender_fatigue_routing_prioritizes_lightest_load():
@@ -659,6 +967,28 @@ def test_defender_fatigue_routing_prioritizes_lightest_load():
     )
     assert result["route_summary"]["available_analysts"] >= 1
     assert result["recommended_queue"][0]["target"] in {"analyst", "lead", "sub_admin"}
+
+
+def test_fatigue_routing_counts_active_work_and_excludes_resolved_incidents():
+    result = fatigue_routing(
+        [
+            {"database_id": 1, "risk_score": 90, "status": "Investigating", "assigned_to": "analyst-a"},
+            {"database_id": 2, "risk_score": 70, "status": "New", "assigned_to": None},
+            {"database_id": 3, "risk_score": 80, "status": "Closed", "assigned_to": "analyst-b"},
+        ],
+        [
+            {"username": "analyst-a", "role": "analyst"},
+            {"username": "analyst-b", "role": "analyst"},
+        ],
+    )
+
+    queue = {item["incident_id"]: item for item in result["recommended_queue"]}
+    assert queue[2]["target"] == "analyst-b"
+    assert 3 not in queue
+
+    no_roster = fatigue_routing([{"database_id": 4, "risk_score": 60, "status": "New"}], [])
+    assert no_roster["recommended_queue"][0]["target"] == "unassigned"
+    assert no_roster["route_summary"]["available_analysts"] == 0
 
 
 def test_remaining_roadmap_features_return_safe_operational_artifacts():
@@ -683,6 +1013,56 @@ def test_remaining_roadmap_features_return_safe_operational_artifacts():
     assert jurisdiction_route(incident)["jurisdiction"] == "India"
 
 
+def test_jurisdiction_requires_and_persists_explicit_residency_metadata(tmp_path, monkeypatch):
+    monkeypatch.setattr("main.DB_PATH", tmp_path / "jurisdiction.db")
+    initialize_database()
+    lead = {"username": "lead", "role": "lead"}
+
+    missing = jurisdiction_route({"risk_score": 40})
+    result = analyze_threat(
+        ThreatAnalysisRequest(category="email", payload="Routine account notice", metadata={"country": "United States"}),
+        lead,
+    )
+    stored_incident = incident_context(result["incident_id"])
+    routed = jurisdiction_route(stored_incident)
+
+    assert missing["jurisdiction"] == "Unknown / global review"
+    assert stored_incident["metadata"]["country"] == "United States"
+    assert routed["country"] == "US"
+    assert routed["jurisdiction"] == "United States"
+
+
+def test_website_analysis_persists_incident_and_jurisdiction_metadata(tmp_path, monkeypatch):
+    monkeypatch.setattr("main.DB_PATH", tmp_path / "website-analysis.db")
+    initialize_database()
+    monkeypatch.setattr("main.inspect_website", lambda url: {"final_url": url, "title": "Account verification", "findings": ["look-alike login page"]})
+
+    result = analyze_website(
+        {"url": "https://login.example.test", "metadata": {"country": "GB"}},
+        {"username": "lead", "role": "lead"},
+    )
+    stored = incident_context(result["incident_id"])
+
+    assert stored["metadata"]["country"] == "GB"
+    assert jurisdiction_route(stored)["jurisdiction"] == "United Kingdom"
+
+
+def test_uploaded_file_analysis_persists_residency_metadata(tmp_path, monkeypatch):
+    monkeypatch.setattr("main.DB_PATH", tmp_path / "file-analysis.db")
+    initialize_database()
+
+    result = asyncio.run(analyze_file(
+        category="email",
+        file=UploadFile(file=io.BytesIO(b"routine account notice"), filename="notice.txt"),
+        metadata=json.dumps({"country": "EU", "private_note": "discard this"}),
+        user={"username": "lead", "role": "lead"},
+    ))
+    stored = incident_context(result["incident_id"])
+
+    assert stored["metadata"] == {"country": "EU"}
+    assert jurisdiction_route(stored)["jurisdiction"] == "European Union"
+
+
 def test_limited_roadmap_workflows_are_functional():
     incident = {"database_id": 7, "risk_score": 80, "category": "deepfake"}
     media = cross_modal_consistency([{"score": 20, "method": "image"}, {"score": 48, "method": "audio"}])
@@ -692,6 +1072,64 @@ def test_limited_roadmap_workflows_are_functional():
     assert replay["counterfactual_risk"] > replay["baseline_risk"]
     diff = compliance_diff([{"id": "control-1", "status": "Needs Review"}], [{"id": "CVE-TEST", "severity": "high"}])
     assert diff["gap_count"] == 2
+
+
+def test_counterfactual_replay_rejects_unmodeled_variables_and_actions():
+    incident = {"database_id": 9, "risk_score": 70}
+
+    with pytest.raises(ValueError, match="Unsupported counterfactual variable"):
+        counterfactual_replay(incident, ["isolate"], "attacker_skill", 4)
+    with pytest.raises(ValueError, match="Unsupported response action"):
+        counterfactual_replay(incident, ["grant-admin-access"], "response_delay_hours", 4)
+
+
+def test_counterfactual_api_returns_validation_errors_for_unmodeled_input(monkeypatch):
+    monkeypatch.setattr("main.incident_context", lambda incident_id: {"database_id": incident_id, "risk_score": 70})
+    user = {"username": "lead", "role": "lead"}
+
+    with pytest.raises(HTTPException) as error:
+        roadmap_counterfactual(9, {"actions": ["isolate"], "variable": "attacker_skill", "value": 4}, user)
+    assert error.value.status_code == 422
+
+    with pytest.raises(HTTPException) as error:
+        roadmap_counterfactual(9, {"actions": "isolate", "variable": "response_delay_hours", "value": 4}, user)
+    assert error.value.status_code == 422
+
+
+def test_synced_cves_persist_and_feed_subsequent_compliance_diffs(tmp_path, monkeypatch):
+    monkeypatch.setattr("main.DB_PATH", tmp_path / "cve-sync.db")
+    initialize_database()
+    monkeypatch.setattr("main.sync_cve_feed", lambda: {
+        "status": "synced",
+        "configured": True,
+        "source": "test-feed",
+        "cves": ["CVE-2026-1000"],
+        "items": [{"id": "CVE-2026-1000", "severity": "critical"}],
+    })
+    user = {"username": "lead", "role": "lead"}
+
+    synced = roadmap_compliance_diff_sync(user)
+    subsequent = roadmap_compliance_diff({"cves": []}, user)
+
+    assert synced["diff"]["cve_count"] == 1
+    assert any(gap.get("id") == "CVE-2026-1000" for gap in subsequent["gaps"])
+
+
+def test_cross_modal_consistency_requires_distinct_valid_media_channels():
+    same_modality = cross_modal_consistency([
+        {"score": 20, "media_type": "image/png", "method": "image-anomaly-model"},
+        {"score": 48, "media_type": "image/jpeg", "method": "image-anomaly-model"},
+    ])
+    invalid = cross_modal_consistency([
+        {"score": "not-a-score", "media_type": "image/png", "method": "image-anomaly-model"},
+        {"score": float("nan"), "media_type": "audio/wav", "method": "audio-anomaly-model"},
+        {"score": 99, "media_type": "video/mp4", "method": "metadata-fallback"},
+    ])
+
+    assert same_modality["status"] == "insufficient evidence"
+    assert same_modality["media_count"] == 1
+    assert invalid["status"] == "insufficient evidence"
+    assert invalid["media_count"] == 0
 
 
 def test_prevention_engine_features_are_functional():

@@ -25,7 +25,7 @@ function Panel({ icon: Icon, eyebrow, title, children, action }) {
 }
 
 export default function ThreatIntelligence({ accessToken, incidents = [] }) {
-  const [selectedId, setSelectedId] = useState(incidents[0]?.database_id || null);
+  const [selectedId, setSelectedId] = useState(null);
   const [genome, setGenome] = useState(null);
   const [correlations, setCorrelations] = useState(null);
   const [timeline, setTimeline] = useState(null);
@@ -36,11 +36,9 @@ export default function ThreatIntelligence({ accessToken, incidents = [] }) {
   const [battle, setBattle] = useState(null);
   const [intent, setIntent] = useState(null);
   const [drift, setDrift] = useState(null);
-  const [memory, setMemory] = useState(null);
   const [explainability, setExplainability] = useState(null);
   const [alertQuality, setAlertQuality] = useState(null);
   const [counterfactual, setCounterfactual] = useState(null);
-  const [baselineTwin, setBaselineTwin] = useState(null);
   const [selectedActions, setSelectedActions] = useState(['isolate', 'revoke']);
   const [busy, setBusy] = useState(false);
   const config = { headers: { Authorization: `Bearer ${accessToken}` } };
@@ -53,25 +51,11 @@ export default function ThreatIntelligence({ accessToken, incidents = [] }) {
   } : null;
 
   useEffect(() => {
-    if (!selectedId && incidents[0]?.database_id) setSelectedId(incidents[0].database_id);
-  }, [incidents, selectedId]);
-
-  useEffect(() => {
-    if (!selectedIncident?.database_id) {
-      axios.get(`${apiBaseUrl}/api/v1/network/twin`, config).then((response) => setBaselineTwin(response.data)).catch(() => setBaselineTwin({ nodes: [], edges: [] }));
-    }
-    if (!selectedIncident?.database_id) {
-      setGenome(null);
-      setCorrelations(null);
-      setTimeline(null);
-      setForecast(null);
-      setTwin(null);
-      setPsychology(null);
-      setHealing(null);
-      return;
-    }
+    if (!selectedIncident?.database_id) return undefined;
+    let active = true;
     const id = selectedIncident.database_id;
-    Promise.all([
+    const config = { headers: { Authorization: `Bearer ${accessToken}` } };
+    Promise.allSettled([
       axios.get(`${apiBaseUrl}/api/v1/incidents/${id}/dna`, config),
       axios.get(`${apiBaseUrl}/api/v1/incidents/${id}/correlations`, config),
       axios.get(`${apiBaseUrl}/api/v1/incidents/${id}/attack-chain`, config),
@@ -81,24 +65,26 @@ export default function ThreatIntelligence({ accessToken, incidents = [] }) {
       axios.post(`${apiBaseUrl}/api/v1/self-heal`, { incident_id: id }, config),
       axios.get(`${apiBaseUrl}/api/v1/incidents/${id}/intent`, config),
       axios.get(`${apiBaseUrl}/api/v1/incidents/${id}/drift`, config),
-      axios.get(`${apiBaseUrl}/api/v1/incidents/${id}/memory`, config),
       axios.get(`${apiBaseUrl}/api/v1/incidents/${id}/explainability`, config),
       axios.get(`${apiBaseUrl}/api/v1/alert-quality`, config),
-    ]).then(([genomeResponse, correlationResponse, timelineResponse, psychologyResponse, twinResponse, forecastResponse, healingResponse, intentResponse, driftResponse, memoryResponse, explainabilityResponse, alertResponse]) => {
-      setGenome(genomeResponse.data.genome);
-      setCorrelations(correlationResponse.data);
-      setTimeline(timelineResponse.data.events);
-      setPsychology(psychologyResponse.data);
-      setTwin(twinResponse.data);
-      setForecast(forecastResponse.data);
-      setHealing(healingResponse.data);
-      setIntent(intentResponse.data);
-      setDrift(driftResponse.data);
-      setMemory(memoryResponse.data);
-      setExplainability(explainabilityResponse.data);
-      setAlertQuality(alertResponse.data);
-    }).catch(() => {});
-  }, [selectedIncident?.database_id, accessToken]);
+    ]).then((results) => {
+      if (!active) return;
+      const data = results.map((result) => result.status === 'fulfilled' ? result.value.data : null);
+      const [genome, correlations, timeline, psychology, twin, forecast, healing, intent, drift, explainability, alertQuality] = data;
+      if (genome) setGenome(genome.genome);
+      if (correlations) setCorrelations(correlations);
+      if (timeline) setTimeline(timeline.events || []);
+      if (psychology) setPsychology(psychology);
+      if (twin) setTwin(twin);
+      if (forecast) setForecast(forecast);
+      if (healing) setHealing(healing);
+      if (intent) setIntent(intent);
+      if (drift) setDrift(drift);
+      if (explainability) setExplainability(explainability);
+      if (alertQuality) setAlertQuality(alertQuality);
+    });
+    return () => { active = false; };
+  }, [selectedIncident?.database_id, selectedIncident?.explanation, selectedIncident?.category, accessToken]);
 
   const runBattle = async () => {
     setBusy(true);
@@ -139,17 +125,9 @@ export default function ThreatIntelligence({ accessToken, incidents = [] }) {
 
     <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
       {!hasIncidentData ? (
-        <>
-          <Panel icon={Waypoints} eyebrow="05 / digital twin" title="Live network propagation">
-            <div className="twin-map">{(baselineTwin?.nodes || []).map((node, index) => <div className={`twin-node twin-${node.kind}`} style={{ left: `${12 + (index % 3) * 34}%`, top: `${20 + Math.floor(index / 3) * 32}%` }} key={node.id}><span><Radar size={13} /></span><small>{node.label}</small></div>)}</div>
-            <div className="twin-footer"><span>{baselineTwin?.nodes?.length || 0} nodes observed</span><span className="text-emerald-300">● live telemetry</span></div>
-          </Panel>
-          <Panel icon={Sparkles} eyebrow="06 / human manipulation" title="Psychology signal map">
-            <div className="risk-meter-label"><span>Manipulation pressure</span><strong>0%</strong></div><RiskBar value={0} color="#f6c76c" />
-            <div className="psychology-grid">{['urgency', 'fear', 'authority', 'reward'].map((tactic) => <div key={tactic}><span>{tactic}</span><b>clear</b></div>)}</div>
-          </Panel>
-          <div className="rounded-2xl border border-dashed border-slate-600 bg-slate-900/40 p-5 text-sm text-slate-400 xl:col-span-2">Run a threat assessment to unlock incident-specific genome, drift, forecast, and response intelligence.</div>
-        </>
+        <div className="rounded-2xl border border-slate-700 bg-slate-950/40 p-5 text-sm text-slate-400">
+          Intelligence panels remain on standby until a threat is analyzed and inserted into the SOC timeline.
+        </div>
       ) : (
         <>
           <Panel icon={BrainCircuit} eyebrow="01 / threat DNA" title="Genome fingerprint">

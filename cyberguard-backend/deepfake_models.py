@@ -125,4 +125,14 @@ def model_status() -> dict[str, Any]:
     enabled = os.getenv("CYBERGUARD_ENABLE_PRETRAINED_MEDIA", "true").lower() in {"1", "true", "yes"}
     cached = {"image": Path(_IMAGE_MODEL).exists(), "audio": Path(_AUDIO_MODEL).exists()}
     blocked = any("DLL load failed" in error or "Application Control" in error for error in _LOAD_ERRORS.values())
-    return {"enabled": enabled, "image_model": _IMAGE_MODEL, "audio_model": _AUDIO_MODEL, "weights_cached": cached, "loaded": sorted(_PIPELINES), "load_errors": _LOAD_ERRORS, "runtime_blocked": blocked, "mode": "pretrained" if _PIPELINES else "heuristic-fallback"}
+    if not enabled:
+        mode = "disabled"
+    elif _PIPELINES:
+        mode = "pretrained-loaded"
+    elif _LOAD_ERRORS:
+        mode = "load-failed"
+    elif any(cached.values()):
+        mode = "pretrained-cached"
+    else:
+        mode = "weights-not-cached"
+    return {"enabled": enabled, "image_model": _IMAGE_MODEL, "audio_model": _AUDIO_MODEL, "weights_cached": cached, "loaded": sorted(_PIPELINES), "load_errors": _LOAD_ERRORS, "runtime_blocked": blocked, "mode": mode, "heuristic_fallback": mode != "pretrained-loaded"}

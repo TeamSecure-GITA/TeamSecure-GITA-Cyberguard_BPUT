@@ -4,93 +4,10 @@ import hashlib
 import hmac
 import json
 import os
+import re
 from typing import Any
 
 import requests
-
-
-def _safe_url(value: str | None) -> str:
-    if not value:
-        return ""
-    try:
-        from urllib.parse import urlparse
-        parsed = urlparse(value)
-        host = parsed.netloc or parsed.path
-        if host:
-            safe_host = host.split("@")[-1]
-            return safe_host.split(":")[0]
-        return value
-    except Exception:
-        return ""
-
-
-def _is_effective_config(value: str | None) -> bool:
-    if value is None:
-        return False
-    text = str(value).strip()
-    if not text:
-        return False
-    lowered = text.lower()
-    blocked_tokens = (
-        "your-",
-        "placeholder",
-        "sample",
-        "demo",
-        "dummy",
-        "changeme",
-        "replace-me",
-        "not-set",
-        "unknown",
-    )
-    return not any(token in lowered for token in blocked_tokens)
-
-
-def provider_readiness() -> dict[str, Any]:
-    honey_url = os.getenv("CYBERGUARD_HONEYTOKEN_WEBHOOK_URL")
-    cve_url = os.getenv("CYBERGUARD_CVE_FEED_URL")
-    tenant_url = os.getenv("CYBERGUARD_TENANT_IMMUNITY_URL")
-    response_url = os.getenv("CYBERGUARD_RESPONSE_WEBHOOK_URL")
-    alert_url = os.getenv("CYBERGUARD_ALERT_WEBHOOK_URL")
-
-    checks = {
-        "honeytokens": {
-            "configured": _is_effective_config(honey_url)
-            and _is_effective_config(os.getenv("CYBERGUARD_HONEYTOKEN_API_TOKEN"))
-            and _is_effective_config(os.getenv("CYBERGUARD_HONEYTOKEN_SIGNING_SECRET")),
-            "provider": os.getenv("CYBERGUARD_HONEYTOKEN_PROVIDER", "generic-webhook"),
-            "source": _safe_url(honey_url),
-        },
-        "cve_feed": {
-            "configured": _is_effective_config(cve_url),
-            "source": _safe_url(cve_url),
-        },
-        "tenant_immunity": {
-            "configured": _is_effective_config(tenant_url) and _is_effective_config(os.getenv("CYBERGUARD_TENANT_IMMUNITY_SECRET")),
-            "provider": "signed-tenant-exchange",
-            "source": _safe_url(tenant_url),
-        },
-        "response_webhook": {
-            "configured": _is_effective_config(response_url),
-            "source": _safe_url(response_url),
-        },
-        "alert_webhook": {
-            "configured": _is_effective_config(alert_url),
-            "source": _safe_url(alert_url),
-        },
-        "urlhaus": {
-            "configured": bool(os.getenv("CYBERGUARD_URLHAUS_AUTH_KEY")),
-            "source": "https://urlhaus.abuse.ch",
-        },
-        "abuseipdb": {
-            "configured": bool(os.getenv("CYBERGUARD_ABUSEIPDB_KEY")),
-            "source": "https://www.abuseipdb.com",
-        },
-    }
-    ready = all(
-        checks.get(name, {}).get("configured", False)
-        for name in ("honeytokens", "cve_feed", "tenant_immunity", "response_webhook", "alert_webhook")
-    )
-    return {"ready": ready, "checks": checks}
 
 
 def _post_json(url: str, payload: dict[str, Any], token: str | None = None, secret: str | None = None) -> dict[str, Any]:
@@ -125,23 +42,59 @@ def sync_cve_feed() -> dict[str, Any]:
     response = requests.get(url, headers=headers, timeout=15)
     response.raise_for_status()
     payload = response.json()
-    cves = payload.get("cves", payload.get("vulnerabilities", payload if isinstance(payload, list) else []))
-    if isinstance(cves, list):
-        cves = [item.get("cve", item) if isinstance(item, dict) else item for item in cves]
-    return {"status": "synced", "configured": True, "source": url, "cves": cves[:500], "count": len(cves)}
+    cves = payload.get("cves", payload.get("vulnerabilities", [])) if isinstance(payload, dict) else payload if isinstance(payload, list) else []
+    identifiers = []
+    items = []
+    for item in cves if isinstance(cves, list) else []:
+        nested = item.get("cve") if isinstance(item, dict) else None
+        detail = nested if isinstance(nested, dict) else item if isinstance(item, dict) else {}
+        identifier = detail.get("id") or detail.get("cve_id") or nested if isinstance(nested, str) else detail.get("id") or detail.get("cve_id")
+        if not identifier and isinstance(item, str):
+            identifier = item
+        if not identifier:
+            continue
+        metrics = detail.get("metrics") if isinstance(detail.get("metrics"), dict) else {}
+        cvss = metrics.get("cvssMetricV31") or metrics.get("cvssMetricV30") or []
+        cvss_severity = cvss[0].get("cvssData", {}).get("baseSeverity") if cvss and isinstance(cvss[0], dict) else None
+        severity = str((item.get("severity") if isinstance(item, dict) else None) or detail.get("severity") or cvss_severity or "unknown").lower()
+        identifier = str(identifier)
+        identifiers.append(identifier)
+        items.append({"id": identifier, "severity": severity})
+    return {"status": "synced", "configured": True, "source": url, "cves": identifiers[:500], "items": items[:500], "count": len(items)}
 
 
 def tenant_exchange_status() -> dict[str, Any]:
-    return {"configured": bool(os.getenv("CYBERGUARD_TENANT_IMMUNITY_URL") and os.getenv("CYBERGUARD_TENANT_IMMUNITY_SECRET")), "provider": "signed-tenant-exchange"}
+    configured = all(os.getenv(name, "").strip() for name in (
+        "CYBERGUARD_TENANT_IMMUNITY_URL",
+        "CYBERGUARD_TENANT_IMMUNITY_SECRET",
+        "CYBERGUARD_TENANT_ID",
+    ))
+    return {"configured": configured, "provider": "signed-tenant-exchange"}
 
 
 def publish_tenant_signatures(signatures: list[dict[str, Any]], tenant_id: str) -> dict[str, Any]:
     url = os.getenv("CYBERGUARD_TENANT_IMMUNITY_URL")
     secret = os.getenv("CYBERGUARD_TENANT_IMMUNITY_SECRET")
     if not url or not secret:
-        return {"status": "not_configured", "configured": False, "published": 0, "message": "Set CYBERGUARD_TENANT_IMMUNITY_URL and CYBERGUARD_TENANT_IMMUNITY_SECRET to enable signed sharing."}
-    result = _post_json(url, {"tenant_id": tenant_id, "signatures": signatures}, secret=secret)
-    return {"status": "published", "configured": True, "published": len(signatures), "result": result}
+        return {"status": "not_configured", "configured": False, "published": 0, "message": "Set CYBERGUARD_TENANT_IMMUNITY_URL, CYBERGUARD_TENANT_IMMUNITY_SECRET, and CYBERGUARD_TENANT_ID to enable signed sharing."}
+    normalized_signatures = []
+    seen = set()
+    for item in signatures:
+        signature = item.get("signature") if isinstance(item, dict) else None
+        if not isinstance(signature, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", signature):
+            continue
+        signature = signature.lower()
+        if signature not in seen:
+            seen.add(signature)
+            normalized_signatures.append({"signature": signature})
+    if not normalized_signatures:
+        return {"status": "no_signatures", "configured": True, "published": 0}
+    tenant_id = str(tenant_id or "").strip()
+    if not tenant_id:
+        return {"status": "missing_tenant_id", "configured": True, "published": 0}
+    opaque_tenant_id = hmac.new(secret.encode(), tenant_id.encode(), hashlib.sha256).hexdigest()
+    result = _post_json(url, {"tenant_id": opaque_tenant_id, "signatures": normalized_signatures}, secret=secret)
+    return {"status": "published", "configured": True, "published": len(normalized_signatures), "result": result}
 
 
 def integration_status() -> dict[str, Any]:
@@ -151,6 +104,33 @@ def integration_status() -> dict[str, Any]:
         "tenant_immunity": tenant_exchange_status(),
         "response_webhook": {"configured": bool(os.getenv("CYBERGUARD_RESPONSE_WEBHOOK_URL"))},
         "alert_webhook": {"configured": bool(os.getenv("CYBERGUARD_ALERT_WEBHOOK_URL"))},
-        "urlhaus": {"configured": bool(os.getenv("CYBERGUARD_URLHAUS_AUTH_KEY")), "source": "https://urlhaus.abuse.ch"},
-        "abuseipdb": {"configured": bool(os.getenv("CYBERGUARD_ABUSEIPDB_KEY")), "source": "https://www.abuseipdb.com"},
+    }
+
+
+def provider_readiness() -> dict[str, Any]:
+    checks = integration_status()
+    placeholder_markers = ("your-", "your_", "example.", "example/", "change-me")
+    configured_checks = []
+    for name, status in checks.items():
+        if not status.get("configured"):
+            continue
+        values = " ".join(str(value).lower() for key, value in status.items() if key != "configured")
+        if any(marker in values for marker in placeholder_markers):
+            continue
+        configured_checks.append(name)
+    required_values = [
+        os.getenv("CYBERGUARD_HONEYTOKEN_WEBHOOK_URL", ""),
+        os.getenv("CYBERGUARD_CVE_FEED_URL", ""),
+        os.getenv("CYBERGUARD_TENANT_IMMUNITY_URL", ""),
+        os.getenv("CYBERGUARD_TENANT_IMMUNITY_SECRET", ""),
+        os.getenv("CYBERGUARD_TENANT_ID", ""),
+        os.getenv("CYBERGUARD_RESPONSE_WEBHOOK_URL", ""),
+        os.getenv("CYBERGUARD_ALERT_WEBHOOK_URL", ""),
+    ]
+    ready = bool(checks) and len(configured_checks) == len(checks) and all(value and not any(marker in value.lower() for marker in placeholder_markers) for value in required_values)
+    return {
+        "ready": ready,
+        "checks": checks,
+        "configured_count": len(configured_checks),
+        "total_checks": len(checks),
     }

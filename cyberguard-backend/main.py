@@ -51,13 +51,11 @@ from typing import Any, Optional
 
 import requests
 import jwt
-
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from webauthn import generate_authentication_options, generate_registration_options, options_to_json, verify_authentication_response, verify_registration_response
 from webauthn.helpers.structs import PublicKeyCredentialDescriptor, UserVerificationRequirement
-
 from database import connect_database
 from ephemeral_store import EphemeralStore
 
@@ -66,7 +64,7 @@ from battle_simulator import run_battle
 from campaign_engine import correlate_incident
 from digital_twin import build_twin
 from forecast_engine import forecast_risk
-from media_engine import analyze_media
+from media_engine import analyze_media, media_inspection_status
 from psychology_detector import analyze_psychology
 from response_simulator import simulate_response
 from self_healing import recommend_healing
@@ -329,6 +327,7 @@ def initialize_database():
                 risk_score INTEGER NOT NULL,
                 risk_level TEXT NOT NULL,
                 assessment TEXT NOT NULL,
+                metadata TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS actions (
@@ -356,6 +355,23 @@ def initialize_database():
                 resource TEXT NOT NULL,
                 details TEXT NOT NULL,
                 created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS alert_outcomes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                incident_id INTEGER NOT NULL,
+                detection_type TEXT NOT NULL,
+                alert_risk_score INTEGER NOT NULL,
+                final_resolution TEXT NOT NULL,
+                was_correct INTEGER NOT NULL,
+                reviewed_by TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_alert_outcomes_created_at ON alert_outcomes (created_at DESC);
+            CREATE TABLE IF NOT EXISTS cve_feed_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT NOT NULL,
+                items_json TEXT NOT NULL,
+                synced_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS threat_fingerprints (
                 incident_id INTEGER PRIMARY KEY,
@@ -476,6 +492,8 @@ def initialize_database():
             db.execute("ALTER TABLE incidents ADD COLUMN assigned_to TEXT")
         if "notes" not in columns:
             db.execute("ALTER TABLE incidents ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
+        if "metadata" not in columns:
+            db.execute("ALTER TABLE incidents ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
         users = [
             ("analyst", hash_password("analyst123"), "analyst", "", None, "active"),
             ("lead", hash_password("lead123"), "lead", "", None, "active"),
@@ -484,8 +502,8 @@ def initialize_database():
         ]
         db.executemany("INSERT OR IGNORE INTO users (username, password_hash, role, email, parent_username, status) VALUES (?, ?, ?, ?, ?, ?)", users)
         db.execute(
-            "UPDATE users SET password_hash = ?, status = 'active' WHERE lower(username) = lower(?)",
-            (hash_password(HEAD_ADMIN_PASSWORD), HEAD_ADMIN_USERNAME),
+            "UPDATE users SET password_hash = ?, role = 'head_admin', email = ?, status = 'active' WHERE lower(username) = lower(?)",
+            (hash_password(HEAD_ADMIN_PASSWORD), SECURITY_OWNER_EMAIL, HEAD_ADMIN_USERNAME),
         )
 
 
@@ -680,11 +698,22 @@ def admin_user(request: Request, user: dict[str, str] = Depends(current_user)) -
     return user
 
 
-def store_incident(category: str, payload: str, assessment: dict, filename: str | None = None, file_hash: str | None = None):
+def normalize_residency_metadata(metadata: Any) -> dict[str, str]:
+    if not isinstance(metadata, dict):
+        return {}
+    return {
+        key: value.strip()[:64]
+        for key in ("country", "region")
+        if isinstance((value := metadata.get(key)), str) and value.strip()
+    }
+
+
+def store_incident(category: str, payload: str, assessment: dict, filename: str | None = None, file_hash: str | None = None, metadata: dict | None = None):
+    residency = normalize_residency_metadata(metadata)
     with get_db() as db:
         cursor = db.execute(
-            "INSERT INTO incidents (category, payload, filename, file_hash, risk_score, risk_level, assessment, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (category, payload, filename, file_hash, assessment["risk_score"], assessment["risk_level"], json.dumps(assessment), datetime.now(timezone.utc).isoformat(), "Investigating" if assessment["risk_level"] in ["High", "Critical"] else "New"),
+            "INSERT INTO incidents (category, payload, filename, file_hash, risk_score, risk_level, assessment, metadata, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (category, payload, filename, file_hash, assessment["risk_score"], assessment["risk_level"], json.dumps(assessment), json.dumps(residency), datetime.now(timezone.utc).isoformat(), "Investigating" if assessment["risk_level"] in ["High", "Critical"] else "New"),
         )
         return cursor.lastrowid
 
@@ -701,26 +730,34 @@ def create_notification(username: str, title: str, message: str, severity: str):
 
 def incident_context(incident_id: int) -> dict:
     with get_db() as db:
-        row = db.execute("SELECT id, category, payload, risk_score, risk_level, assessment, created_at FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+        row = db.execute("SELECT id, category, payload, risk_score, risk_level, assessment, metadata, created_at FROM incidents WHERE id = ?", (incident_id,)).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Incident not found")
     try:
         assessment = json.loads(row["assessment"])
     except json.JSONDecodeError:
         assessment = ast.literal_eval(row["assessment"])
-    return {**dict(row), "assessment": assessment}
+    try:
+        metadata = json.loads(row["metadata"] or "{}")
+    except (json.JSONDecodeError, TypeError):
+        metadata = {}
+    return {**dict(row), "assessment": assessment, "metadata": metadata}
 
 
 def recent_incident_context() -> list[dict]:
     with get_db() as db:
-        rows = db.execute("SELECT id, category, payload, risk_score, risk_level, assessment, created_at FROM incidents ORDER BY id DESC LIMIT 100").fetchall()
+        rows = db.execute("SELECT id, category, payload, risk_score, risk_level, status, assessment, metadata, created_at FROM incidents ORDER BY id DESC LIMIT 100").fetchall()
     result = []
     for row in rows:
         try:
             assessment = json.loads(row["assessment"])
         except json.JSONDecodeError:
             assessment = ast.literal_eval(row["assessment"])
-        result.append({**dict(row), "assessment": assessment})
+        try:
+            metadata = json.loads(row["metadata"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            metadata = {}
+        result.append({**dict(row), "assessment": assessment, "metadata": metadata})
     return result
 
 
@@ -728,35 +765,46 @@ def fatigue_routing(incidents: list[dict], analysts: list[dict]) -> dict:
     analyst_capacity = {}
     for analyst in analysts:
         role = str(analyst.get("role") or "analyst").lower()
+        username = analyst.get("username", f"{role}-{len(analyst_capacity)+1}")
         if role in {"lead", "sub_admin", "admin", "head_admin"}:
-            analyst_capacity[analyst.get("username", f"{role}-{len(analyst_capacity)+1}")] = 1.0
+            analyst_capacity.setdefault(username, 1.0)
         else:
-            analyst_capacity[analyst.get("username", f"analyst-{len(analyst_capacity)+1}")] = 0.75
+            analyst_capacity.setdefault(username, 0.75)
+
+    resolved_statuses = {"mitigated", "closed"}
+    active_incidents = [
+        incident for incident in incidents
+        if str(incident.get("status") or "New").strip().lower() not in resolved_statuses
+    ]
+    for incident in active_incidents:
+        assigned = incident.get("assigned_to")
+        if assigned in analyst_capacity:
+            analyst_capacity[assigned] = min(1.4, analyst_capacity[assigned] + 0.25)
 
     queue = []
-    for incident in incidents:
+    for incident in active_incidents:
         risk = int(incident.get("risk_score", 0) or 0)
         status = str(incident.get("status") or "New")
         assigned = incident.get("assigned_to")
         if assigned and assigned in analyst_capacity:
-            current_load = analyst_capacity[assigned]
             route_target = assigned
+        elif analyst_capacity:
+            route_target = min(analyst_capacity, key=lambda name: (analyst_capacity[name], name))
+            analyst_capacity[route_target] = min(1.4, analyst_capacity[route_target] + 0.25)
         else:
-            target = min(analyst_capacity, key=lambda name: (analyst_capacity[name], name))
-            route_target = target
-            analyst_capacity[target] = min(1.4, analyst_capacity[target] + 0.25)
+            route_target = "unassigned"
         queue.append({
             "incident_id": incident.get("database_id") or incident.get("id"),
             "risk_score": risk,
             "status": status,
             "target": route_target,
             "priority": "critical" if risk >= 85 else "high" if risk >= 65 else "medium",
-            "copilot_load": round(analyst_capacity.get(route_target, 0.75), 2),
+            "copilot_load": round(analyst_capacity.get(route_target, 0), 2),
         })
 
     queue.sort(key=lambda item: (-item["risk_score"], item["copilot_load"]))
     route_summary = {
-        "available_analysts": len(analysts),
+        "available_analysts": len(analyst_capacity),
         "alert_count": len(queue),
         "high_priority": sum(1 for item in queue if item["priority"] in {"critical", "high"}),
         "avg_load": round(sum(item["copilot_load"] for item in queue) / max(len(queue), 1), 2),
@@ -788,11 +836,21 @@ def incident_explainability(incident_id: int, user: dict[str, str] | None = None
 
 
 def record_alert_outcome(incident_id: int, detection_type: str, alert_risk_score: int, final_resolution: str, reviewed_by: str = "analyst") -> dict:
-    return fusion_record_alert_outcome(incident_id, detection_type, alert_risk_score, final_resolution, reviewed_by)
+    outcome = fusion_record_alert_outcome(incident_id, detection_type, alert_risk_score, final_resolution, reviewed_by)
+    with get_db() as db:
+        db.execute(
+            "INSERT INTO alert_outcomes (incident_id, detection_type, alert_risk_score, final_resolution, was_correct, reviewed_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (outcome["incident_id"], outcome["detection_type"], outcome["alert_risk_score"], outcome["final_resolution"], int(outcome["was_correct"]), outcome["reviewed_by"], datetime.now(timezone.utc).isoformat()),
+        )
+    return outcome
 
 
 def alert_quality(user: dict[str, str] | None = None) -> dict:
-    return alert_quality_report()
+    with get_db() as db:
+        outcomes = [dict(row) for row in db.execute("SELECT incident_id, detection_type, alert_risk_score, final_resolution, was_correct, reviewed_by, created_at FROM alert_outcomes ORDER BY id DESC").fetchall()]
+    for outcome in outcomes:
+        outcome["was_correct"] = bool(outcome["was_correct"])
+    return alert_quality_report(outcomes)
 
 
 def persist_cyberguard_x(incident_id: int, incident: dict):
@@ -970,7 +1028,7 @@ def analyze_threat(request: ThreatAnalysisRequest, user: dict[str, str] = Depend
         raise HTTPException(status_code=400, detail="Payload content cannot be empty.")
     assessment = evaluate_threat_payload(request.category, request.payload)
     assessment["iocs"] = enrich_iocs(extract_iocs(request.payload))
-    incident_id = store_incident(request.category, request.payload, assessment)
+    incident_id = store_incident(request.category, request.payload, assessment, metadata=request.metadata)
     persist_cyberguard_x(incident_id, {"id": incident_id, "category": request.category, "payload": request.payload, "risk_score": assessment["risk_score"], "risk_level": assessment["risk_level"], "assessment": assessment, "created_at": datetime.now(timezone.utc).isoformat()})
     write_audit(user, "analyze", f"incident:{incident_id}", request.category)
     if assessment["risk_level"] in ["High", "Critical"]:
@@ -998,7 +1056,13 @@ def analyst_assistant(payload: dict[str, Any], user: dict[str, str] = Depends(cu
 
 
 @app.post("/api/v1/analyze/file")
-async def analyze_file(category: str = Form(...), file: UploadFile = File(...), user: dict[str, str] = Depends(current_user)):
+async def analyze_file(category: str = Form(...), file: UploadFile = File(...), metadata: str | None = Form(default=None), user: dict[str, str] = Depends(current_user)):
+    try:
+        metadata_payload = json.loads(metadata or "{}")
+    except json.JSONDecodeError as error:
+        raise HTTPException(status_code=400, detail="Incident metadata must be valid JSON.") from error
+    if not isinstance(metadata_payload, dict):
+        raise HTTPException(status_code=400, detail="Incident metadata must be a JSON object.")
     content = await file.read(MAX_UPLOAD_BYTES + 1)
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded file cannot be empty.")
@@ -1032,7 +1096,7 @@ async def analyze_file(category: str = Form(...), file: UploadFile = File(...), 
             assessment["xai_explanation"] += " " + qr_assessment["xai_explanation"]
     score = int(assessment["risk_score"])
     assessment["risk_level"] = "Critical" if score >= 80 else "High" if score >= 60 else "Medium" if score >= 40 else "Low" if score >= 20 else "Safe"
-    incident_id = store_incident(category, payload, assessment, filename, file_hash)
+    incident_id = store_incident(category, payload, assessment, filename, file_hash, metadata_payload)
     persist_cyberguard_x(incident_id, {"id": incident_id, "category": category, "payload": payload, "risk_score": assessment["risk_score"], "risk_level": assessment["risk_level"], "assessment": assessment, "created_at": datetime.now(timezone.utc).isoformat()})
     write_audit(user, "analyze_file", f"incident:{incident_id}", filename)
     if assessment["risk_level"] in ["High", "Critical"]:
@@ -1041,7 +1105,7 @@ async def analyze_file(category: str = Form(...), file: UploadFile = File(...), 
 
 
 @app.post("/api/v1/analyze/website")
-def analyze_website(payload: dict[str, str], user: dict[str, str] = Depends(current_user)):
+def analyze_website(payload: dict[str, Any], user: dict[str, str] = Depends(current_user)):
     url = str(payload.get("url", "")).strip()
     if not url:
         raise HTTPException(status_code=400, detail="A website URL is required.")
@@ -1052,8 +1116,12 @@ def analyze_website(payload: dict[str, str], user: dict[str, str] = Depends(curr
     text = " ".join([inspection["final_url"], inspection["title"], *inspection["findings"]])
     assessment = evaluate_threat_payload("url", text)
     assessment["website_inspection"] = inspection
+    assessment["iocs"] = enrich_iocs(extract_iocs(text))
+    metadata = normalize_residency_metadata(payload.get("metadata"))
+    incident_id = store_incident("url", text, assessment, metadata=metadata)
+    persist_cyberguard_x(incident_id, {"id": incident_id, "category": "url", "payload": text, "risk_score": assessment["risk_score"], "risk_level": assessment["risk_level"], "assessment": assessment, "created_at": datetime.now(timezone.utc).isoformat()})
     write_audit(user, "analyze_website", url, "website")
-    return {"status": "success", "assessment": assessment, "inspection": inspection}
+    return {"status": "success", "incident_id": incident_id, "assessment": assessment, "inspection": inspection, "user": user["username"]}
 
 
 @app.get("/api/v1/playbooks")
@@ -1219,7 +1287,7 @@ def alert_quality_record(request: dict, user: dict[str, str] = Depends(current_u
         str(request.get("detection_type", "unknown")),
         int(request.get("alert_risk_score", 0)),
         str(request.get("final_resolution", "unknown")),
-        str(request.get("reviewed_by", user.get("username", "analyst"))),
+        user.get("username", "analyst"),
     )
 
 
@@ -1784,6 +1852,7 @@ def system_health(user: dict[str, str] = Depends(current_user)):
         recent_count = db.execute("SELECT COUNT(*) AS count FROM incidents WHERE created_at >= ?", ((datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),)).fetchone()["count"]
     uptime = (datetime.now(timezone.utc) - STARTED_AT).total_seconds()
     model_loaded = TEXT_MODEL is not None or FALLBACK_TEXT_MODEL is not None
+    text_model_name = "TF-IDF + Logistic Regression" if TEXT_MODEL is not None else "Bernoulli Naive Bayes fallback" if FALLBACK_TEXT_MODEL is not None else "Rules only"
     media_status = pretrained_media_status()
     evaluation_path = Path(__file__).parent / "data" / "uci-sms-results.json"
     evaluation = {}
@@ -1792,7 +1861,7 @@ def system_health(user: dict[str, str] = Depends(current_user)):
             evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             evaluation = {}
-    return {"status": "healthy", "uptime_seconds": round(uptime), "api_latency_ms": round((time.perf_counter() - request_started) * 1000, 2), "events_stored": event_count, "events_per_minute": recent_count, "model_loaded": model_loaded, "model_confidence": "pretrained-media" if media_status.get("mode") == "pretrained" else "trained-fallback", "media_models": media_status, "threat_accuracy": round(float(evaluation.get("f1", 0)) * 100, 1), "evaluation_backend": evaluation.get("backend", "baseline"), "database": "postgresql" if os.getenv("CYBERGUARD_DATABASE_URL", "").strip().startswith(("postgresql://", "postgres://")) else "sqlite", "ephemeral_state": EPHEMERAL_STATE.backend, "response_integrations": bool(os.getenv("CYBERGUARD_RESPONSE_WEBHOOK_URL"))}
+    return {"status": "healthy", "uptime_seconds": round(uptime), "api_latency_ms": round((time.perf_counter() - request_started) * 1000, 2), "events_stored": event_count, "events_per_minute": recent_count, "model_loaded": model_loaded, "model_confidence": text_model_name, "media_models": media_status, "threat_accuracy": round(float(evaluation.get("f1", 0)) * 100, 1), "evaluation_backend": evaluation.get("backend", "baseline"), "database": "postgresql" if os.getenv("CYBERGUARD_DATABASE_URL", "").strip().startswith(("postgresql://", "postgres://")) else "sqlite", "ephemeral_state": EPHEMERAL_STATE.backend, "response_integrations": bool(os.getenv("CYBERGUARD_RESPONSE_WEBHOOK_URL"))}
 
 
 @app.get("/api/v1/models/status")
@@ -1800,7 +1869,7 @@ def model_status(user: dict[str, str] = Depends(current_user)):
     return {
         "text_classifier": {"loaded": TEXT_MODEL is not None or FALLBACK_TEXT_MODEL is not None, "algorithm": "TF-IDF + Logistic Regression" if TEXT_MODEL is not None else "Bernoulli Naive Bayes fallback", "samples": FALLBACK_TEXT_MODEL.get("samples") if FALLBACK_TEXT_MODEL else None},
         "text_transformer": transformer_status(),
-        "media_inspection": {"loaded": True, "algorithm": "Lightweight Isolation Forest over image/audio features plus video metadata"},
+        "media_inspection": media_inspection_status(),
         "deep_learning_adapter": pretrained_media_status(),
         "threat_intelligence": {"loaded": True, "algorithm": "Local IOC reputation with optional external provider", "external_configured": bool(os.getenv("CYBERGUARD_THREAT_INTEL_URL"))},
     }
@@ -1996,13 +2065,16 @@ def roadmap_bias(user: dict[str, str] = Depends(current_user)):
 
 @app.get("/api/v1/roadmap/immunity")
 def roadmap_immunity(user: dict[str, str] = Depends(current_user)):
-    return shared_immunity(_roadmap_incidents(), user.get("username", "default"))
+    return shared_immunity(_roadmap_incidents(), os.getenv("CYBERGUARD_TENANT_IMMUNITY_SECRET"))
 
 
 @app.post("/api/v1/roadmap/immunity/publish")
 def roadmap_immunity_publish(request: dict, user: dict[str, str] = Depends(head_admin_user)):
-    signatures = request.get("signatures") or shared_immunity(_roadmap_incidents(), user.get("username", "default"))["shared_signatures"]
-    result = publish_tenant_signatures(signatures, str(request.get("tenant_id") or user.get("username", "default")))
+    tenant_id = os.getenv("CYBERGUARD_TENANT_ID", "").strip()
+    if not tenant_id:
+        raise HTTPException(status_code=503, detail="CYBERGUARD_TENANT_ID is required for shared-immunity publishing")
+    signatures = shared_immunity(_roadmap_incidents(), os.getenv("CYBERGUARD_TENANT_IMMUNITY_SECRET"))["shared_signatures"]
+    result = publish_tenant_signatures(signatures, tenant_id)
     write_audit(user, "tenant_immunity_publish", str(result.get("published", 0)), result["status"])
     return result
 
@@ -2026,18 +2098,32 @@ def roadmap_jurisdiction(incident_id: int, user: dict[str, str] = Depends(curren
 
 @app.post("/api/v1/roadmap/counterfactual/{incident_id}")
 def roadmap_counterfactual(incident_id: int, request: dict, user: dict[str, str] = Depends(current_user)):
-    return counterfactual_replay(
-        incident_context(incident_id),
-        [str(action) for action in request.get("actions", [])],
-        str(request.get("variable", "response_delay_hours")),
-        int(request.get("value", 4)),
-    )
+    raw_actions = request.get("actions", [])
+    if not isinstance(raw_actions, list):
+        raise HTTPException(status_code=422, detail="Counterfactual actions must be a list")
+    try:
+        value = int(request.get("value", 4))
+        return counterfactual_replay(
+            incident_context(incident_id),
+            [str(action) for action in raw_actions],
+            str(request.get("variable", "response_delay_hours")),
+            value,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @app.post("/api/v1/roadmap/compliance-diff")
 def roadmap_compliance_diff(request: dict, user: dict[str, str] = Depends(current_user)):
     controls = compliance_controls(user)["controls"]
-    return compliance_diff(controls, request.get("cves", []))
+    cves = request.get("cves")
+    if not cves:
+        with get_db() as db:
+            row = db.execute("SELECT items_json FROM cve_feed_snapshots ORDER BY id DESC LIMIT 1").fetchone()
+        cves = json.loads(row["items_json"]) if row else []
+    if not isinstance(cves, list):
+        raise HTTPException(status_code=422, detail="CVEs must be supplied as a list")
+    return compliance_diff(controls, cves)
 
 
 @app.post("/api/v1/roadmap/compliance-diff/sync")
@@ -2046,7 +2132,16 @@ def roadmap_compliance_diff_sync(user: dict[str, str] = Depends(head_admin_user)
         feed = sync_cve_feed()
     except requests.RequestException as error:
         raise HTTPException(status_code=502, detail=f"CVE feed synchronization failed: {error}") from error
-    result = compliance_diff(compliance_controls(user)["controls"], feed.get("cves", []))
+    items = feed.get("items")
+    if not isinstance(items, list):
+        items = [{"id": item, "severity": "unknown"} if isinstance(item, str) else item for item in feed.get("cves", [])]
+    if feed.get("status") == "synced":
+        with get_db() as db:
+            db.execute(
+                "INSERT INTO cve_feed_snapshots (source, items_json, synced_at) VALUES (?, ?, ?)",
+                (str(feed.get("source") or "configured-feed"), json.dumps(items), datetime.now(timezone.utc).isoformat()),
+            )
+    result = compliance_diff(compliance_controls(user)["controls"], items)
     return {"feed": feed, "diff": result}
 
 

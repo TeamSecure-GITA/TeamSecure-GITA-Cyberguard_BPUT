@@ -328,15 +328,24 @@ def adversarial_self_test(category: str, payload: str) -> dict:
     baseline = evaluate_threat_payload(category, payload)
     baseline_score = int(baseline["risk_score"])
 
-    variants = [
-        payload,
-        payload.replace("urgent", "immediately").replace("verify", "confirm").replace("password", "credentials"),
+    synonym_variant = payload
+    for original, replacement in (("urgent", "immediately"), ("verify", "confirm"), ("password", "credentials")):
+        synonym_variant = re.sub(rf"\b{original}\b", replacement, synonym_variant, flags=re.IGNORECASE)
+    candidates = [
+        synonym_variant,
         payload + " Please act now before access is suspended.",
-        payload.replace("@", "@") + " secure-login-check.example/confirm",
+        payload + " secure-login-check.example/confirm",
     ]
 
     results = []
-    for index, variant in enumerate(variants[:4], start=1):
+    unique_variants = []
+    seen_variants = {payload}
+    for variant in candidates:
+        if variant and variant not in seen_variants:
+            seen_variants.add(variant)
+            unique_variants.append(variant)
+
+    for index, variant in enumerate(unique_variants, start=1):
         variant_result = evaluate_threat_payload(category, variant)
         decay = max(0, baseline_score - int(variant_result["risk_score"]))
         results.append({

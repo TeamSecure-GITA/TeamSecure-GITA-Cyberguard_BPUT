@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { AlertCircle, CheckCircle2, ChevronDown, Eye, Search, Terminal } from 'lucide-react';
 import axios from 'axios';
 
@@ -20,11 +20,14 @@ const getSeverityBadge = (level) => {
 const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
 export default function IncidentTable({ incidents = [], accessToken, onRefresh, onSelectIncident, initialSearch = '', routeData = null }) {
-  const [search, setSearch] = useState(initialSearch);
+  const [searchOverride, setSearchOverride] = useState({ source: initialSearch, value: initialSearch });
+  const search = searchOverride.source === initialSearch ? searchOverride.value : initialSearch;
   const [status, setStatus] = useState('');
   const [saving, setSaving] = useState(null);
   const [expanded, setExpanded] = useState(null);
-  useEffect(() => setSearch(initialSearch), [initialSearch]);
+  const [feedbackResolution, setFeedbackResolution] = useState('malicious');
+  const [feedbackBusy, setFeedbackBusy] = useState(null);
+  const [feedbackMessage, setFeedbackMessage] = useState(null);
   const visibleIncidents = useMemo(() => incidents.filter((incident) => {
     const matchesSearch = !search || `${incident.id} ${incident.category} ${incident.source} ${incident.campaignId || ''} ${incident.fingerprint || ''}`.toLowerCase().includes(search.toLowerCase());
     return matchesSearch && (!status || incident.status === status);
@@ -39,6 +42,26 @@ export default function IncidentTable({ incidents = [], accessToken, onRefresh, 
       setSaving(null);
     }
   };
+
+  const recordOutcome = async (incident) => {
+    setFeedbackBusy(incident.database_id);
+    setFeedbackMessage(null);
+    try {
+      await axios.post(`${apiBaseUrl}/api/v1/alert-quality/record`, {
+        incident_id: incident.database_id,
+        detection_type: incident.category,
+        alert_risk_score: incident.riskScore ?? incident.risk_score ?? 0,
+        final_resolution: feedbackResolution,
+      }, { headers: { Authorization: `Bearer ${accessToken}` } });
+      setFeedbackMessage({ incidentId: incident.database_id, text: 'Outcome saved to alert-quality history.', error: false });
+      onRefresh?.();
+    } catch (error) {
+      setFeedbackMessage({ incidentId: incident.database_id, text: error.response?.data?.detail || 'Unable to record this outcome.', error: true });
+    } finally {
+      setFeedbackBusy(null);
+    }
+  };
+
   return (
     <div className="bg-cardBg border border-slate-700/60 rounded-xl shadow-lg overflow-hidden">
       {routeData && (
@@ -59,7 +82,7 @@ export default function IncidentTable({ incidents = [], accessToken, onRefresh, 
           </p>
         </div>
         <div className="incident-tools">
-          <label className="incident-search"><Search size={13} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search incidents, Campaign, DNA, IOC..." /></label>
+          <label className="incident-search"><Search size={13} /><input value={search} onChange={(event) => setSearchOverride({ source: initialSearch, value: event.target.value })} placeholder="Search incidents, Campaign, DNA, IOC..." /></label>
           <div className="flex items-center gap-2">
             <select value={status} onChange={(event) => setStatus(event.target.value)} className="bg-slate-950/60 border border-slate-700 rounded-md px-2 py-1 text-[10px] text-slate-300">
               <option value="">All statuses</option><option>New</option><option>Investigating</option><option>Contained</option><option>Mitigated</option><option>Closed</option>
@@ -152,7 +175,7 @@ export default function IncidentTable({ incidents = [], accessToken, onRefresh, 
                     <Eye size={14} /> Analyze XAI
                   </button>
                 </td>
-              </tr>{expanded === inc.id && <tr className="incident-expanded"><td colSpan="10"><div className="incident-detail-grid"><div><span>Why flagged</span><p>{inc.explanation || 'No explanation available.'}</p></div><div><span>Indicators</span><p>{(inc.indicators || []).map((item) => item.name).join(' · ') || 'No extracted indicators.'}</p></div><div><span>Threat DNA & Campaign</span><p>{inc.campaignId ? `Campaign: ${inc.campaignId}` : 'Standalone'} · Genome: {inc.fingerprint || 'Pending'}</p></div><div><span>Response state</span><p>{inc.status} {inc.assigned_to ? `· assigned to ${inc.assigned_to}` : ''}</p></div></div></td></tr>}</React.Fragment>
+              </tr>{expanded === inc.id && <tr className="incident-expanded"><td colSpan="10"><div className="incident-detail-grid"><div><span>Why flagged</span><p>{inc.explanation || 'No explanation available.'}</p></div><div><span>Indicators</span><p>{(inc.indicators || []).map((item) => item.name).join(' · ') || 'No extracted indicators.'}</p></div><div><span>Threat DNA & Campaign</span><p>{inc.campaignId ? `Campaign: ${inc.campaignId}` : 'Standalone'} · Genome: {inc.fingerprint || 'Pending'}</p></div><div><span>Response state</span><p>{inc.status} {inc.assigned_to ? `· assigned to ${inc.assigned_to}` : ''}</p></div></div><div className="mt-3 flex flex-wrap items-end gap-2 border-t border-slate-700/60 pt-3"><label className="grid gap-1 text-[10px] text-slate-400">Analyst outcome<select value={feedbackResolution} onChange={(event) => setFeedbackResolution(event.target.value)} className="rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-slate-200"><option value="malicious">Confirmed threat</option><option value="false_positive">False positive</option></select></label><button type="button" onClick={() => recordOutcome(inc)} disabled={feedbackBusy === inc.database_id} className="rounded border border-cyan-500/30 px-3 py-1.5 text-xs text-cyan-200 disabled:opacity-50">{feedbackBusy === inc.database_id ? 'Saving…' : 'Record outcome'}</button>{feedbackMessage?.incidentId === inc.database_id && <span role={feedbackMessage.error ? 'alert' : 'status'} className={`text-xs ${feedbackMessage.error ? 'text-rose-300' : 'text-emerald-300'}`}>{feedbackMessage.text}</span>}</div></td></tr>}</React.Fragment>
             ))}
             {incidents.length === 0 && (
               <tr><td colSpan="10" className="p-8 text-center text-xs text-slate-500">No incidents stored yet. Run an inspection to create the first event.</td></tr>

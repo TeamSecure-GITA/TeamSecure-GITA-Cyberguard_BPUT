@@ -151,10 +151,7 @@ export default function App() {
   }, [session, apiBaseUrl, refreshKey]);
 
   React.useEffect(() => {
-    if (!session) {
-      setRoutingInfo(null);
-      return;
-    }
+    if (!session) return;
 
     const config = { headers: { Authorization: `Bearer ${session.access_token}` } };
     axios.post(
