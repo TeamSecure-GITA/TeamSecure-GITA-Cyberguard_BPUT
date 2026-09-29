@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { 
   Shield, 
   ArrowRight, 
@@ -50,13 +50,6 @@ export default function CyberRadarPortal({
   const apiBaseUrl = propApiBaseUrl || getApiBaseUrl();
   const [serverEndpointInput, setServerEndpointInput] = useState(apiBaseUrl);
   const [showServerConfig, setShowServerConfig] = useState(false);
-  const [telemetry, setTelemetry] = useState({
-    lat: 12.44,
-    freq: 4.82,
-    threatsBlocked: 1420,
-    activeNodes: 64,
-    status: 'OPTIMAL'
-  });
 
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [loginUsername, setLoginUsername] = useState('');
@@ -71,18 +64,6 @@ export default function CyberRadarPortal({
   const [requestToken, setRequestToken] = useState('');
   const [requestState, setRequestState] = useState(null);
   const [requestLoading, setRequestLoading] = useState(false);
-
-  // Dynamic telemetry pulse simulation
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setTelemetry((prev) => ({
-        ...prev,
-        lat: +(12.2 + Math.random() * 0.5).toFixed(2),
-        threatsBlocked: prev.threatsBlocked + (Math.random() > 0.6 ? 1 : 0),
-      }));
-    }, 2400);
-    return () => clearInterval(interval);
-  }, []);
 
   const handleLaunch = () => {
     if (currentSession) {
@@ -235,7 +216,7 @@ export default function CyberRadarPortal({
           </div>
         </div>
 
-        {/* Real-time Status Badge & Controls */}
+        {/* Workspace status and controls */}
         <div className="flex items-center gap-4">
           <LanguageToggle currentLang={currentLang} onToggle={onLanguageChange} />
           <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full border border-emerald-500/30 bg-emerald-950/30 text-emerald-400 font-mono text-xs tracking-wider shadow-[0_0_15px_rgba(16,185,129,0.15)]">
@@ -243,7 +224,7 @@ export default function CyberRadarPortal({
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
             </span>
-            <span className="font-semibold">[ • REAL-TIME INTELLIGENCE ACTIVE ]</span>
+            <span className="font-semibold">[ CYBERGUARD WORKSPACE READY ]</span>
           </div>
 
           <button
@@ -400,10 +381,10 @@ export default function CyberRadarPortal({
                 CG
               </span>
               
-              {/* Live Latency Telemetry Readout */}
+              {/* The portal does not claim a live sensor connection. */}
               <div className="mt-1 flex items-center gap-1 text-[10px] font-mono text-emerald-300 tracking-wider">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                <span>LAT: {telemetry.lat}ms</span>
+                <span>CYBERGUARD</span>
               </div>
             </div>
 
@@ -471,14 +452,12 @@ export default function CyberRadarPortal({
           </span>
           <span className="hidden sm:inline text-slate-600">|</span>
           <span className="hidden sm:inline text-slate-400">
-            ACTIVE SENSORS: <b className="text-cyan-300 font-normal">24/24 ONLINE</b>
+            EXTERNAL SENSOR FEEDS REQUIRE CONFIGURATION
           </span>
         </div>
 
         <div className="flex items-center gap-5">
-          <span className="text-slate-400">
-            THREAT MITIGATIONS: <b className="text-emerald-400">{telemetry.threatsBlocked.toLocaleString()}</b>
-          </span>
+          <span className="text-slate-400">Response actions require an approved workflow</span>
           <button 
             onClick={handleLaunch} 
             className="text-cyan-400 hover:text-cyan-300 font-medium flex items-center gap-1 transition-colors"

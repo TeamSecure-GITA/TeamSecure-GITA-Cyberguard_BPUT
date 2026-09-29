@@ -4,34 +4,48 @@ import axios from 'axios';
 const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
 
 export default function PreventionCenter({ accessToken }) {
-  const [data, setData] = useState(null);
-  const [error, setError] = useState(null);
+  const [result, setResult] = useState(null);
 
   useEffect(() => {
     if (!accessToken) return;
+    let active = true;
+    const headers = { Authorization: `Bearer ${accessToken}` };
 
-    axios.post(
-      `${apiBaseUrl}/api/v1/prevention/decision`,
-      {
-        category: 'email',
-        payload: 'URGENT verify credentials at https://secure-login.example/auth',
-        asset_criticality: 'critical',
-        risk_score: 92,
-        user: { role: 'admin', team: 'finance' },
-      },
-      { headers: { Authorization: `Bearer ${accessToken}` } },
-    )
-      .then((response) => setData(response.data))
-      .catch((requestError) => setError(requestError.response?.data?.detail || 'Prevention service unavailable.'));
+    const loadDecision = async () => {
+      try {
+        const incidentResponse = await axios.get(`${apiBaseUrl}/api/v1/incidents`, { headers });
+        const incidents = incidentResponse.data.incidents || [];
+        if (!incidents.length) {
+          if (active) setResult({ accessToken, empty: true });
+          return;
+        }
+        const incident = incidents[0];
+        const decisionResponse = await axios.post(
+          `${apiBaseUrl}/api/v1/prevention/decision`,
+          { category: incident.category, payload: incident.payload, risk_score: incident.risk_score },
+          { headers },
+        );
+        if (active) setResult({ accessToken, data: { ...decisionResponse.data, incident_id: incident.id } });
+      } catch (requestError) {
+        if (active) setResult({ accessToken, error: requestError.response?.data?.detail || 'Prevention service unavailable.' });
+      }
+    };
+
+    loadDecision();
+    return () => { active = false; };
   }, [accessToken]);
 
-  if (error) {
-    return <section className="bg-cardBg border border-red-500/30 rounded-xl p-5 text-xs text-red-300">{error}</section>;
-  }
+  if (!accessToken) return <section className="bg-cardBg border border-red-500/30 rounded-xl p-5 text-xs text-red-300">Authentication required.</section>;
+  const currentResult = result?.accessToken === accessToken ? result : null;
+  if (currentResult?.error) return <section className="bg-cardBg border border-red-500/30 rounded-xl p-5 text-xs text-red-300">{currentResult.error}</section>;
 
-  if (!data) {
+  if (!currentResult) {
     return <section className="bg-cardBg border border-slate-700/60 rounded-xl p-5 text-xs text-slate-300">Loading prevention decision...</section>;
   }
+
+  if (currentResult.empty) return <section className="bg-cardBg border border-slate-700/60 rounded-xl p-5 text-xs text-slate-300">No stored incidents to evaluate yet.</section>;
+  if (!currentResult.data) return <section className="bg-cardBg border border-slate-700/60 rounded-xl p-5 text-xs text-slate-300">Prevention decision unavailable.</section>;
+  const { data } = currentResult;
 
   return (
     <section className="bg-cardBg border border-slate-700/60 rounded-xl p-5 shadow-lg">
@@ -56,7 +70,7 @@ export default function PreventionCenter({ accessToken }) {
         <div>{data.recommended_response}</div>
       </div>
       <div className="mt-3 text-[11px] text-slate-400">
-        Triggered by: {data.category} · Reason: {data.reason}
+        Incident: {data.incident_id} · Triggered by: {data.category} · Reason: {data.reason} · {data.mode.replaceAll('_', ' ')}
       </div>
     </section>
   );

@@ -322,7 +322,8 @@ export default function App() {
               </div>
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
                 <ContainmentQueue accessToken={session?.access_token} />
-                <PolicyEnginePanel accessToken={session?.access_token} />
+                  <ContainmentQueue accessToken={session?.access_token} userRole={session?.user?.role} />
+                <PolicyEnginePanel accessToken={session?.access_token} userRole={session?.user?.role} />
               </div>
               <SystemView health={health} modelStatus={modelStatus} />
               <div className="grid grid-cols-1 xl:grid-cols-[1.45fr_.85fr] gap-4">

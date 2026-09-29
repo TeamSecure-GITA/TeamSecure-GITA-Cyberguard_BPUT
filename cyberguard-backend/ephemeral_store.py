@@ -185,3 +185,11 @@ class EphemeralStore:
             events.append(now)
             self._windows[key] = events
             return len(events)
+
+    def clear_window(self, key: str) -> None:
+        if self._redis is not None:
+            digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+            self._redis.delete(f"window:{digest}")
+            return
+        with self._lock:
+            self._windows.pop(key, None)
