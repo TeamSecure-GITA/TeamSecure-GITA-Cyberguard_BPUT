@@ -16,7 +16,7 @@ services:
       - key: CYBERGUARD_HEAD_ADMIN_PASSWORD
         sync: false
       - key: CYBERGUARD_FRONTEND_ORIGINS
-  value: https://teamsecure-gita-cyberguard.vercel.app,http://localhost:5173,http://127.0.0.1:5173
+        value: https://teamsecure-gita-cyberguard.vercel.app,http://localhost:5173,http://127.0.0.1:5173
       - key: CYBERGUARD_PUBLIC_APP_URL
         value: https://teamsecure-gita-cyberguard.vercel.app
       - key: CYBERGUARD_DB_PATH
