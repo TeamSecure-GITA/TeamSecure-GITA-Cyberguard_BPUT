@@ -61,6 +61,9 @@ from database import connect_database
 from ephemeral_store import EphemeralStore
 
 from detection_engine import FALLBACK_TEXT_MODEL, TEXT_MODEL, adversarial_self_test, evaluate_threat_payload
+from behavioral_baseline import baseline_key, login_sample, parse_login_event, score_login_deviation, successful_login
+from geoip_enrichment import lookup_country as lookup_geoip_country
+from malware_scanner import scan_artifact
 from account_rescue_engine import blast_radius, evidence_snapshot, execute_step, guardian_watch, locked_out_recovery, lockdown_plan, offline_rescue_card, provider_capabilities, rescue_plan, rescue_simulation, scan_account
 from prevention_engine import campaign_aware_prevention, containment_action_plan, deception_trigger_check, identity_trust_evaluation, insider_threat_risk, policy_aware_prevention, risk_aware_prevention_decision
 from models import IdentityTrustRequest
@@ -378,6 +381,15 @@ def initialize_database():
                 metadata TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS login_behavior_samples (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                baseline_key TEXT NOT NULL,
+                country TEXT,
+                device TEXT,
+                hour INTEGER,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_login_behavior_samples_key_created ON login_behavior_samples (baseline_key, created_at DESC);
             CREATE TABLE IF NOT EXISTS actions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 incident_id TEXT NOT NULL,
@@ -865,6 +877,45 @@ def store_incident(category: str, payload: str, assessment: dict, filename: str 
             (category, payload, filename, file_hash, assessment["risk_score"], assessment["risk_level"], json.dumps(assessment), json.dumps(residency), datetime.now(timezone.utc).isoformat(), "Investigating" if assessment["risk_level"] in ["High", "Critical"] else "New"),
         )
         return cursor.lastrowid
+
+
+def apply_user_login_baseline(assessment: dict, payload: str, user: dict[str, str], learn: bool = True) -> dict:
+    event = parse_login_event(payload)
+    if not event:
+        return assessment
+    sample = login_sample(event)
+    source_ip = event.get("source_ip") or event.get("src_ip") or event.get("ip")
+    geoip_result = lookup_geoip_country(str(source_ip)) if source_ip else {"status": "no_ip", "country": None}
+    if geoip_result.get("country"):
+        sample["country"] = geoip_result["country"]
+    key = baseline_key(event, user["username"])
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT country, device, hour FROM login_behavior_samples WHERE baseline_key = ? ORDER BY id DESC LIMIT 50",
+            (key,),
+        ).fetchall()
+        history = [dict(row) for row in reversed(rows)]
+        deviation, reasons, indicators = score_login_deviation(sample, history)
+        if deviation:
+            assessment["risk_score"] = min(99, int(assessment["risk_score"]) + deviation)
+            assessment["indicators"].extend(indicators)
+            assessment["xai_explanation"] += " " + " ".join(reasons)
+            assessment["explanation_summary"] += " " + " ".join(reasons)
+            score = assessment["risk_score"]
+            assessment["risk_level"] = "Critical" if score >= 80 else "High" if score >= 60 else "Medium" if score >= 40 else "Low" if score >= 20 else "Safe"
+            if assessment["risk_level"] in {"High", "Critical"} and not any(action.get("id") == "revoke_session" for action in assessment["recommended_actions"]):
+                assessment["recommended_actions"].insert(0, {"id": "revoke_session", "label": "Review and revoke suspicious session"})
+        if learn and successful_login(event) and assessment["risk_score"] < 20 and any(sample.values()):
+            db.execute(
+                "INSERT INTO login_behavior_samples (baseline_key, country, device, hour, created_at) VALUES (?, ?, ?, ?, ?)",
+                (key, sample["country"], sample["device"], sample["hour"], datetime.now(timezone.utc).isoformat()),
+            )
+    if len(history) < 3:
+        assessment["login_baseline"] = {"status": "calibrating", "samples": len(history)}
+    else:
+        assessment["login_baseline"] = {"status": "active", "samples": len(history), "signals": len(indicators)}
+    assessment["geoip"] = geoip_result
+    return assessment
 
 
 def write_audit(user: dict[str, str], action: str, resource: str, details: str):
@@ -1780,6 +1831,8 @@ def analyze_threat(request: ThreatAnalysisRequest, user: dict[str, str] = Depend
     if not request.payload.strip():
         raise HTTPException(status_code=400, detail="Payload content cannot be empty.")
     assessment = evaluate_threat_payload(request.category, request.payload)
+    if request.category.lower() in {"auth_logs", "ato"}:
+        assessment = apply_user_login_baseline(assessment, request.payload, user)
     assessment["iocs"] = enrich_iocs(extract_iocs(request.payload))
     incident_id = store_incident(request.category, request.payload, assessment, metadata=request.metadata)
     persist_cyberguard_x(incident_id, {"id": incident_id, "category": request.category, "payload": request.payload, "risk_score": assessment["risk_score"], "risk_level": assessment["risk_level"], "assessment": assessment, "created_at": datetime.now(timezone.utc).isoformat()})
@@ -1794,6 +1847,8 @@ def preview_threat(request: ThreatAnalysisRequest, user: dict[str, str] = Depend
     if not request.payload.strip():
         raise HTTPException(status_code=400, detail="Payload content cannot be empty.")
     assessment = evaluate_threat_payload(request.category, request.payload)
+    if request.category.lower() in {"auth_logs", "ato"}:
+        assessment = apply_user_login_baseline(assessment, request.payload, user, learn=False)
     assessment["iocs"] = enrich_iocs(extract_iocs(request.payload))
     return {"status": "success", "category": request.category, "assessment": assessment}
 
@@ -1828,6 +1883,15 @@ async def analyze_file(category: str = Form(...), file: UploadFile = File(...), 
     email_result = analyze_eml(content) if is_eml else None
     payload = email_result["payload"] if email_result else (content.decode("utf-8", errors="replace") if is_text else f"Uploaded {file.content_type or 'media'} file: {filename}")
     assessment = evaluate_threat_payload(category, payload)
+    if category.lower() in {"auth_logs", "ato"}:
+        assessment = apply_user_login_baseline(assessment, payload, user)
+    if category.lower() == "malware":
+        malware_scan = scan_artifact(content, filename)
+        assessment["malware_scan"] = malware_scan
+        assessment["indicators"].extend({"name": match["rule"], "score": f"{match['meta'].get('risk_score', 70)}%", "weight": match["meta"].get("risk_score", 70)} for match in malware_scan["matches"])
+        assessment["risk_score"] = max(assessment["risk_score"], malware_scan["risk_score"])
+        if malware_scan["matches"]:
+            assessment["xai_explanation"] += " " + " ".join(malware_scan["reasons"])
     assessment["iocs"] = enrich_iocs(extract_iocs(payload))
     if email_result:
         assessment["risk_score"] = max(assessment["risk_score"], email_result["score"])
@@ -1848,7 +1912,10 @@ async def analyze_file(category: str = Form(...), file: UploadFile = File(...), 
             assessment["indicators"].extend(qr_assessment["indicators"])
             assessment["xai_explanation"] += " " + qr_assessment["xai_explanation"]
     score = int(assessment["risk_score"])
+    prior_level = assessment["risk_level"]
     assessment["risk_level"] = "Critical" if score >= 80 else "High" if score >= 60 else "Medium" if score >= 40 else "Low" if score >= 20 else "Safe"
+    if assessment["risk_level"] != prior_level:
+        assessment["xai_explanation"] = assessment["xai_explanation"].replace(f"{prior_level} Risk:", f"{assessment['risk_level']} Risk:", 1)
     incident_id = store_incident(category, payload, assessment, filename, file_hash, metadata_payload)
     persist_cyberguard_x(incident_id, {"id": incident_id, "category": category, "payload": payload, "risk_score": assessment["risk_score"], "risk_level": assessment["risk_level"], "assessment": assessment, "created_at": datetime.now(timezone.utc).isoformat()})
     write_audit(user, "analyze_file", f"incident:{incident_id}", filename)
@@ -1868,6 +1935,33 @@ def analyze_website(payload: dict[str, Any], user: dict[str, str] = Depends(curr
         raise HTTPException(status_code=400, detail=str(error)) from error
     text = " ".join([inspection["final_url"], inspection["title"], *inspection["findings"]])
     assessment = evaluate_threat_payload("url", text)
+    certificate = inspection.get("tls_certificate") or {}
+    registration = inspection.get("domain_registration") or {}
+    enrichment_reasons = []
+    if certificate.get("verified") and certificate.get("days_remaining") is not None and certificate["days_remaining"] <= 14:
+        assessment["risk_score"] = min(99, assessment["risk_score"] + 20)
+        enrichment_reasons.append("The verified TLS certificate is expired or expires within 14 days.")
+        assessment["indicators"].append({"name": "TLS Certificate Expiry", "score": "90%", "weight": 20})
+    if registration.get("age_days") is not None and registration["age_days"] <= 30:
+        assessment["risk_score"] = min(99, assessment["risk_score"] + 25)
+        enrichment_reasons.append(f"The domain registration is recent ({registration['age_days']} days old).")
+        assessment["indicators"].append({"name": "Domain Registration Age", "score": "88%", "weight": 25})
+    brand_mismatches = inspection.get("brand_mismatches", [])
+    if inspection.get("credential_form") and brand_mismatches:
+        assessment["risk_score"] = min(99, assessment["risk_score"] + 35)
+        enrichment_reasons.append(f"Credential form claims a known brand on an unrelated domain ({', '.join(brand_mismatches)}).")
+        assessment["indicators"].append({"name": "Credential Form Brand Mismatch", "score": "94%", "weight": 35})
+    if inspection.get("credential_form") and inspection.get("cross_origin_form_actions"):
+        assessment["risk_score"] = min(99, assessment["risk_score"] + 20)
+        enrichment_reasons.append("Credential form submits to a different registered domain.")
+        assessment["indicators"].append({"name": "Cross-Domain Credential Submission", "score": "90%", "weight": 20})
+    if enrichment_reasons:
+        assessment["xai_explanation"] += " " + " ".join(enrichment_reasons)
+        assessment["explanation_summary"] += " " + " ".join(enrichment_reasons)
+    score = assessment["risk_score"]
+    assessment["risk_level"] = "Critical" if score >= 80 else "High" if score >= 60 else "Medium" if score >= 40 else "Low" if score >= 20 else "Safe"
+    if assessment["risk_level"] in {"High", "Critical"} and not any(action.get("id") == "block_domain" for action in assessment["recommended_actions"]):
+        assessment["recommended_actions"].insert(0, {"id": "block_domain", "label": "Block Suspicious Domain / IP"})
     assessment["website_inspection"] = inspection
     assessment["iocs"] = enrich_iocs(extract_iocs(text))
     metadata = normalize_residency_metadata(payload.get("metadata"))

@@ -1,0 +1,10 @@
+id: deepfake-review
+name: Suspected synthetic media review
+trigger:
+  risk_level: high
+  category: deepfake
+actions:
+  - quarantine
+  - notify_soc
+  - escalate
+approval_required: true

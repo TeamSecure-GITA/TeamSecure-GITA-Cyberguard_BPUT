@@ -4,7 +4,9 @@ pydantic
 tldextract
 requests>=2.32.4
 python-multipart
-scikit-learn
+scikit-learn==1.9.1
+geoip2>=5.0,<6.0
+yara-python>=4.5,<5.0
 joblib
 PyJWT
 python-dotenv

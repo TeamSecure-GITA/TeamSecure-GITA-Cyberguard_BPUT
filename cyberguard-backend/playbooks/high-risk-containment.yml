@@ -2,6 +2,7 @@ id: high-risk-containment
 name: High risk containment preview
 trigger:
   risk_level: high
+  category: email
 actions:
   - block_domain
   - quarantine

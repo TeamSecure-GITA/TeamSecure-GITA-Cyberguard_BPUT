@@ -23,4 +23,6 @@ python data/download_public_dataset.py --output data/uci_sms_spam.csv
 python evaluate_public_datasets.py --data data/uci_sms_spam.csv --output data/uci-sms-results.json
 ```
 
-The first local benchmark used a stratified 75/25 split and the standard-library fallback because the host blocked scikit-learn's OpenMP DLL: TN=688, FP=9, FN=409, TP=288, precision=96.97%, recall=41.32%, F1=57.95%, FPR=1.29%, and approximately 0.019 ms/sample. ROC-AUC was unavailable in fallback mode. These results expose the model's high precision but poor recall on real SMS data; do not present the synthetic baseline as production performance.
+An earlier fallback-only run used a stratified 75/25 split and reported TN=688, FP=9, FN=409, TP=288, precision=96.97%, recall=41.32%, F1=57.95%, FPR=1.29%, and approximately 0.019 ms/sample. ROC-AUC was unavailable in fallback mode. This is a historical result for that fallback and split; it is not the current scikit-learn benchmark below.
+
+The current checked-in result in `uci-sms-results.json` uses a seeded scikit-learn baseline on a stratified 1,394-message holdout: TN=1,207, FP=0, FN=47, TP=140, precision=100%, recall=74.87%, F1=85.63%, FPR=0%, ROC-AUC=0.993, PR-AUC=0.979, median latency=0.37 ms, and p95 latency=0.80 ms per sample. The evaluator trains its own model on the split, so these metrics are not a guarantee for the deployed model artifact. Both results are SMS-only and must not be presented as performance on email, URLs, logs, or media.

