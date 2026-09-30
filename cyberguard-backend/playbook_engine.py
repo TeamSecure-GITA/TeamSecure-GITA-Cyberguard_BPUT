@@ -27,5 +27,8 @@ def load_playbooks() -> list[dict[str, Any]]:
 
 def plan_playbook(playbook: dict[str, Any], assessment: dict[str, Any], approved: bool = False) -> dict[str, Any]:
     playbook = validate_playbook(playbook)
-    matches = assessment.get("risk_level", "Safe").lower() == str(playbook["trigger"].get("risk_level", "")).lower()
+    matches = all(
+        str(assessment.get(key, "")).lower() == str(value).lower()
+        for key, value in playbook["trigger"].items()
+    )
     return {"playbook_id": playbook["id"], "matched": matches, "approval_required": playbook["approval_required"], "approved": approved, "actions": playbook["actions"] if matches else [], "mode": "execute" if matches and approved else "dry-run"}

@@ -1,9 +1,13 @@
 from email import policy
 from email.parser import BytesParser
 from email.utils import parseaddr
+import hashlib
 import os
 import re
 from typing import Any
+
+MAX_ATTACHMENT_TEXT_BYTES = 1_000_000
+RISKY_ATTACHMENT_EXTENSIONS = {".bat", ".cmd", ".com", ".exe", ".hta", ".iso", ".jar", ".js", ".jse", ".lnk", ".msi", ".ps1", ".scr", ".svg", ".vbs", ".wsf", ".docm", ".xlsm", ".pptm"}
 
 
 def _mail_domain(value: str) -> str:
@@ -122,5 +126,32 @@ def analyze_eml(content: bytes) -> dict[str, Any]:
     indicators.append({"name": "Sender Identity Verification", "score": f"{identity_verification['confidence']}%", "status": identity_verification["status"]})
     body = message.get_body(preferencelist=("plain", "html"))
     body_text = body.get_content() if body else ""
-    payload = "\n".join([headers.get("subject", ""), headers.get("from", ""), body_text])[:20000]
-    return {"payload": payload, "score": min(score, 99), "reasons": reasons or ["Sender authentication headers are internally consistent."], "indicators": indicators, "metadata": {"from": from_address, "reply_to": reply_to, "return_path": return_path, "authentication_results": authentication}, "identity_verification": identity_verification}
+    attachment_text = []
+    attachments = []
+    for part in message.walk():
+        if part.is_multipart() or (part.get_content_disposition() != "attachment" and not part.get_filename()):
+            continue
+        filename = part.get_filename() or "unnamed-attachment"
+        data = part.get_payload(decode=True) or b""
+        extension = os.path.splitext(filename)[1].lower()
+        attachment = {
+            "filename": filename[:255],
+            "content_type": part.get_content_type(),
+            "size_bytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "status": "metadata_only",
+        }
+        if extension in RISKY_ATTACHMENT_EXTENSIONS:
+            attachment["status"] = "active_content_review"
+            score += 20
+            reasons.append(f"Email attachment has a potentially active or executable file type ({extension or 'unknown'}): {filename[:120]}.")
+            indicators.append({"name": "Risky Email Attachment Type", "score": "88%", "filename": filename[:120]})
+        if part.get_content_maintype() == "text" and len(data) <= MAX_ATTACHMENT_TEXT_BYTES:
+            charset = part.get_content_charset() or "utf-8"
+            attachment_text.append(data.decode(charset, errors="replace")[:MAX_ATTACHMENT_TEXT_BYTES])
+            attachment["status"] = "text_content_scanned"
+        elif len(data) > MAX_ATTACHMENT_TEXT_BYTES:
+            attachment["status"] = "size_limited"
+        attachments.append(attachment)
+    payload = "\n".join([headers.get("subject", ""), headers.get("from", ""), body_text, *attachment_text])[:20000]
+    return {"payload": payload, "score": min(score, 99), "reasons": reasons or ["Sender authentication headers are internally consistent."], "indicators": indicators, "metadata": {"from": from_address, "reply_to": reply_to, "return_path": return_path, "authentication_results": authentication}, "identity_verification": identity_verification, "attachments": attachments}

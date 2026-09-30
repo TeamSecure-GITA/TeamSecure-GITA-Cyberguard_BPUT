@@ -22,6 +22,7 @@ export default function ThreatInspector({ accessToken }) {
   const [complaintDraft, setComplaintDraft] = useState(null);
 
   const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+  const fileAnalysisTabs = ['image', 'audio', 'video', 'deepfake', 'email_file', 'malware'];
   const showLivePreview = activeSubTab === 'email' && Boolean(inputText.trim());
   const liveAssessment = showLivePreview && livePreview.payload === inputText ? livePreview.assessment : null;
   const liveLoading = showLivePreview && liveLoadingFor === inputText;
@@ -53,7 +54,8 @@ export default function ThreatInspector({ accessToken }) {
 
   const handleAnalyze = async (e) => {
     e.preventDefault();
-    if (!inputText.trim() && !(['image', 'audio', 'video', 'deepfake', 'email_file'].includes(activeSubTab) && selectedFile)) return;
+    const hasFileToAnalyze = fileAnalysisTabs.includes(activeSubTab) && selectedFile;
+    if (!inputText.trim() && !hasFileToAnalyze) return;
 
     setLoading(true);
     setScanStage('scanning');
@@ -65,7 +67,7 @@ export default function ThreatInspector({ accessToken }) {
       let response;
       if (activeSubTab === 'website') {
         response = await axios.post(`${apiBaseUrl}/api/v1/analyze/website`, { url: inputText, metadata: incidentCountry ? { country: incidentCountry } : undefined }, config);
-      } else if (['image', 'audio', 'video', 'deepfake', 'email_file'].includes(activeSubTab) && selectedFile) {
+      } else if (hasFileToAnalyze) {
         const formData = new FormData();
         formData.append('category', activeSubTab === 'email_file' ? 'email' : activeSubTab);
         formData.append('file', selectedFile);
@@ -232,15 +234,15 @@ export default function ThreatInspector({ accessToken }) {
         </select>
       </label>
       <form onSubmit={handleAnalyze} className="inspector-form space-y-4">
-        {['image', 'audio', 'video', 'deepfake', 'email_file'].includes(activeSubTab) ? (
+        {fileAnalysisTabs.includes(activeSubTab) ? (
           <div className={`dropzone border-2 border-dashed rounded-xl p-8 text-center ${dragActive ? 'dropzone-active' : ''}`} onDragOver={(event) => { event.preventDefault(); setDragActive(true); }} onDragLeave={() => setDragActive(false)} onDrop={(event) => { event.preventDefault(); acceptFile(event.dataTransfer.files?.[0]); }}>
             <Upload size={32} className="mx-auto text-slate-500 mb-2" />
-            <p className="text-xs text-slate-300 font-medium">Upload Image, Audio, Video, or an EML message</p>
+            <p className="text-xs text-slate-300 font-medium">{activeSubTab === 'malware' ? 'Upload a file for YARA signature triage' : 'Upload Image, Audio, Video, or an EML message'}</p>
             <input
               type="file"
               className="hidden"
               id="mediaUpload"
-              accept="image/*,audio/*,video/*,.eml,message/rfc822"
+              accept={activeSubTab === 'malware' ? '*/*' : 'image/*,audio/*,video/*,.eml,message/rfc822'}
               onChange={(e) => acceptFile(e.target.files?.[0])}
             />
             <label
@@ -365,6 +367,25 @@ export default function ThreatInspector({ accessToken }) {
               <span className={analysisResult.sender_identity_verification.status === 'verified' ? 'text-emerald-300' : 'text-amber-300'}>{analysisResult.sender_identity_verification.confidence}% confidence</span>
             </div>
             <div className="mt-1 text-slate-400">From domain: {analysisResult.sender_identity_verification.from_domain || 'unavailable'} · Authentication server: {analysisResult.sender_identity_verification.authserv_id || 'unreported'} ({analysisResult.sender_identity_verification.authentication_trusted ? 'trusted' : 'untrusted'})</div>
+          </div>}
+          {analysisResult.login_baseline && <div className="border-t border-slate-800 pt-3 text-xs text-slate-300">
+            <strong className="text-slate-200">Login baseline: {analysisResult.login_baseline.status}</strong>
+            <span className="ml-2 text-slate-500">{analysisResult.login_baseline.samples} successful samples{analysisResult.login_baseline.signals ? ` · ${analysisResult.login_baseline.signals} deviations` : ''}</span>
+          </div>}
+          {analysisResult.geoip && <div className="text-xs text-slate-400">GeoIP: {analysisResult.geoip.country || 'not available'} · {analysisResult.geoip.status.replaceAll('_', ' ')}</div>}
+          {analysisResult.malware_scan && <div className="border-t border-slate-800 pt-3 space-y-1 text-xs">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1"><strong className="text-slate-200">YARA file scan</strong><span className={analysisResult.malware_scan.matches?.length ? 'text-rose-300' : 'text-amber-300'}>{analysisResult.malware_scan.status.replaceAll('_', ' ')}</span><span className="text-slate-500">{analysisResult.malware_scan.engine}</span></div>
+            <div className="break-all font-mono text-[10px] text-slate-500">SHA-256 {analysisResult.malware_scan.sha256}</div>
+            {(analysisResult.malware_scan.matches || []).map((match) => <div key={match.rule} className="text-rose-200">{match.rule} · risk {match.meta?.risk_score ?? '--'}</div>)}
+            {(analysisResult.malware_scan.reasons || []).map((reason) => <p key={reason} className="text-slate-400">{reason}</p>)}
+          </div>}
+          {analysisResult.website_inspection && <div className="border-t border-slate-800 pt-3 space-y-1 text-xs">
+            <strong className="text-slate-200">Website identity and domain checks</strong>
+            <div className="text-slate-400">TLS: {analysisResult.website_inspection.tls_certificate?.status || 'not checked'}{analysisResult.website_inspection.tls_certificate?.issuer ? ` · ${analysisResult.website_inspection.tls_certificate.issuer}` : ''}{analysisResult.website_inspection.tls_certificate?.days_remaining != null ? ` · ${analysisResult.website_inspection.tls_certificate.days_remaining} days remaining` : ''}</div>
+            <div className="text-slate-400">Domain registration: {analysisResult.website_inspection.domain_registration?.status || 'not checked'}{analysisResult.website_inspection.domain_registration?.age_days != null ? ` · ${analysisResult.website_inspection.domain_registration.age_days} days old` : ''}</div>
+            {!!analysisResult.website_inspection.claimed_brands?.length && <div className="text-slate-400">Page claims: {analysisResult.website_inspection.claimed_brands.join(', ')}{analysisResult.website_inspection.brand_mismatches?.length ? ` · mismatched domain: ${analysisResult.website_inspection.brand_mismatches.join(', ')}` : ''}</div>}
+            {!!analysisResult.website_inspection.cross_origin_form_actions?.length && <div className="text-rose-300">Credential form submits to: {analysisResult.website_inspection.cross_origin_form_actions.join(', ')}</div>}
+            {(analysisResult.website_inspection.findings || []).map((finding) => <p key={finding} className="text-amber-200">{finding}</p>)}
           </div>}
           <div className="pt-2">
             <span className="text-[10px] font-bold text-slate-400 uppercase">Extracted Threat Intelligence</span>

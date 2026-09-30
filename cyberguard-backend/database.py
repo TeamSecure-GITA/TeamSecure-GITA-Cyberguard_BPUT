@@ -80,6 +80,14 @@ class PostgresConnection:
                 self.execute(statement)
 
 
+class SQLiteConnection(sqlite3.Connection):
+    def __exit__(self, exc_type, exc_value, traceback):
+        try:
+            return super().__exit__(exc_type, exc_value, traceback)
+        finally:
+            self.close()
+
+
 def _postgresql_statement(statement: str) -> str:
     ignore_conflicts = bool(re.match(r"^\s*INSERT\s+OR\s+IGNORE\s+INTO\b", statement, re.IGNORECASE))
     converted = statement.replace("?", "%s")
@@ -94,7 +102,7 @@ def connect_database(path: Path):
     database_url = os.getenv("CYBERGUARD_DATABASE_URL", "").strip()
     if database_url.startswith(("postgresql://", "postgres://")):
         return PostgresConnection(database_url)
-    connection = sqlite3.connect(path)
+    connection = sqlite3.connect(path, factory=SQLiteConnection)
     connection.row_factory = sqlite3.Row
     return connection
 

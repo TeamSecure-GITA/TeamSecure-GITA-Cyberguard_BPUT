@@ -2,10 +2,14 @@ import json
 import math
 import os
 import re
+import statistics
+from collections.abc import Mapping
 from difflib import SequenceMatcher
+from datetime import datetime
 from pathlib import Path
 from typing import List
 from urllib.parse import parse_qs, urlparse
+from xml.etree import ElementTree
 from regional_scam_detector import analyze_regional_scam
 
 import tldextract
@@ -17,6 +21,28 @@ except ImportError:
 
 MODEL_PATH = Path(__file__).parent / "models" / "threat_text_model.joblib"
 FALLBACK_MODEL_PATH = Path(__file__).parent / "models" / "threat_text_model_fallback.json"
+
+
+def load_brand_domains(path: str | Path | None = None) -> dict[str, str]:
+    config_path = Path(path or os.getenv("CYBERGUARD_BRAND_DOMAINS_FILE", Path(__file__).parent / "data" / "brand_domains.json"))
+    try:
+        configured = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    brands = configured.get("brands", configured) if isinstance(configured, dict) else {}
+    if not isinstance(brands, dict):
+        return {}
+    return {
+        brand.lower(): domain.lower().rstrip(".")
+        for brand, domain in brands.items()
+        if isinstance(brand, str)
+        and isinstance(domain, str)
+        and re.fullmatch(r"[a-z0-9]{2,30}", brand.lower())
+        and re.fullmatch(r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}", domain.lower().rstrip("."))
+    }
+
+
+BRAND_DOMAINS = load_brand_domains()
 try:
     TEXT_MODEL_THRESHOLD = max(0.0, min(100.0, float(os.getenv("CYBERGUARD_TEXT_MODEL_THRESHOLD", "50"))))
 except ValueError:
@@ -64,58 +90,51 @@ def model_signal(payload: str) -> tuple[int, dict | None]:
     return score, {"name": "Trained Text Model Confidence", "score": f"{score}%", "model": "TF-IDF + Logistic Regression" if TEXT_MODEL is not None else FALLBACK_TEXT_MODEL["algorithm"]}
 
 def analyze_phishing_and_url(payload: str) -> tuple[int, List[str], List[dict]]:
-    score = 6
+    score = 5
     reasons = []
     indicators = []
 
     payload_lower = payload.lower()
-    urgency_keywords = ["urgent", "verify", "immediate", "account suspended", "password reset", "action required", "final warning", "security alert"]
+    urgency_keywords = ["urgent", "verify", "immediate", "account suspended", "account locked", "password reset", "action required", "final warning", "security alert"]
     detected_keywords = [kw for kw in urgency_keywords if kw in payload_lower]
     if detected_keywords:
-        score += 24
+        score += 6
         reasons.append(f"High-urgency language and social engineering indicators detected ({', '.join(detected_keywords)}).")
-        indicators.append({"name": "Language Pressure Index", "score": "88%"})
+        indicators.append({"name": "Language Pressure Index", "score": "72%"})
 
     authority_terms = ["admin", "registrar", "director", "finance", "bank", "support", "official", "security team"]
-    if any(term in payload_lower for term in authority_terms):
-        score += 18
-        reasons.append("Authority impersonation framing suggests a trusted identity was invoked.")
-        indicators.append({"name": "Authority Impersonation Signal", "score": "84%"})
-
-    requests = ["transfer", "otp", "password", "verify credentials", "click here", "confirm identity", "reset password", "update payment", "wire", "gift card"]
-    if any(term in payload_lower for term in requests):
-        score += 20
-        reasons.append("Credential harvesting or financial coercion language is present in the request.")
-        indicators.append({"name": "Credential Theft Construct", "score": "86%"})
+    matched_authority = [term for term in authority_terms if term in payload_lower]
+    credential_requests = ["otp", "password", "verify credentials", "click here", "confirm identity", "reset password", "verification code", "upi pin"]
+    matched_credentials = [term for term in credential_requests if term in payload_lower]
+    financial_requests = ["transfer", "send money", "pay now", "wire", "gift card", "payment due"]
+    matched_financial = [term for term in financial_requests if term in payload_lower]
+    if matched_credentials:
+        score += 24
+        reasons.append(f"Credential-harvesting language requests sensitive information ({', '.join(matched_credentials)}).")
+        indicators.append({"name": "Credential Theft Construct", "score": "88%"})
+    if matched_financial:
+        score += 8
+        reasons.append(f"Financial-action language is present ({', '.join(matched_financial)}); verify the request independently.")
+        indicators.append({"name": "Financial Request Signal", "score": "68%"})
 
     sender_domains = re.findall(r"from:.*?@([\w.-]+\.[A-Za-z]{2,})", payload_lower)
-    if sender_domains and any(domain.endswith(("gmail.com", "outlook.com", "yahoo.com", "hotmail.com")) for domain in sender_domains):
+    sender_mismatch = bool(sender_domains and any(domain.endswith(("gmail.com", "outlook.com", "yahoo.com", "hotmail.com")) for domain in sender_domains))
+    if sender_mismatch:
         score += 10
         reasons.append("The sender channel does not match the claimed institutional identity.")
         indicators.append({"name": "Sender Identity Mismatch", "score": "78%"})
 
-    urls = re.findall(r'https?://[^\s]+', payload)
-    if urls:
-        for url in urls:
-            extracted = tldextract.extract(url)
-            domain_str = f"{extracted.domain}.{extracted.suffix}"
-            host = extracted.fqdn or extracted.domain
-            if any(token in host for token in ("login", "verify", "secure", "update", "micros0ft", "paypa1", "bput")) and domain_str not in {"bput.ac.in", "bput.edu.in", "bput.ac.in"}:
-                score += 24
-                reasons.append(f"Look-alike credential lure domain identified ({domain_str}) impersonating an official authority.")
-                indicators.append({"name": "Domain Dissimilarity Score", "score": "95%"})
-            elif extracted.suffix in ["xyz", "top", "online", "live", "site", "click"]:
-                score += 18
-                reasons.append(f"Unverified or high-risk TLD extension detected ({extracted.suffix}).")
-                indicators.append({"name": "Unverified SSL / TLD Reputation", "score": "82%"})
-            if any(token in url.lower() for token in ("redirect=", "next=", "return=", "continue=")):
-                score += 12
-                reasons.append("URL redirect parameters are hiding a second destination and increase the risk of credential theft.")
-                indicators.append({"name": "Redirect Obfuscation", "score": "81%"})
-            if len(host) >= 24 or host.count("-") >= 2 or re.search(r"\d", host):
-                score += 8
-                reasons.append(f"Host naming pattern is abnormal and consistent with social-engineering lure construction ({host}).")
-                indicators.append({"name": "Lexical URL Anomaly", "score": "74%"})
+    if matched_authority and (matched_credentials or sender_mismatch or re.search(r"https?://", payload_lower)):
+        score += 12
+        reasons.append(f"A request invokes an institutional identity ({', '.join(matched_authority)}) in a suspicious context.")
+        indicators.append({"name": "Authority Impersonation Signal", "score": "84%"})
+
+    if re.search(r"https?://", payload_lower):
+        url_score, url_reasons, url_indicators = analyze_url_intelligence(payload)
+        url_contribution = min(max(url_score - 10, 0), 55)
+        score += url_contribution
+        reasons.extend(url_reasons)
+        indicators.extend(url_indicators)
 
     if not reasons:
         reasons.append("No phishing or social-engineering patterns matched the content baseline.")
@@ -131,8 +150,7 @@ def analyze_url_intelligence(payload: str) -> tuple[int, List[str], List[dict]]:
     urls = re.findall(r"https?://[^\s<>\"']+", payload.lower())
     risky_tlds = {"xyz", "top", "online", "live", "site", "click", "zip"}
     shorteners = {"bit.ly", "tinyurl.com", "t.co", "is.gd", "cutt.ly"}
-    trusted_domains = {"microsoft.com", "google.com", "bput.ac.in", "paypal.com", "office.com"}
-    brand_domains = {"microsoft": "microsoft.com", "google": "google.com", "bput": "bput.ac.in", "paypal": "paypal.com", "office": "office.com"}
+    trusted_domains = set(BRAND_DOMAINS.values())
     for raw_url in urls:
         url = raw_url.rstrip(".,;:!?)]}")
         parsed_url = urlparse(url)
@@ -153,14 +171,14 @@ def analyze_url_intelligence(payload: str) -> tuple[int, List[str], List[dict]]:
             reasons.append(f"URL intelligence flagged a high-risk top-level domain ({extracted.suffix}).")
             indicators.append({"name": "URL Reputation Risk", "score": "86%"})
         if host in shorteners or extracted.domain in shorteners:
-            score += 20
+            score += 28
             reasons.append("Redirect shortener obscures the destination and requires analyst expansion.")
-            indicators.append({"name": "Redirect Obfuscation", "score": "82%"})
+            indicators.append({"name": "Redirect Obfuscation", "score": "88%"})
         if "xn--" in host or re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", parsed_url.hostname or ""):
             score += 30
             reasons.append("URL uses an IDN or raw IP host, reducing domain identity confidence.")
             indicators.append({"name": "Host Identity Confidence", "score": "91%"})
-        for brand, trusted_domain in brand_domains.items():
+        for brand, trusted_domain in BRAND_DOMAINS.items():
             similarity = SequenceMatcher(None, registered_domain, trusted_domain).ratio()
             if brand in extracted.domain and registered_domain not in trusted_domains:
                 score += 30
@@ -301,7 +319,322 @@ def analyze_deepfake(payload: str) -> tuple[int, List[str], List[dict]]:
             indicators.append({"name": f"{signal.title()} Evidence", "score": f"{min(70 + increment, 98)}%"})
     return min(score, 99), reasons, indicators
 
-def analyze_technical_activity(payload: str) -> tuple[int, List[str], List[dict]]:
+
+def _case_value(record: Mapping[str, object], *keys: str) -> object:
+    lowered = {str(key).lower(): value for key, value in record.items()}
+    return next((lowered[key.lower()] for key in keys if key.lower() in lowered), None)
+
+
+def _unwrap_event_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return _case_value(value, "#text", "value", "@systemtime", "systemtime")
+    return value
+
+
+def _normalise_system_log_record(record: Mapping[str, object]) -> dict[str, object]:
+    event_document = _case_value(record, "Event", "event")
+    event_document = event_document if isinstance(event_document, Mapping) else record
+    system = _case_value(event_document, "System", "system")
+    system = system if isinstance(system, Mapping) else {}
+    event_data = _case_value(event_document, "EventData", "event_data", "eventData")
+    event_data = event_data if isinstance(event_data, Mapping) else {}
+    data_fields = _case_value(event_data, "Data", "data")
+    fields = {}
+    if isinstance(data_fields, list):
+        for item in data_fields:
+            if not isinstance(item, Mapping):
+                continue
+            field_name = _case_value(item, "@Name", "Name", "name")
+            field_value = _unwrap_event_value(item)
+            if field_name and field_value is not None:
+                fields[str(field_name).lower().replace(" ", "_")] = field_value
+    elif isinstance(data_fields, Mapping):
+        fields.update({str(key).lower().replace(" ", "_"): _unwrap_event_value(value) for key, value in data_fields.items()})
+    for key in ("image_path", "service_path", "command", "task_command", "targetusername", "subjectusername"):
+        value = _case_value(event_data, key)
+        if value is not None:
+            fields[key] = _unwrap_event_value(value)
+
+    event_id = _unwrap_event_value(_case_value(system, "EventID", "event_id") or _case_value(record, "event_id", "eventId", "EventID", "id"))
+    event_data_values = fields
+    raw_message = _case_value(record, "message", "Message", "description")
+    if raw_message is None:
+        raw_message = _case_value(_case_value(event_document, "RenderingInfo", "rendering_info") or {}, "Message", "message")
+    explicit_type = _case_value(record, "event_type", "eventType", "action")
+    if isinstance(explicit_type, Mapping):
+        explicit_type = _unwrap_event_value(explicit_type)
+    timestamp = _unwrap_event_value(_case_value(system, "TimeCreated", "time_created") or _case_value(record, "timestamp", "time", "@timestamp"))
+    computer = _case_value(system, "Computer", "computer") or _case_value(record, "host", "hostname", "computer")
+    normalized = {str(key).lower(): _unwrap_event_value(value) for key, value in record.items()}
+    normalized.update({"event_id": str(event_id) if event_id is not None else "", "event_type": str(explicit_type or ""), "message": str(raw_message or ""), "timestamp": str(timestamp or ""), "host": str(computer or "")})
+    normalized.update(event_data_values)
+    if "imagepath" in normalized and "image_path" not in normalized:
+        normalized["image_path"] = normalized["imagepath"]
+    if "commandline" in normalized and "command" not in normalized:
+        normalized["command"] = normalized["commandline"]
+    if "newprocessname" in normalized and "image_path" not in normalized:
+        normalized["image_path"] = normalized["newprocessname"]
+    inferred_types = {"1102": "audit_log_cleared", "4625": "failed_login", "4672": "privilege_change", "4720": "account_created", "4728": "admin_grant", "4732": "admin_grant", "4756": "admin_grant", "4698": "scheduled_task_created", "7045": "service_installed"}
+    if not normalized["event_type"]:
+        normalized["event_type"] = inferred_types.get(normalized["event_id"], "")
+    return normalized
+
+
+def _parse_system_log_lines(payload: str) -> list[dict[str, object]]:
+    records = []
+    for line in payload.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        record: dict[str, object] = {"message": line}
+        priority = re.match(r"^<(\d{1,3})>", line)
+        if priority:
+            syslog_priority = int(priority.group(1))
+            severity = syslog_priority % 8
+            record["severity"] = ("emergency", "alert", "critical", "error", "warning", "notice", "info", "debug")[severity]
+            record["facility"] = syslog_priority // 8
+        message = line.rsplit(": ", 1)[-1].lower()
+        if any(signal in message for signal in ("failed password", "authentication failure", "invalid user", "failed login")):
+            record["event_id"] = "4625"
+            record["event_type"] = "failed_login"
+        elif "audit" in message and any(signal in message for signal in ("cleared", "deleted", "removed")):
+            record["event_id"] = "1102"
+            record["event_type"] = "audit_log_cleared"
+        elif re.search(r"\b(?:useradd|new user|user created)\b", message):
+            record["event_type"] = "account_created"
+        elif re.search(r"\b(?:usermod|added to (?:the )?sudo|added to (?:the )?wheel)\b", message):
+            record["event_type"] = "privilege_change"
+        elif any(marker in message for marker in ("-encodedcommand", " frombase64string", "downloadstring")) or re.search(r"\b(?:curl|wget)\b.{0,200}\|\s*(?:sh|bash)\b", message):
+            record["event_type"] = "process_start"
+            record["command"] = message
+        records.append(record)
+    return records
+
+
+def _parse_windows_event_xml(payload: str) -> list[dict[str, object]]:
+    try:
+        root = ElementTree.fromstring(payload)
+    except ElementTree.ParseError:
+        return []
+    event_nodes = [node for node in root.iter() if node.tag.rsplit("}", 1)[-1].lower() == "event"]
+    records = []
+    for event in event_nodes:
+        children = list(event)
+        system = next((node for node in children if node.tag.rsplit("}", 1)[-1].lower() == "system"), None)
+        event_data = next((node for node in children if node.tag.rsplit("}", 1)[-1].lower() in {"eventdata", "userdata"}), None)
+        if system is None:
+            continue
+        system_fields = {node.tag.rsplit("}", 1)[-1].lower(): node for node in system}
+        event_id = system_fields.get("eventid")
+        time_created = system_fields.get("timecreated")
+        computer = system_fields.get("computer")
+        record: dict[str, object] = {
+            "event_id": event_id.text.strip() if event_id is not None and event_id.text else "",
+            "timestamp": time_created.attrib.get("SystemTime", "") if time_created is not None else "",
+            "host": computer.text.strip() if computer is not None and computer.text else "",
+        }
+        if event_data is not None:
+            for node in event_data.iter():
+                if node.tag.rsplit("}", 1)[-1].lower() != "data" or not node.attrib.get("Name") or node.text is None:
+                    continue
+                record[node.attrib["Name"].lower().replace(" ", "_")] = node.text.strip()
+        records.append(record)
+    return records
+
+
+def _system_log_records(document: object, payload: str) -> list[dict[str, object]]:
+    if isinstance(document, list):
+        source_records = document
+    elif isinstance(document, Mapping):
+        source_records = None
+        for key in ("events", "records", "Records", "EventRecords"):
+            value = _case_value(document, key)
+            if isinstance(value, list):
+                source_records = value
+                break
+        if source_records is None:
+            source_records = [document]
+    else:
+        source_records = _parse_windows_event_xml(payload)
+        if not source_records:
+            json_lines = []
+            for line in payload.splitlines():
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(item, Mapping):
+                    json_lines.append(item)
+            source_records = json_lines or _parse_system_log_lines(payload)
+    normalized = [_normalise_system_log_record(record) for record in source_records if isinstance(record, Mapping)]
+    if not normalized and isinstance(document, str):
+        return _parse_system_log_lines(payload)
+    return normalized
+
+def analyze_structured_telemetry(payload: str, category: str) -> tuple[int, List[str], List[dict]]:
+    try:
+        document = json.loads(payload)
+    except (TypeError, json.JSONDecodeError):
+        if category != "system_logs":
+            return 15, [], []
+        document = None
+    records = document if isinstance(document, list) else document.get("flows", document.get("events", [document])) if isinstance(document, dict) else []
+    if isinstance(records, dict):
+        records = [records]
+    if category == "system_logs":
+        records = _system_log_records(document, payload)
+    if not isinstance(records, list):
+        return 15, [], []
+    score = 15
+    reasons = []
+    indicators = []
+
+    def number(record: dict, *keys: str) -> float:
+        for key in keys:
+            try:
+                value = float(record.get(key, 0) or 0)
+                if math.isfinite(value):
+                    return max(0.0, value)
+            except (TypeError, ValueError):
+                continue
+        return 0.0
+
+    if category == "network":
+        ports = set()
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            port_values = record.get("destination_ports", record.get("dst_ports", []))
+            if isinstance(port_values, list):
+                ports.update(str(port) for port in port_values if str(port).isdigit() and 0 < int(port) <= 65535)
+            port = record.get("destination_port", record.get("dst_port"))
+            if port is not None and str(port).isdigit() and 0 < int(port) <= 65535:
+                ports.add(str(port))
+            declared_count = number(record, "unique_destination_ports", "distinct_destination_ports")
+            if declared_count > len(ports):
+                ports.update(f"declared-{index}" for index in range(int(declared_count)))
+        if len(ports) >= 10:
+            score += min(50, 20 + len(ports))
+            reasons.append(f"Flow telemetry shows probing across {len(ports)} destination ports, consistent with network reconnaissance.")
+            indicators.append({"name": "Flow Port-Scan Breadth", "score": f"{min(60 + len(ports), 99)}%", "weight": min(50, 20 + len(ports))})
+
+        bytes_out = sum(number(record, "bytes_out", "bytes_sent", "bytes_tx") for record in records if isinstance(record, dict))
+        bytes_in = sum(number(record, "bytes_in", "bytes_received", "bytes_rx") for record in records if isinstance(record, dict))
+        if bytes_out >= 10_000_000 and bytes_out > max(bytes_in, 1) * 10:
+            score += 40
+            reasons.append(f"Outbound flow volume is {bytes_out / max(bytes_in, 1):.1f}x inbound volume ({int(bytes_out)} bytes out), consistent with possible exfiltration.")
+            indicators.append({"name": "Outbound Flow Volume Ratio", "score": "90%", "weight": 40})
+
+        timestamps = []
+        for record in records:
+            if not isinstance(record, dict) or not isinstance(record.get("timestamp"), str):
+                continue
+            try:
+                timestamps.append(datetime.fromisoformat(record["timestamp"].replace("Z", "+00:00")).timestamp())
+            except ValueError:
+                continue
+        intervals = [right - left for left, right in zip(sorted(timestamps), sorted(timestamps)[1:])]
+        if len(intervals) >= 4 and 30 <= statistics.mean(intervals) <= 3600 and statistics.pstdev(intervals) / statistics.mean(intervals) <= 0.15:
+            score += 25
+            reasons.append("Network flows recur at a regular interval, consistent with beaconing behavior.")
+            indicators.append({"name": "Regular Flow Beaconing", "score": "82%", "weight": 25})
+
+    if category == "api_logs":
+        requests_per_minute = max((number(record, "requests_per_minute", "request_rate_per_minute") for record in records if isinstance(record, dict)), default=0)
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            count = number(record, "request_count", "requests")
+            duration = number(record, "window_seconds", "duration_seconds")
+            if duration > 0:
+                requests_per_minute = max(requests_per_minute, count * 60 / duration)
+        if requests_per_minute >= 300:
+            weight = min(50, 25 + round(requests_per_minute / 100))
+            score += weight
+            reasons.append(f"API telemetry records {requests_per_minute:.0f} requests per minute, above the configured abuse threshold.")
+            indicators.append({"name": "API Request Rate", "score": f"{min(65 + round(requests_per_minute / 100), 99)}%", "weight": weight})
+        responses = [int(number(record, "status_code", "http_status")) for record in records if isinstance(record, dict) and number(record, "status_code", "http_status")]
+        if responses and responses.count(429) / len(responses) >= 0.25:
+            score += 20
+            reasons.append("A high share of API responses are HTTP 429 rate-limit responses.")
+            indicators.append({"name": "API Rate-Limit Responses", "score": "80%", "weight": 20})
+
+    if category == "system_logs":
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            event_id = str(record.get("event_id", record.get("eventId", record.get("id", "")))).strip().lower()
+            event_type = str(record.get("event_type", record.get("action", record.get("type", "")))).strip().lower()
+            count = max(1, int(number(record, "count", "event_count", "occurrences")))
+            if event_id == "1102" or "audit_log_cleared" in event_type or "logs_cleared" in event_type:
+                score += 45
+                reasons.append("System telemetry reports audit-log clearing, which can indicate evidence tampering.")
+                indicators.append({"name": "Audit Log Cleared", "score": "96%", "weight": 45})
+            if event_id in {"4672", "4720", "4728", "4732", "4756"} or any(signal in event_type for signal in ("privilege_change", "admin_grant", "account_created")):
+                score += 25
+                reasons.append(f"System telemetry reports a privileged identity change (event {event_id or event_type}).")
+                indicators.append({"name": "Privileged Identity Change", "score": "86%", "weight": 25})
+            if event_id == "7045" or "service_installed" in event_type:
+                score += 20
+                reasons.append("System telemetry reports a newly installed service; verify its publisher and executable path.")
+                indicators.append({"name": "New Service Installation", "score": "78%", "weight": 20})
+                executable = str(record.get("image_path", record.get("service_path", ""))).lower()
+                if any(marker in executable for marker in ("\\temp\\", "\\appdata\\", "powershell", "rundll32")):
+                    score += 20
+                    reasons.append("The new service uses a suspicious executable path or interpreter.")
+                    indicators.append({"name": "Suspicious Service Executable", "score": "90%", "weight": 20})
+            if event_id == "4698" or "scheduled_task_created" in event_type:
+                score += 20
+                reasons.append("System telemetry reports a new scheduled task; verify its owner and command.")
+                indicators.append({"name": "Scheduled Task Creation", "score": "78%", "weight": 20})
+                task_command = str(record.get("command", record.get("task_command", ""))).lower()
+                if "-encodedcommand" in task_command or " -enc " in task_command:
+                    score += 20
+                    reasons.append("The scheduled task command uses encoded PowerShell arguments.")
+                    indicators.append({"name": "Encoded Scheduled Task Command", "score": "92%", "weight": 20})
+            if event_id == "4688" or "process_start" in event_type or "process_created" in event_type:
+                executable = str(record.get("image_path", record.get("newprocessname", ""))).lower()
+                command = str(record.get("command", record.get("commandline", ""))).lower()
+                message = str(record.get("message", "")).lower()
+                suspicious_command = any(marker in command for marker in ("-encodedcommand", " -enc ", "downloadstring", "frombase64string", "invoke-expression"))
+                suspicious_location = any(marker in executable for marker in ("\\temp\\", "\\appdata\\", "/tmp/", "/dev/shm/"))
+                shell_pipe = bool(re.search(r"\b(?:curl|wget)\b.{0,200}\|\s*(?:sh|bash)\b", message))
+                if suspicious_command or suspicious_location or shell_pipe:
+                    score += 30
+                    reasons.append("Process telemetry combines a suspicious executable location or download/encoded-command pattern.")
+                    indicators.append({"name": "Suspicious Process Creation", "score": "90%", "weight": 30})
+
+        failed_auth_count = sum(
+            max(1, int(number(record, "count", "event_count", "occurrences")))
+            for record in records
+            if isinstance(record, dict)
+            and (
+                str(record.get("event_id", record.get("eventId", record.get("id", "")))).strip() == "4625"
+                or any(signal in str(record.get("event_type", record.get("action", record.get("type", "")))).lower() for signal in ("failed_login", "authentication_failure"))
+            )
+        )
+        if failed_auth_count >= 10:
+            score += 30
+            reasons.append(f"System logs contain {failed_auth_count} failed authentication events in the submitted window.")
+            indicators.append({"name": "System Authentication Failure Burst", "score": "88%", "weight": 30})
+
+        event_rate = max((number(record, "events_per_minute", "event_rate_per_minute") for record in records if isinstance(record, dict)), default=0)
+        for record in records:
+            if not isinstance(record, dict):
+                continue
+            duration = number(record, "window_seconds", "duration_seconds")
+            count = number(record, "event_count", "events")
+            if duration > 0:
+                event_rate = max(event_rate, count * 60 / duration)
+        if event_rate >= 5000:
+            score += 25
+            reasons.append(f"System telemetry volume reached {event_rate:.0f} events per minute, indicating a logging burst or flood.")
+            indicators.append({"name": "System Log Event-Rate Burst", "score": "82%", "weight": 25})
+
+    return min(score, 99), reasons, indicators
+
+
+def analyze_technical_activity(payload: str, category: str = "network") -> tuple[int, List[str], List[dict]]:
     payload_lower = payload.lower()
     score = 15
     reasons = []
@@ -317,11 +650,18 @@ def analyze_technical_activity(payload: str) -> tuple[int, List[str], List[dict]
         "failed": (30, "Repeated authentication failures detected in telemetry."),
         "unauthorized": (35, "Unauthorized activity indicator detected in logs."),
     }
+    if category == "system_logs":
+        signatures.pop("powershell")
     for signature, (increment, reason) in signatures.items():
         if signature in payload_lower:
             score += increment
             reasons.append(reason)
             indicators.append({"name": f"{signature.title()} Signature", "score": f"{min(60 + increment, 98)}%"})
+    structured_score, structured_reasons, structured_indicators = analyze_structured_telemetry(payload, category)
+    if structured_reasons:
+        score = min(99, score + structured_score - 15)
+        reasons.extend(structured_reasons)
+        indicators.extend(structured_indicators)
     return min(score, 99), reasons, indicators
 
 def adversarial_self_test(category: str, payload: str) -> dict:
@@ -400,19 +740,25 @@ def analyze_login_anomaly(payload: str) -> tuple[int, list[str], list[dict]]:
     return round(anomaly * 0.7), reasons, indicators
 
 
+def analyze_authentication_event(payload: str) -> tuple[int, List[str], List[dict]]:
+    rule_score, rule_reasons, rule_indicators = analyze_behavioral_ato(payload)
+    anomaly_score, anomaly_reasons, anomaly_indicators = analyze_login_anomaly(payload)
+    return (
+        max(rule_score, anomaly_score),
+        list(dict.fromkeys(rule_reasons + anomaly_reasons)),
+        rule_indicators + anomaly_indicators,
+    )
+
+
 def evaluate_threat_payload(category: str, payload: str) -> dict:
-    if category in {"auth_logs", "anomaly"}:
-        score, reasons, indicators = analyze_login_anomaly(payload)
-        detection_method = "isolation-forest-behavioral-baseline"
+    if category in {"auth_logs", "anomaly", "ato"}:
+        score, reasons, indicators = analyze_authentication_event(payload)
+        detection_method = "shared-authentication-risk"
         mitre_techniques = ["T1078", "T1110.003"]
     elif category == "url":
         score, reasons, indicators = analyze_url_intelligence(payload)
         detection_method = "url-intelligence"
         mitre_techniques = ["T1566.002", "T1583.001"]
-    elif category == "ato":
-        score, reasons, indicators = analyze_behavioral_ato(payload)
-        detection_method = "behavioral-ato"
-        mitre_techniques = ["T1078", "T1110"]
     elif category == "impersonation":
         score, reasons, indicators = analyze_impersonation(payload)
         detection_method = "identity-impersonation"
@@ -425,13 +771,9 @@ def evaluate_threat_payload(category: str, payload: str) -> dict:
         score, reasons, indicators = analyze_phishing_and_url(payload)
         detection_method = "phishing-language-and-url"
         mitre_techniques = ["T1566.001"]
-    elif category in ["ato", "auth_logs"]:
-        score, reasons, indicators = analyze_account_takeover(payload)
-        detection_method = "authentication-heuristics"
-        mitre_techniques = ["T1078"]
     elif category in ["system_logs", "network", "api_logs", "malware", "exfiltration"]:
-        score, reasons, indicators = analyze_technical_activity(payload)
-        detection_method = "technical-signatures"
+        score, reasons, indicators = analyze_technical_activity(payload, category)
+        detection_method = "structured-flow-and-signatures" if category in {"network", "api_logs"} else "technical-signatures"
         mitre_techniques = ["T1041"] if category == "exfiltration" else ["T1190"]
     else:  # Deepfake / Image / Audio / Video default
         score, reasons, indicators = analyze_deepfake(payload)

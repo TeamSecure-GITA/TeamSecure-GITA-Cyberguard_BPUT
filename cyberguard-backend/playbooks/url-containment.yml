@@ -1,0 +1,10 @@
+id: url-containment
+name: Malicious URL containment preview
+trigger:
+  risk_level: high
+  category: url
+actions:
+  - block_domain
+  - notify_soc
+  - escalate
+approval_required: true

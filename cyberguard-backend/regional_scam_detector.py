@@ -8,38 +8,45 @@ def analyze_regional_scam(payload: str) -> tuple[int, list[str], list[dict[str, 
     reasons: list[str] = []
     categories: list[str] = []
     score = 0
-    upi_patterns = {
-        "upi collect request": r"upi|gpay|google pay|phonepe|paytm|bhim|collect request|scan.*qr|qr.*scan|@upi",
-        "payment pressure": r"refund|cashback|kyc|payment|transfer|send money|pay now|₹|rs\.?\s*\d+|inr\s*\d+",
+    upi_signals = {
+        "payment service": r"\b(?:upi|gpay|google pay|phonepe|paytm|bhim)\b",
+        "payment collection": r"\b(?:collect request|request money|scan (?:the )?qr|qr code)\b",
+        "credential request": r"\b(?:upi pin|otp|one[- ]time password|share your pin|share your password)\b",
+        "payment coercion": r"\b(?:pay now|send money|cashback|refund|prize|reward|account.{0,20}(?:blocked|suspended)|kyc.{0,20}(?:blocked|suspended|expire))\b",
     }
-    for name, pattern in upi_patterns.items():
-        if re.search(pattern, text):
-            score += 24
-            categories.append("upi-fraud")
+    matched_upi = [name for name, pattern in upi_signals.items() if re.search(pattern, text)]
+    if len(matched_upi) >= 2 or re.search(r"\b(?:upi pin|collect request)\b", text):
+        for name in matched_upi:
+            score += 20
             reasons.append(f"Digital-payment scam signal detected: {name}.")
-            indicators.append({"name": name.title(), "score": "88%", "weight": 24})
-    arrest_patterns = {
-        "fake authority": r"police|cbi|customs|income tax|court|cyber crime|rbi|government|officer|inspector",
-        "digital arrest pressure": r"digital arrest|video call.*arrest|arrested|detention|jail|case registered|warrant",
-        "secrecy and urgency": r"do not disconnect|stay on.*call|urgent|immediately|within \d+ hours",
+            indicators.append({"name": name.title(), "score": "88%", "weight": 20})
+        categories.append("upi-fraud")
+
+    arrest_signals = {
+        "authority claim": r"\b(?:police|cbi|customs|income tax|court|cyber crime|rbi|government|officer|inspector)\b",
+        "arrest threat": r"\b(?:digital arrest|arrested|detention|jail|case registered|warrant)\b",
+        "call-control pressure": r"\b(?:do not disconnect|stay on (?:the )?call|video call.{0,30}(?:arrest|detention))\b",
+        "payment or credential demand": r"\b(?:pay (?:now|a fee|the amount)|transfer (?:money|funds)|send money|share (?:your )?(?:otp|pin|password))\b",
     }
-    for name, pattern in arrest_patterns.items():
-        if re.search(pattern, text):
-            score += 24
-            categories.append("digital-arrest")
+    matched_arrest = [name for name, pattern in arrest_signals.items() if re.search(pattern, text)]
+    if "arrest threat" in matched_arrest or len(matched_arrest) >= 2:
+        for name in matched_arrest:
+            score += 20
             reasons.append(f"Fake-authority call signal detected: {name}.")
-            indicators.append({"name": name.title(), "score": "92%", "weight": 24})
+            indicators.append({"name": name.title(), "score": "92%", "weight": 20})
+        categories.append("digital-arrest")
+
     regional_patterns = {
-        "Hindi/Hinglish": r"aapka account|turant|jaldi|police station|giraftar|kyc update|paise bhejo|otp batao",
-        "Odia": r"ଖାତା|ତୁରନ୍ତ|ପୋଲିସ|ଗିରଫ|ଟଙ୍କା|ଓଟିପି",
+        "Hindi/Hinglish": r"\b(?:aapka account.{0,30}(?:band|block|freeze)|giraftar|paise bhejo|otp batao|police station)\b",
+        "Odia": r"(?:ଖାତା.{0,30}(?:ବନ୍ଦ|ବ୍ଲକ)|ଗିରଫ|ଟଙ୍କା.{0,20}(?:ପଠା|ଦିଅ)|ଓଟିପି.{0,20}(?:ଦିଅ|କୁହ))",
     }
     languages = []
     for language, pattern in regional_patterns.items():
         if re.search(pattern, text):
             languages.append(language)
-            score += 12
+            score += 15
             reasons.append(f"{language} scam-language pattern detected; verify through an official channel.")
-            indicators.append({"name": f"{language} Scam Language", "score": "78%", "weight": 12})
+            indicators.append({"name": f"{language} Scam Language", "score": "78%", "weight": 15})
     if not reasons:
         return 0, [], [], None, []
     if "upi-fraud" in categories and "digital-arrest" in categories:

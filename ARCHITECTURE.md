@@ -4,21 +4,30 @@
 
 ```mermaid
 flowchart LR
-  UI[React SOC Dashboard] -->|Bearer token| API[FastAPI API]
-  API --> AUTH[Session and RBAC]
-  API --> ENGINE[Hybrid Detection Engine]
-  ENGINE --> RULES[Rules: URLs, auth, logs, network]
-  ENGINE --> MODEL[TF-IDF + Logistic Regression]
-  API --> DB[(SQLite incidents/actions)]
-  API --> WEBHOOK[Optional response and alert webhooks]
+  UI[React SOC Dashboard] -->|Bearer token / WebSocket| API[FastAPI API]
+  API --> AUTH[JWT sessions, RBAC, passkeys]
+  API --> ROUTER[Analysis and incident orchestration]
+  ROUTER --> ENGINE[Hybrid detection engine]
+  ENGINE --> RULES[Text, URL, identity, auth and telemetry rules]
+  ENGINE --> TEXT[TF-IDF classifier and optional transformer]
+  ENGINE --> MEDIA[Image, audio and sampled-video analysis]
+  ROUTER --> INTEL[IOC, email-auth and website enrichment]
+  API --> DB[(SQLite development / PostgreSQL production)]
+  API --> REDIS[(Redis ephemeral state in production)]
+  API --> ACTIONS[Approved response and provider integrations]
   API --> UI
 ```
 
 ## Detection Sources
 
-- Email, SMS, social messages, URLs, and impersonation text use NLP-style keyword and URL heuristics plus the trained text classifier.
-- Image, audio, and video uploads are accepted, hashed, persisted, and inspected from their bytes using image entropy, waveform, and video-container features. A specialized computer-vision or speech model can be added behind the same `/api/v1/analyze/file` contract.
-- Authentication, system, network, API, malware, and exfiltration events use telemetry signature rules and produce risk indicators.
+- Email, SMS, social messages, URLs, and impersonation text use explainable rules plus available trained text-model signals. EML analysis checks sender-authentication evidence; URL submissions receive lexical and brand-lookalike analysis.
+- Brand lookalike domains are loaded from `cyberguard-backend/data/brand_domains.json`; set `CYBERGUARD_BRAND_DOMAINS_FILE` to an alternate JSON file to extend or replace the trusted-brand list.
+- Image and audio uploads use byte-level anomaly features and optional pretrained model adapters. Videos are sampled into frames for image analysis; this is not live-call, temporal, or lip-sync detection. Missing pretrained weights cause fallback behavior and are reported by the model-status endpoint.
+- Authentication submissions use one shared ATO/auth-log scoring path. System, network, API, malware, and exfiltration submissions currently use structured text/signature analysis; the API does not capture packets or scan uploaded files with YARA.
+- Authentication telemetry can build a per-account country/device/hour baseline from at least three explicitly successful, low-risk events. Device identifiers are hashed and raw IPs are not stored. Optional country lookup uses a local MaxMind database configured with `CYBERGUARD_GEOIP_DB_PATH`; without that file, caller-provided country data is only a hint.
+- Network/API JSON submissions can be analyzed as normalized flow and request records for broad port probing, outbound-volume anomalies, regular beacon intervals, request-rate bursts, and rate-limit responses. System logs accept event JSON, newline-delimited JSON, Windows Event XML, and common Linux syslog lines; selected event IDs and patterns cover audit-log clearing, privileged account changes, service/task installation, and failed-login bursts. This does not provide packet capture, full PCAP parsing, or a learned network model. File uploads in the `malware` category are checked against bundled YARA rules when `yara-python` is available; bundled signatures are intentionally narrow and do not replace endpoint antivirus.
+- Website inspection performs SSRF-safe live fetching, reports verified TLS issuer/validity/age metadata, and checks redirect chains and credential forms. DOM brand claims and cross-domain password-form submissions add impersonation evidence. RDAP registration-age lookup is available when `CYBERGUARD_ENABLE_RDAP=true` and safely validates public redirect targets; it is disabled by default. Certificate transparency and screenshot-based visual similarity are not implemented.
+- EML analysis scans the message body and bounded text attachments, hashes attachment bytes, and flags potentially active file extensions. It does not unpack archives, execute files, inspect document macros, or replace antivirus/YARA scanning.
 
 ## Security Controls
 
@@ -30,8 +39,8 @@ flowchart LR
 - React code delivered to a browser cannot be made invisible to that browser's developer tools. Keep secrets, detection rules, and privileged operations on the backend.
 - Analyst users can inspect and create incidents.
 - Lead users can execute response actions.
-- SQLite stores incidents and action history.
-- External actions remain disabled until webhook environment variables are configured.
+- SQLite is used for development; production Compose configures PostgreSQL. Redis is used for shared expiring authentication state in production.
+- External actions require provider configuration and explicit authorization; integrations are not implied to be live merely because a recommendation is shown.
 
 ## Main API Routes
 

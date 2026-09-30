@@ -47,11 +47,11 @@ def scan_account(signals: dict[str, Any] | None = None) -> dict[str, Any]:
     data = signals or {}
     findings: list[dict[str, Any]] = []
     signal_map = [
-        ("unknown_session", "presence", data.get("unknown_session", True), 0.9, "Unknown device or active session detected"),
-        ("suspicious_login", "presence", data.get("suspicious_login", True), 0.85, "Suspicious login or impossible travel detected"),
-        ("new_oauth_app", "persistence", data.get("new_oauth_app", True), 0.86, "New connected application has account access"),
-        ("forwarding_rule", "persistence", data.get("forwarding_rule", True), 0.95, "External mail forwarding or hiding rule detected"),
-        ("mfa_disabled", "exposure", not data.get("mfa_enabled", False), 0.8, "Multi-factor authentication is not enabled"),
+        ("unknown_session", "presence", data.get("unknown_session", False), 0.9, "Unknown device or active session detected"),
+        ("suspicious_login", "presence", data.get("suspicious_login", False), 0.85, "Suspicious login or impossible travel detected"),
+        ("new_oauth_app", "persistence", data.get("new_oauth_app", False), 0.86, "New connected application has account access"),
+        ("forwarding_rule", "persistence", data.get("forwarding_rule", False), 0.95, "External mail forwarding or hiding rule detected"),
+        ("mfa_disabled", "exposure", data.get("mfa_enabled") is False, 0.8, "Multi-factor authentication is not enabled"),
         ("recovery_changed", "persistence", data.get("recovery_changed", False), 0.92, "Recovery information changed recently"),
         ("breach_history", "history", data.get("breach_history", False), 0.75, "Account identifier appears in breach intelligence"),
     ]
@@ -86,8 +86,8 @@ def rescue_plan(scan: dict[str, Any]) -> dict[str, Any]:
         {"id": "reset_password", "title": "Reset password through the provider", "kind": "recovery", "confirmation": "explicit", "supported": False, "status": "manual_required", "fallback": "CyberGuard never sees your password. Use the official provider page.", "link": links["password"]},
         {"id": "enable_mfa", "title": "Enable multi-factor authentication", "kind": "recovery", "confirmation": "explicit", "supported": False, "status": "manual_required", "fallback": "Use a security key or authenticator app from the provider security page.", "link": links["mfa"]},
         {"id": "check_recovery", "title": "Verify recovery email and phone", "kind": "hardening", "confirmation": "explicit", "supported": False, "status": "manual_required", "fallback": "Confirm recovery contacts belong to you and remove unknown values.", "link": links["recovery"]},
-        {"id": "rescan_account", "title": "Re-scan account", "kind": "verification", "confirmation": "none", "supported": True, "status": "ready", "fallback": "Run another metadata-only scan after provider changes."},
-        {"id": "guardian_mode", "title": "Keep protecting my account", "kind": "monitoring", "confirmation": "explicit", "supported": True, "status": "ready", "fallback": "Enable Guardian Mode to monitor future security changes."},
+        {"id": "rescan_account", "title": "Re-assess reported signals", "kind": "verification", "confirmation": "none", "supported": False, "status": "manual_required", "fallback": "Submit updated operator-reported signals for a new assessment."},
+        {"id": "guardian_mode", "title": "Save Guardian Mode preference", "kind": "monitoring", "confirmation": "explicit", "supported": False, "status": "manual_required", "fallback": "Guardian preferences can be saved, but live provider monitoring is not connected."},
     ]
     if "unknown_session" not in finding_ids:
         steps[0]["status"] = "not_needed"
@@ -119,7 +119,7 @@ def lockdown_plan(scan: dict[str, Any]) -> dict[str, Any]:
 
 
 def guardian_watch(scan: dict[str, Any], enabled: bool = True) -> dict[str, Any]:
-    return {"watch_id": "watch_" + secrets.token_urlsafe(8), "enabled": enabled, "baseline_scan_id": scan.get("scan_id"), "watch_window_hours": 24, "signals": ["new_login", "new_device", "recovery_change", "oauth_change", "forwarding_change", "mfa_change"], "status": "active" if enabled else "disabled"}
+    return {"watch_id": "watch_" + secrets.token_urlsafe(8), "enabled": enabled, "baseline_scan_id": scan.get("scan_id"), "watch_window_hours": 24, "signals": ["new_login", "new_device", "recovery_change", "oauth_change", "forwarding_change", "mfa_change"], "monitoring_available": False, "status": "configured" if enabled else "disabled"}
 
 
 def locked_out_recovery(provider: str = "generic") -> dict[str, Any]:
@@ -138,7 +138,7 @@ def offline_rescue_card(provider: str = "generic") -> dict[str, Any]:
 
 def provider_capabilities(provider: str = "generic") -> dict[str, Any]:
     normalized = provider if provider in {"google", "microsoft"} else "generic"
-    automated = {"sessions": normalized == "microsoft", "oauth": False, "forwarding": normalized in {"google", "microsoft"}, "mfa": False, "password": False}
+    automated = {"sessions": False, "oauth": False, "forwarding": False, "mfa": False, "password": False}
     return {"provider": normalized, "scope_policy": "read-only scan first; write scope only after explicit confirmation", "capabilities": {key: {"supported": value, "fallback": "official provider security page" if not value else "authorized provider API"} for key, value in automated.items()}, "passwords_collected": False}
 
 
@@ -150,7 +150,7 @@ def rescue_simulation(scan: dict[str, Any]) -> dict[str, Any]:
     for step in plan["steps"]:
         reduction = reductions.get(step["id"], 0)
         score = max(0, score - reduction)
-        steps.append({"id": step["id"], "title": step["title"], "projected_score": score, "status": "simulated_verified"})
+        steps.append({"id": step["id"], "title": step["title"], "projected_score": score, "status": "projected"})
     return {"mode": "synthetic_only", "risk_before": scan.get("score", 0), "risk_after": score, "steps": steps, "side_effects": False, "message": "Simulation changed no provider state."}
 
 

@@ -1,0 +1,10 @@
+id: ato-containment
+name: Account takeover containment preview
+trigger:
+  risk_level: critical
+  category: ato
+actions:
+  - revoke_session
+  - notify_soc
+  - escalate
+approval_required: true

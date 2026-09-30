@@ -1,6 +1,7 @@
 import ast
 import hashlib
 import html
+import ipaddress
 import json
 import os
 import re
@@ -60,6 +61,16 @@ from database import connect_database
 from ephemeral_store import EphemeralStore
 
 from detection_engine import FALLBACK_TEXT_MODEL, TEXT_MODEL, adversarial_self_test, evaluate_threat_payload
+from behavioral_baseline import baseline_key, login_sample, parse_login_event, score_login_deviation, successful_login
+from geoip_enrichment import lookup_country as lookup_geoip_country
+from malware_scanner import scan_artifact
+from account_rescue_engine import blast_radius, evidence_snapshot, execute_step, guardian_watch, locked_out_recovery, lockdown_plan, offline_rescue_card, provider_capabilities, rescue_plan, rescue_simulation, scan_account
+from prevention_engine import campaign_aware_prevention, containment_action_plan, deception_trigger_check, identity_trust_evaluation, insider_threat_risk, policy_aware_prevention, risk_aware_prevention_decision
+from models import IdentityTrustRequest
+from models import InsiderRiskRequest
+from models import DeceptionInteractionRequest
+from models import PolicyDefinition
+from models import ContainmentRequestCreate
 from battle_simulator import run_battle
 from campaign_engine import correlate_incident
 from digital_twin import build_twin
@@ -99,10 +110,37 @@ from production_integrations import IntegrationNotConfigured, create_ticket as c
 from models import AccessRequestCreate, AdvancedTelemetryRequest, AgentConsensusRequest, AlertRequest, AnalystLoadRequest, BattleRequest, CognitiveEchoRequest, DarkMeshRequest, DeceptionRequest, ForecastRequest, IncidentComment, IncidentUpdate, InfrastructureEchoRequest, LoginRequest, NeuromorphicRequest, NotificationUpdate, OtpVerificationRequest, PasskeyCredentialRequest, PermissionRequest, PolymorphismRequest, PsychologyRequest, ProviderEndpointIsolationRequest, ProviderIdentityDisableRequest, ProviderTicketRequest, QStateRequest, QuantumDecoyRequest, ResponseExecutionRequest, SatelliteRequest, ScannerRequest, SimulationRequest, SpeculativeTelemetryRequest, TemporalHealingRequest, ThreatAnalysisRequest, ThreatIntelLookup, TopologyMorphRequest, ThreatPhysicsRequest, UserCreate, VaccineRequest
 
 DB_PATH = Path(os.getenv("CYBERGUARD_DB_PATH", str(Path(__file__).with_name("cyberguard.db"))))
+CYBERGUARD_ENV = os.getenv("CYBERGUARD_ENV", "development").lower()
 JWT_SECRET = os.getenv("CYBERGUARD_JWT_SECRET", "").strip()
-if not JWT_SECRET:
-    if os.getenv("CYBERGUARD_ENV", "development").lower() == "production":
+ALLOW_ANONYMOUS_EVAL = os.getenv("CYBERGUARD_ALLOW_ANONYMOUS_EVAL", "false").lower() in {"true", "1", "yes"}
+SESSION_TTL_MINUTES = max(1, int(os.getenv("CYBERGUARD_SESSION_TTL_MINUTES", "60")))
+LOGIN_FAILURE_LIMIT = max(3, int(os.getenv("CYBERGUARD_LOGIN_FAILURE_LIMIT", "10")))
+LOGIN_FAILURE_WINDOW_SECONDS = max(60, int(os.getenv("CYBERGUARD_LOGIN_FAILURE_WINDOW_SECONDS", "300")))
+
+
+def validate_auth_configuration(environment: str, jwt_secret: str, allow_anonymous_eval: bool, admin_username: str, admin_password: str):
+    if environment != "production":
+        return
+    if not jwt_secret:
         raise RuntimeError("CYBERGUARD_JWT_SECRET must be set to a unique value in production")
+    if len(jwt_secret) < 32:
+        raise RuntimeError("CYBERGUARD_JWT_SECRET must contain at least 32 characters in production")
+    if not admin_username or len(admin_password) < 16:
+        raise RuntimeError("Production requires CYBERGUARD_HEAD_ADMIN_USERNAME and a CYBERGUARD_HEAD_ADMIN_PASSWORD of at least 16 characters")
+    if allow_anonymous_eval:
+        raise RuntimeError("CYBERGUARD_ALLOW_ANONYMOUS_EVAL cannot be enabled in production")
+
+
+configured_head_admin_username = os.getenv("CYBERGUARD_HEAD_ADMIN_USERNAME", "").strip()
+configured_head_admin_password = os.getenv("CYBERGUARD_HEAD_ADMIN_PASSWORD", "")
+validate_auth_configuration(
+    CYBERGUARD_ENV,
+    JWT_SECRET,
+    ALLOW_ANONYMOUS_EVAL,
+    configured_head_admin_username,
+    configured_head_admin_password,
+)
+if not JWT_SECRET:
     JWT_SECRET = secrets.token_urlsafe(48)
 SECURITY_OWNER_EMAIL = os.getenv("CYBERGUARD_SECURITY_OWNER_EMAIL", "teamsecure.project@gmail.com")
 PUBLIC_APP_URL = os.getenv(
@@ -112,8 +150,8 @@ PUBLIC_APP_URL = os.getenv(
     else "http://127.0.0.1:5173",
 )
 ACCESS_REQUEST_TTL_HOURS = max(1, int(os.getenv("CYBERGUARD_ACCESS_REQUEST_TTL_HOURS", "24")))
-HEAD_ADMIN_USERNAME = os.getenv("CYBERGUARD_HEAD_ADMIN_USERNAME", "teamsecure.project@gmail.com")
-HEAD_ADMIN_PASSWORD = os.getenv("CYBERGUARD_HEAD_ADMIN_PASSWORD", "Secure@9040")
+HEAD_ADMIN_USERNAME = configured_head_admin_username or "teamsecure.project@gmail.com"
+HEAD_ADMIN_PASSWORD = configured_head_admin_password or "Secure@9040"
 MAX_UPLOAD_BYTES = max(1_000_000, int(os.getenv("CYBERGUARD_MAX_UPLOAD_BYTES", "10485760")))
 STARTED_AT = datetime.now(timezone.utc)
 EPHEMERAL_STATE = EphemeralStore.from_environment()
@@ -231,6 +269,8 @@ def read_siem_events(user: dict[str, str] | None = None):
 
 
 def idp_authenticate_user(payload: dict | None, user: dict[str, str] | None = None):
+    if CYBERGUARD_ENV == "production":
+        raise HTTPException(status_code=503, detail="The demo identity provider is disabled; configure a production identity-provider integration.")
     if user is None:
         user = {"username": "system", "role": "lead"}
     data = payload or {}
@@ -289,13 +329,24 @@ def idp_authenticate_user(payload: dict | None, user: dict[str, str] | None = No
 def hash_password(password: str) -> str:
     if bcrypt:
         return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+    salt = secrets.token_bytes(16)
+    digest = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=64)
+    return f"scrypt${salt.hex()}${digest.hex()}"
 
 
 def verify_password(password: str, stored_hash: str) -> bool:
     if stored_hash.startswith("$2") and bcrypt:
         return bcrypt.checkpw(password.encode("utf-8"), stored_hash.encode("utf-8"))
-    return secrets.compare_digest(stored_hash, hashlib.sha256(password.encode("utf-8")).hexdigest())
+    if stored_hash.startswith("scrypt$"):
+        try:
+            _, salt_hex, digest_hex = stored_hash.split("$", 2)
+            expected = bytes.fromhex(digest_hex)
+            actual = hashlib.scrypt(password.encode("utf-8"), salt=bytes.fromhex(salt_hex), n=2**14, r=8, p=1, dklen=len(expected))
+        except (ValueError, TypeError):
+            return False
+        return secrets.compare_digest(actual, expected)
+    legacy_digest = hashlib.sha256(password.encode("utf-8")).hexdigest()
+    return len(stored_hash) == 64 and secrets.compare_digest(stored_hash, legacy_digest)
 
 
 def initialize_database():
@@ -330,6 +381,15 @@ def initialize_database():
                 metadata TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS login_behavior_samples (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                baseline_key TEXT NOT NULL,
+                country TEXT,
+                device TEXT,
+                hour INTEGER,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_login_behavior_samples_key_created ON login_behavior_samples (baseline_key, created_at DESC);
             CREATE TABLE IF NOT EXISTS actions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 incident_id TEXT NOT NULL,
@@ -475,6 +535,75 @@ def initialize_database():
                 severity TEXT NOT NULL,
                 details TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS feature_records (
+                record_id TEXT PRIMARY KEY,
+                record_type TEXT NOT NULL,
+                username TEXT NOT NULL,
+                data_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS identity_trust_events (
+                event_id TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                event_json TEXT NOT NULL,
+                assessment_json TEXT NOT NULL,
+                incident_id INTEGER,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_identity_trust_owner_created ON identity_trust_events (username, created_at DESC);
+            CREATE TABLE IF NOT EXISTS insider_risk_events (
+                event_id TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                activity_json TEXT NOT NULL,
+                assessment_json TEXT NOT NULL,
+                incident_id INTEGER,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_insider_risk_owner_created ON insider_risk_events (username, created_at DESC);
+            CREATE TABLE IF NOT EXISTS deception_events (
+                event_id TEXT PRIMARY KEY,
+                reported_by TEXT NOT NULL,
+                host TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                resource TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                source_ip TEXT,
+                incident_id INTEGER,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_deception_events_created ON deception_events (created_at DESC);
+            CREATE TABLE IF NOT EXISTS prevention_policies (
+                policy_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                category TEXT NOT NULL,
+                threshold INTEGER NOT NULL,
+                severity TEXT NOT NULL,
+                action TEXT NOT NULL,
+                approval_required INTEGER NOT NULL DEFAULT 1,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                version INTEGER NOT NULL DEFAULT 1,
+                created_by TEXT NOT NULL,
+                updated_by TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_prevention_policies_enabled ON prevention_policies (enabled, category, threshold);
+            CREATE TABLE IF NOT EXISTS containment_requests (
+                request_id TEXT PRIMARY KEY,
+                incident_id INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                target TEXT NOT NULL,
+                status TEXT NOT NULL,
+                requested_by TEXT NOT NULL,
+                reviewed_by TEXT,
+                simulation INTEGER NOT NULL DEFAULT 1,
+                execution_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_containment_requests_status_created ON containment_requests (status, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_feature_records_owner_type ON feature_records (username, record_type);
             CREATE INDEX IF NOT EXISTS idx_siem_events_timestamp ON siem_events (id DESC);
             """
         )
@@ -494,14 +623,25 @@ def initialize_database():
             db.execute("ALTER TABLE incidents ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
         if "metadata" not in columns:
             db.execute("ALTER TABLE incidents ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
-        users = [
-            ("analyst", hash_password("analyst123"), "analyst", "", None, "active"),
-            ("lead", hash_password("lead123"), "lead", "", None, "active"),
-            ("admin", hash_password("Secure@9040"), "admin", SECURITY_OWNER_EMAIL, HEAD_ADMIN_USERNAME, "active"),
-            ("teamsecure", hash_password("Secure@9040"), "head_admin", SECURITY_OWNER_EMAIL, None, "active"),
-            (HEAD_ADMIN_USERNAME, hash_password(HEAD_ADMIN_PASSWORD), "head_admin", SECURITY_OWNER_EMAIL, None, "active"),
-        ]
+        users = []
+        if CYBERGUARD_ENV != "production":
+            users.extend([
+                ("analyst", hash_password("analyst123"), "analyst", "", None, "active"),
+                ("lead", hash_password("lead123"), "lead", "", None, "active"),
+                ("admin", hash_password(HEAD_ADMIN_PASSWORD), "admin", SECURITY_OWNER_EMAIL, HEAD_ADMIN_USERNAME, "active"),
+                ("teamsecure", hash_password(HEAD_ADMIN_PASSWORD), "head_admin", SECURITY_OWNER_EMAIL, None, "active"),
+            ])
+        users.append((HEAD_ADMIN_USERNAME, hash_password(HEAD_ADMIN_PASSWORD), "head_admin", SECURITY_OWNER_EMAIL, None, "active"))
         db.executemany("INSERT OR IGNORE INTO users (username, password_hash, role, email, parent_username, status) VALUES (?, ?, ?, ?, ?, ?)", users)
+        if CYBERGUARD_ENV == "production":
+            db.execute(
+                "UPDATE users SET status = 'disabled' WHERE lower(username) IN ('analyst', 'lead', 'admin') AND lower(username) != lower(?)",
+                (HEAD_ADMIN_USERNAME,),
+            )
+            db.execute(
+                "UPDATE users SET status = 'disabled' WHERE role = 'head_admin' AND lower(username) != lower(?)",
+                (HEAD_ADMIN_USERNAME,),
+            )
         db.execute(
             "UPDATE users SET password_hash = ?, role = 'head_admin', email = ?, status = 'active' WHERE lower(username) = lower(?)",
             (hash_password(HEAD_ADMIN_PASSWORD), SECURITY_OWNER_EMAIL, HEAD_ADMIN_USERNAME),
@@ -574,13 +714,24 @@ async def security_guard(request: Request, call_next):
 
 def current_user(authorization: Optional[str] = Header(default=None)) -> dict[str, str]:
     if not authorization or not authorization.startswith("Bearer "):
-        if os.getenv("CYBERGUARD_ALLOW_ANONYMOUS_EVAL", "false").lower() in {"true", "1", "yes"}:
+        if ALLOW_ANONYMOUS_EVAL:
             return {"username": "evaluator", "role": "lead"}
         raise HTTPException(status_code=401, detail="Authentication required")
     try:
-        return jwt.decode(authorization.removeprefix("Bearer "), JWT_SECRET, algorithms=["HS256"])
+        claims = jwt.decode(authorization.removeprefix("Bearer "), JWT_SECRET, algorithms=["HS256"])
+        username = claims.get("username")
+        if not isinstance(username, str) or not username.strip():
+            raise HTTPException(status_code=401, detail="Invalid or expired session")
+        with get_db() as db:
+            user = db.execute(
+                "SELECT username, role, status FROM users WHERE lower(username) = lower(?)",
+                (username,),
+            ).fetchone()
+        if not user or user["status"] != "active" or user["role"] != claims.get("role"):
+            raise HTTPException(status_code=401, detail="Invalid or expired session")
+        return {"username": user["username"], "role": user["role"]}
     except jwt.PyJWTError as error:
-        if os.getenv("CYBERGUARD_ALLOW_ANONYMOUS_EVAL", "false").lower() in {"true", "1", "yes"}:
+        if ALLOW_ANONYMOUS_EVAL:
             return {"username": "evaluator", "role": "lead"}
         raise HTTPException(status_code=401, detail="Invalid or expired session") from error
 
@@ -640,7 +791,17 @@ def issue_admin_otp(username: str, recipient: str) -> dict[str, str]:
 
 
 def issue_session(user: sqlite3.Row) -> dict[str, Any]:
-    token = jwt.encode({"username": user["username"], "role": user["role"], "iat": int(datetime.now(timezone.utc).timestamp())}, JWT_SECRET, algorithm="HS256")
+    issued_at = datetime.now(timezone.utc)
+    token = jwt.encode(
+        {
+            "username": user["username"],
+            "role": user["role"],
+            "iat": int(issued_at.timestamp()),
+            "exp": int((issued_at + timedelta(minutes=SESSION_TTL_MINUTES)).timestamp()),
+        },
+        JWT_SECRET,
+        algorithm="HS256",
+    )
     return {"access_token": token, "token_type": "bearer", "user": {"username": user["username"], "role": user["role"]}}
 
 
@@ -734,14 +895,644 @@ def store_incident(category: str, payload: str, assessment: dict, filename: str 
         return cursor.lastrowid
 
 
+def apply_user_login_baseline(assessment: dict, payload: str, user: dict[str, str], learn: bool = True) -> dict:
+    event = parse_login_event(payload)
+    if not event:
+        return assessment
+    sample = login_sample(event)
+    source_ip = event.get("source_ip") or event.get("src_ip") or event.get("ip")
+    geoip_result = lookup_geoip_country(str(source_ip)) if source_ip else {"status": "no_ip", "country": None}
+    if geoip_result.get("country"):
+        sample["country"] = geoip_result["country"]
+    key = baseline_key(event, user["username"])
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT country, device, hour FROM login_behavior_samples WHERE baseline_key = ? ORDER BY id DESC LIMIT 50",
+            (key,),
+        ).fetchall()
+        history = [dict(row) for row in reversed(rows)]
+        deviation, reasons, indicators = score_login_deviation(sample, history)
+        if deviation:
+            assessment["risk_score"] = min(99, int(assessment["risk_score"]) + deviation)
+            assessment["indicators"].extend(indicators)
+            assessment["xai_explanation"] += " " + " ".join(reasons)
+            assessment["explanation_summary"] += " " + " ".join(reasons)
+            score = assessment["risk_score"]
+            assessment["risk_level"] = "Critical" if score >= 80 else "High" if score >= 60 else "Medium" if score >= 40 else "Low" if score >= 20 else "Safe"
+            if assessment["risk_level"] in {"High", "Critical"} and not any(action.get("id") == "revoke_session" for action in assessment["recommended_actions"]):
+                assessment["recommended_actions"].insert(0, {"id": "revoke_session", "label": "Review and revoke suspicious session"})
+        if learn and successful_login(event) and assessment["risk_score"] < 20 and any(sample.values()):
+            db.execute(
+                "INSERT INTO login_behavior_samples (baseline_key, country, device, hour, created_at) VALUES (?, ?, ?, ?, ?)",
+                (key, sample["country"], sample["device"], sample["hour"], datetime.now(timezone.utc).isoformat()),
+            )
+    if len(history) < 3:
+        assessment["login_baseline"] = {"status": "calibrating", "samples": len(history)}
+    else:
+        assessment["login_baseline"] = {"status": "active", "samples": len(history), "signals": len(indicators)}
+    assessment["geoip"] = geoip_result
+    return assessment
+
+
 def write_audit(user: dict[str, str], action: str, resource: str, details: str):
     with get_db() as db:
         db.execute("INSERT INTO audit_logs (username, action, resource, details, created_at) VALUES (?, ?, ?, ?, ?)", (user["username"], action, resource, details, datetime.now(timezone.utc).isoformat()))
 
 
+def save_feature_record(record_id: str, record_type: str, user: dict[str, str], data: dict[str, Any]):
+    with get_db() as db:
+        existing = db.execute("SELECT username FROM feature_records WHERE record_id = ?", (record_id,)).fetchone()
+        if existing and existing["username"] != user["username"]:
+            raise HTTPException(status_code=404, detail="Record not found")
+        db.execute(
+            "INSERT INTO feature_records (record_id, record_type, username, data_json, created_at) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(record_id) DO UPDATE SET data_json = excluded.data_json",
+            (record_id, record_type, user["username"], json.dumps(data), datetime.now(timezone.utc).isoformat()),
+        )
+
+
+def load_feature_record(record_id: str, record_type: str, user: dict[str, str]) -> dict[str, Any]:
+    with get_db() as db:
+        row = db.execute(
+            "SELECT data_json FROM feature_records WHERE record_id = ? AND record_type = ? AND username = ?",
+            (record_id, record_type, user["username"]),
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Record not found")
+    return json.loads(row["data_json"])
+
+
 def create_notification(username: str, title: str, message: str, severity: str):
     with get_db() as db:
         db.execute("INSERT INTO notifications (username, title, message, severity, created_at) VALUES (?, ?, ?, ?, ?)", (username, title, message, severity, datetime.now(timezone.utc).isoformat()))
+
+
+@app.post("/api/v1/rescue/scan")
+def rescue_scan(payload: dict[str, Any], user: dict[str, str] = Depends(current_user)):
+    signal_fields = {
+        "unknown_session",
+        "suspicious_login",
+        "new_oauth_app",
+        "forwarding_rule",
+        "mfa_enabled",
+        "recovery_changed",
+        "breach_history",
+    }
+    if any(key in payload and not isinstance(payload[key], bool) for key in signal_fields):
+        raise HTTPException(status_code=422, detail="Account risk signals must be boolean values")
+    result = scan_account(payload)
+    result["assessment_source"] = "operator_reported"
+    result["provider_connected"] = False
+    save_feature_record(result["scan_id"], "rescue_scan", user, result)
+    write_audit(user, "rescue_scan", result["scan_id"], json.dumps({"risk_level": result["risk_level"], "finding_count": len(result["findings"])}))
+    return result
+
+
+@app.post("/api/v1/rescue/plan")
+def rescue_plan_route(payload: dict[str, Any], user: dict[str, str] = Depends(current_user)):
+    submitted_scan = payload.get("scan")
+    scan_id = submitted_scan.get("scan_id") if isinstance(submitted_scan, dict) else None
+    if not scan_id:
+        raise HTTPException(status_code=422, detail="A saved scan is required")
+    scan = load_feature_record(str(scan_id), "rescue_scan", user)
+    result = rescue_plan(scan)
+    save_feature_record(result["plan_id"], "rescue_plan", user, result)
+    return result
+
+
+@app.post("/api/v1/rescue/step")
+def rescue_step(payload: dict[str, Any], user: dict[str, str] = Depends(current_user)):
+    submitted_plan = payload.get("plan")
+    plan_id = submitted_plan.get("plan_id") if isinstance(submitted_plan, dict) else None
+    if not plan_id:
+        raise HTTPException(status_code=422, detail="A saved rescue plan is required")
+    plan = load_feature_record(str(plan_id), "rescue_plan", user)
+    try:
+        result = execute_step(plan, str(payload.get("step_id") or ""), bool(payload.get("confirmed")))
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    action_id = "rescue_action_" + secrets.token_urlsafe(8)
+    action = {"action_id": action_id, **result}
+    save_feature_record(action_id, "rescue_action", user, action)
+    write_audit(user, "rescue_step", action_id, json.dumps({"plan_id": plan_id, "step_id": payload.get("step_id"), "status": result["status"]}))
+    return action
+
+
+@app.post("/api/v1/rescue/evidence")
+def rescue_evidence(payload: dict[str, Any], user: dict[str, str] = Depends(current_user)):
+    submitted_scan = payload.get("scan")
+    scan_id = submitted_scan.get("scan_id") if isinstance(submitted_scan, dict) else None
+    if not scan_id:
+        raise HTTPException(status_code=422, detail="A saved scan is required")
+    scan = load_feature_record(str(scan_id), "rescue_scan", user)
+    label = str(payload.get("account_label") or "connected-account")[:120]
+    result = evidence_snapshot(scan, label)
+    save_feature_record(result["evidence_id"], "rescue_evidence", user, result)
+    write_audit(user, "rescue_evidence_created", result["evidence_id"], json.dumps({"scan_id": scan_id}))
+    return result
+
+
+@app.post("/api/v1/rescue/lockdown")
+def rescue_lockdown(payload: dict[str, Any], user: dict[str, str] = Depends(head_admin_user)):
+    submitted_scan = payload.get("scan")
+    scan_id = submitted_scan.get("scan_id") if isinstance(submitted_scan, dict) else None
+    if not scan_id:
+        raise HTTPException(status_code=422, detail="A saved scan is required")
+    scan = load_feature_record(str(scan_id), "rescue_scan", user)
+    result = lockdown_plan(scan)
+    result["status"] = "awaiting_confirmation" if payload.get("confirmed") else "confirmation_required"
+    save_feature_record(result["lockdown_id"], "rescue_lockdown", user, result)
+    write_audit(user, "rescue_lockdown_requested", result["lockdown_id"], json.dumps({"confirmed": bool(payload.get("confirmed")), "provider_actions_executed": False}))
+    return result
+
+
+@app.post("/api/v1/rescue/guardian")
+def rescue_guardian(payload: dict[str, Any], user: dict[str, str] = Depends(current_user)):
+    submitted_scan = payload.get("scan")
+    scan_id = submitted_scan.get("scan_id") if isinstance(submitted_scan, dict) else None
+    if not scan_id:
+        raise HTTPException(status_code=422, detail="A saved scan is required")
+    scan = load_feature_record(str(scan_id), "rescue_scan", user)
+    result = guardian_watch(scan, bool(payload.get("enabled", True)))
+    save_feature_record(result["watch_id"], "rescue_guardian", user, result)
+    write_audit(user, "rescue_guardian_updated", result["watch_id"], json.dumps({"enabled": result["enabled"]}))
+    return result
+
+
+@app.post("/api/v1/rescue/simulate")
+def rescue_simulate(payload: dict[str, Any], user: dict[str, str] = Depends(current_user)):
+    submitted_scan = payload.get("scan")
+    scan_id = submitted_scan.get("scan_id") if isinstance(submitted_scan, dict) else None
+    if not scan_id:
+        raise HTTPException(status_code=422, detail="A saved scan is required")
+    scan = load_feature_record(str(scan_id), "rescue_scan", user)
+    result = rescue_simulation(scan)
+    simulation_id = "rescue_sim_" + secrets.token_urlsafe(8)
+    result["simulation_id"] = simulation_id
+    save_feature_record(simulation_id, "rescue_simulation", user, result)
+    return result
+
+
+@app.get("/api/v1/rescue/blast-radius")
+def rescue_blast_radius(provider: str = Query(default="generic"), user: dict[str, str] = Depends(current_user)):
+    return blast_radius(provider)
+
+
+@app.get("/api/v1/rescue/locked-out")
+def rescue_locked_out(provider: str = Query(default="generic"), user: dict[str, str] = Depends(current_user)):
+    return locked_out_recovery(provider)
+
+
+@app.get("/api/v1/rescue/capabilities")
+def rescue_capabilities(provider: str = Query(default="generic"), user: dict[str, str] = Depends(current_user)):
+    return provider_capabilities(provider)
+
+
+@app.get("/api/v1/rescue/offline-card")
+def rescue_offline_card(provider: str = Query(default="generic"), user: dict[str, str] = Depends(current_user)):
+    return offline_rescue_card(provider)
+
+
+@app.post("/api/v1/prevention/decision")
+def prevention_decision(payload: dict[str, Any], user: dict[str, str] = Depends(current_user)):
+    result = risk_aware_prevention_decision(payload, {"role": user.get("role", "analyst")})
+    result["decision_id"] = "prevention_" + secrets.token_urlsafe(8)
+    result["mode"] = "recommendation_only"
+    save_feature_record(result["decision_id"], "prevention_decision", user, result)
+    return result
+
+
+@app.post("/api/v1/prevention/campaign-watch")
+def prevention_campaign_watch(user: dict[str, str] = Depends(current_user)):
+    with get_db() as db:
+        rows = db.execute("SELECT id, payload FROM incidents ORDER BY id DESC LIMIT 100").fetchall()
+    incidents_for_watch = [{"incident_id": row["id"], "payload": row["payload"]} for row in rows]
+    result = campaign_aware_prevention(incidents_for_watch)
+    result["source_incident_count"] = len(incidents_for_watch)
+    return result
+
+
+@app.post("/api/v1/prevention/containment")
+def prevention_containment(payload: dict[str, Any], user: dict[str, str] = Depends(current_user)):
+    try:
+        incident_id = int(payload.get("incident_id"))
+    except (TypeError, ValueError) as error:
+        raise HTTPException(status_code=422, detail="A stored incident ID is required") from error
+    with get_db() as db:
+        incident = db.execute("SELECT category, risk_score FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    result = containment_action_plan({
+        "risk_score": incident["risk_score"],
+        "source_ip": payload.get("source_ip") or "unknown",
+        "category": incident["category"],
+    })
+    result["request_id"] = "containment_" + secrets.token_urlsafe(8)
+    result["status"] = "recommendation_only"
+    result["incident_id"] = f"INC-{incident_id:04d}"
+    result["actions_executed"] = False
+    save_feature_record(result["request_id"], "containment_recommendation", user, result)
+    return result
+
+
+@app.post("/api/v1/containment/requests")
+def create_containment_request(payload: ContainmentRequestCreate, user: dict[str, str] = Depends(current_user)):
+    with get_db() as db:
+        incident = db.execute("SELECT category, risk_score FROM incidents WHERE id = ?", (payload.incident_id,)).fetchone()
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    plan = containment_action_plan({"risk_score": incident["risk_score"], "category": incident["category"]})
+    if payload.action not in plan["actions"]:
+        raise HTTPException(status_code=409, detail="The selected action is not recommended for this incident")
+    target = payload.target.strip()
+    if not target:
+        raise HTTPException(status_code=422, detail="Containment target is required")
+    if payload.action == "block_ip":
+        try:
+            target = ipaddress.ip_address(target).compressed
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail="IP blocking requires a valid IPv4 or IPv6 target") from error
+
+    request_id = "containment_req_" + secrets.token_urlsafe(8)
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as db:
+        db.execute(
+            "INSERT INTO containment_requests (request_id, incident_id, action, target, status, requested_by, simulation, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, 1, ?, ?)",
+            (request_id, payload.incident_id, payload.action, target, user["username"], now, now),
+        )
+    write_audit(user, "containment_requested", request_id, json.dumps({"incident_id": payload.incident_id, "action": payload.action, "target": target, "simulation": True}))
+    return {"request_id": request_id, "incident_id": f"INC-{payload.incident_id:04d}", "action": payload.action, "target": target, "status": "pending", "simulation": True, "created_at": now}
+
+
+@app.get("/api/v1/containment/queue")
+def containment_queue(status: str | None = Query(default=None), user: dict[str, str] = Depends(current_user)):
+    allowed = {"pending", "approved", "rejected", "completed", "failed"}
+    if status and status not in allowed:
+        raise HTTPException(status_code=422, detail="Unsupported containment status filter")
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT * FROM containment_requests WHERE (? IS NULL OR status = ?) ORDER BY created_at DESC LIMIT 100",
+            (status, status),
+        ).fetchall()
+    return {"requests": [{**dict(row), "simulation": bool(row["simulation"]), "execution": json.loads(row["execution_json"] or "{}")} for row in rows]}
+
+
+def _review_containment_request(request_id: str, decision: str, user: dict[str, str]) -> dict[str, Any]:
+    if user.get("role") not in {"lead", "head_admin"}:
+        raise HTTPException(status_code=403, detail="Lead or head administrator approval required")
+    if decision not in {"approved", "rejected"}:
+        raise ValueError("Unsupported containment decision")
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as db:
+        row = db.execute("SELECT status FROM containment_requests WHERE request_id = ?", (request_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Containment request not found")
+        if row["status"] != "pending":
+            raise HTTPException(status_code=409, detail="Only pending containment requests can be reviewed")
+        db.execute(
+            "UPDATE containment_requests SET status = ?, reviewed_by = ?, updated_at = ? WHERE request_id = ?",
+            (decision, user["username"], now, request_id),
+        )
+    write_audit(user, f"containment_{decision}", request_id, json.dumps({"reviewer": user["username"]}))
+    return {"request_id": request_id, "status": decision, "reviewed_by": user["username"], "updated_at": now}
+
+
+@app.post("/api/v1/containment/requests/{request_id}/approve")
+def approve_containment_request(request_id: str, user: dict[str, str] = Depends(current_user)):
+    return _review_containment_request(request_id, "approved", user)
+
+
+@app.post("/api/v1/containment/requests/{request_id}/reject")
+def reject_containment_request(request_id: str, user: dict[str, str] = Depends(current_user)):
+    return _review_containment_request(request_id, "rejected", user)
+
+
+@app.post("/api/v1/containment/requests/{request_id}/execute")
+def execute_containment_simulation(request_id: str, user: dict[str, str] = Depends(current_user)):
+    if user.get("role") not in {"lead", "head_admin"}:
+        raise HTTPException(status_code=403, detail="Lead or head administrator approval required")
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as db:
+        row = db.execute("SELECT * FROM containment_requests WHERE request_id = ?", (request_id,)).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Containment request not found")
+        if row["status"] != "approved":
+            raise HTTPException(status_code=409, detail="Containment request must be approved before simulation")
+        execution = {
+            "mode": "simulation",
+            "side_effects": False,
+            "result": "simulated",
+            "message": "No external host, identity, or provider state was changed.",
+            "executed_by": user["username"],
+            "executed_at": now,
+        }
+        db.execute(
+            "UPDATE containment_requests SET status = 'completed', execution_json = ?, updated_at = ? WHERE request_id = ?",
+            (json.dumps(execution), now, request_id),
+        )
+        db.execute(
+            "INSERT INTO actions (incident_id, action_id, target, username, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (f"INC-{row['incident_id']:04d}", row["action"], row["target"], user["username"], "simulated", now),
+        )
+    write_audit(user, "containment_simulated", request_id, json.dumps(execution))
+    return {"request_id": request_id, "status": "completed", "execution": execution}
+
+
+@app.get("/api/v1/prevention/identity-trust")
+def prevention_identity_trust(user: dict[str, str] = Depends(current_user)):
+    with get_db() as db:
+        row = db.execute(
+            "SELECT event_id, assessment_json, incident_id, created_at FROM identity_trust_events WHERE username = ? ORDER BY created_at DESC LIMIT 1",
+            (user["username"],),
+        ).fetchone()
+    if not row:
+        return {
+            "trust_score": None,
+            "status": "insufficient_data",
+            "required_action": "submit_operator_reported_telemetry",
+            "message": "No identity telemetry has been reported for this user yet.",
+        }
+    return {
+        **json.loads(row["assessment_json"]),
+        "event_id": row["event_id"],
+        "incident_id": row["incident_id"],
+        "created_at": row["created_at"],
+        "message": "Operator-reported assessment; no identity-provider event feed is connected.",
+    }
+
+
+@app.post("/api/v1/prevention/identity-trust")
+def record_identity_trust(payload: IdentityTrustRequest, user: dict[str, str] = Depends(current_user)):
+    device = payload.device.strip().lower()
+    country = payload.country.strip().upper()
+    if device not in {"known-device", "new-device", "unknown-device"}:
+        raise HTTPException(status_code=422, detail="Device must be known-device, new-device, or unknown-device")
+    if not re.fullmatch(r"[A-Z]{2}", country):
+        raise HTTPException(status_code=422, detail="Country must be a two-letter code")
+    try:
+        source_ip = ipaddress.ip_address(payload.source_ip.strip()).compressed
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="A valid source IP address is required") from error
+
+    observed_at = datetime.now(timezone.utc)
+    cutoff = (observed_at - timedelta(days=30)).isoformat()
+    with get_db() as db:
+        observation_count = db.execute(
+            "SELECT COUNT(*) AS count FROM identity_trust_events WHERE username = ? AND created_at >= ?",
+            (user["username"], cutoff),
+        ).fetchone()["count"]
+
+    result = identity_trust_evaluation({
+        "device": device,
+        "country": country,
+        "source_ip": source_ip,
+        "login_count": observation_count,
+        "mfa_enabled": payload.mfa_enabled,
+        "behavioral_anomaly": payload.behavioral_anomaly,
+    })
+    result["assessment_source"] = "operator_reported"
+    event_id = "identity_" + secrets.token_urlsafe(8)
+    incident_id = None
+    risk_score = 100 - result["trust_score"]
+    if result["status"] == "blocked":
+        risk_level = "Critical" if risk_score >= 90 else "High" if risk_score >= 75 else "Medium"
+        incident_payload = json.dumps({"event_id": event_id, "signals": result["signals"]})
+        incident_id = store_incident(
+            "ato",
+            incident_payload,
+            {
+                "risk_score": risk_score,
+                "risk_level": risk_level,
+                "xai_explanation": "Operator-reported device, location, MFA, or behavioral signals lowered identity trust.",
+                "indicators": [{"name": name, "score": "observed"} for name, active in result["signals"].items() if active],
+                "recommended_actions": [{"action": result["required_action"]}],
+                "iocs": [],
+            },
+        )
+    event_data = {
+        "device": device,
+        "country": country,
+        "source_ip": source_ip,
+        "mfa_enabled": payload.mfa_enabled,
+        "behavioral_anomaly": payload.behavioral_anomaly,
+        "observation_count_30d_before_event": observation_count,
+    }
+    with get_db() as db:
+        db.execute(
+            "INSERT INTO identity_trust_events (event_id, username, event_json, assessment_json, incident_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (event_id, user["username"], json.dumps(event_data), json.dumps(result), incident_id, observed_at.isoformat()),
+        )
+    write_audit(user, "identity_trust_assessed", event_id, json.dumps({"status": result["status"], "incident_id": incident_id}))
+    return {**result, "event_id": event_id, "incident_id": incident_id, "created_at": observed_at.isoformat()}
+
+
+@app.get("/api/v1/prevention/insider-risk")
+def prevention_insider_risk(user: dict[str, str] = Depends(current_user)):
+    with get_db() as db:
+        row = db.execute(
+            "SELECT event_id, assessment_json, incident_id, created_at FROM insider_risk_events WHERE username = ? ORDER BY created_at DESC LIMIT 1",
+            (user["username"],),
+        ).fetchone()
+    if not row:
+        return {
+            "risk_score": None,
+            "status": "insufficient_data",
+            "preventive_action": "submit_operator_reported_activity",
+            "flags": {},
+            "message": "No user activity has been reported for this user yet.",
+        }
+    return {
+        **json.loads(row["assessment_json"]),
+        "event_id": row["event_id"],
+        "incident_id": row["incident_id"],
+        "created_at": row["created_at"],
+        "message": "Operator-reported activity; no endpoint telemetry feed is connected.",
+    }
+
+
+@app.post("/api/v1/prevention/insider-risk")
+def record_insider_risk(payload: InsiderRiskRequest, user: dict[str, str] = Depends(current_user)):
+    activity = payload.model_dump()
+    result = insider_threat_risk(activity)
+    result["assessment_source"] = "operator_reported"
+    event_id = "insider_" + secrets.token_urlsafe(8)
+    incident_id = None
+    if result["risk_score"] >= 60:
+        risk_level = "Critical" if result["risk_score"] >= 90 else "High" if result["risk_score"] >= 75 else "Medium"
+        incident_id = store_incident(
+            "insider_risk",
+            json.dumps({"event_id": event_id, "flags": result["flags"]}),
+            {
+                "risk_score": result["risk_score"],
+                "risk_level": risk_level,
+                "xai_explanation": "Operator-reported activity exceeded CyberGuard's insider-risk review threshold.",
+                "indicators": [{"name": name, "score": str(value)} for name, value in result["flags"].items() if value],
+                "recommended_actions": [{"action": result["preventive_action"]}],
+                "iocs": [],
+            },
+        )
+    created_at = datetime.now(timezone.utc).isoformat()
+    with get_db() as db:
+        db.execute(
+            "INSERT INTO insider_risk_events (event_id, username, activity_json, assessment_json, incident_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (event_id, user["username"], json.dumps(activity), json.dumps(result), incident_id, created_at),
+        )
+    write_audit(user, "insider_risk_assessed", event_id, json.dumps({"risk_score": result["risk_score"], "incident_id": incident_id}))
+    return {**result, "event_id": event_id, "incident_id": incident_id, "created_at": created_at}
+
+
+@app.get("/api/v1/prevention/deception-status")
+def prevention_deception_status(user: dict[str, str] = Depends(current_user)):
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT event_id, reported_by, host, actor, resource, event_type, incident_id, created_at FROM deception_events ORDER BY created_at DESC LIMIT 50"
+        ).fetchall()
+    events = [dict(row) for row in rows]
+    result = deception_trigger_check([{"host": event["host"], "user": event["actor"]} for event in events[:1]])
+    return {
+        **result,
+        "status": "events_reported" if events else "no_events",
+        "active_decoys": [],
+        "triggered_decoys": events,
+        "compromised_assets": sorted({event["host"] for event in events}),
+        "message": "Events are operator-reported; no live decoy registry or interaction feed is connected." if events else "No operator-reported deception interaction events are persisted.",
+    }
+
+
+@app.post("/api/v1/prevention/deception-status")
+def report_deception_interaction(payload: DeceptionInteractionRequest, user: dict[str, str] = Depends(current_user)):
+    event_type = payload.event_type.strip().lower()
+    if event_type not in {"access", "authentication", "modification", "execution"}:
+        raise HTTPException(status_code=422, detail="Unsupported deception event type")
+    source_ip = None
+    if payload.source_ip:
+        try:
+            source_ip = ipaddress.ip_address(payload.source_ip.strip()).compressed
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail="Source IP must be a valid IP address") from error
+
+    event_id = "deception_" + secrets.token_urlsafe(8)
+    created_at = datetime.now(timezone.utc).isoformat()
+    incident_id = store_incident(
+        "deception",
+        json.dumps({"event_id": event_id, "host": payload.host, "resource": payload.resource, "event_type": event_type}),
+        {
+            "risk_score": 85,
+            "risk_level": "High",
+            "xai_explanation": "An operator reported interaction with a deception resource; validate the event before response.",
+            "indicators": [{"name": "operator_reported_decoy_interaction", "score": event_type}],
+            "recommended_actions": [{"action": "review_reported_interaction"}],
+            "iocs": [{"type": "ip", "indicator": source_ip}] if source_ip else [],
+        },
+    )
+    with get_db() as db:
+        db.execute(
+            "INSERT INTO deception_events (event_id, reported_by, host, actor, resource, event_type, source_ip, incident_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (event_id, user["username"], payload.host.strip(), payload.actor.strip(), payload.resource.strip(), event_type, source_ip, incident_id, created_at),
+        )
+    write_audit(user, "deception_interaction_reported", event_id, json.dumps({"incident_id": incident_id, "event_type": event_type}))
+    return {**prevention_deception_status(user), "reported_event_id": event_id, "incident_id": incident_id}
+
+
+@app.get("/api/v1/prevention/policies")
+def prevention_policies(user: dict[str, str] = Depends(current_user)):
+    result = policy_aware_prevention({"role": user.get("role", "analyst")}, {}, {})
+    with get_db() as db:
+        rows = db.execute("SELECT * FROM prevention_policies ORDER BY updated_at DESC, name").fetchall()
+    policies = [
+        {
+            **dict(row),
+            "approval_required": bool(row["approval_required"]),
+            "enabled": bool(row["enabled"]),
+        }
+        for row in rows
+    ]
+    return {
+        **result,
+        "status": "configured" if policies else "no_policies_configured",
+        "department_profile": user.get("role", "analyst"),
+        "policy_rules": [policy["name"] for policy in policies if policy["enabled"]],
+        "policies": policies,
+    }
+
+
+def _require_policy_admin(user: dict[str, str]):
+    if user.get("role") != "head_admin" or user.get("username") != HEAD_ADMIN_USERNAME:
+        raise HTTPException(status_code=403, detail="Head Administrator approval required to manage prevention policies")
+
+
+@app.post("/api/v1/prevention/policies")
+def create_prevention_policy(payload: PolicyDefinition, user: dict[str, str] = Depends(current_user)):
+    _require_policy_admin(user)
+    policy_id = "policy_" + secrets.token_urlsafe(8)
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as db:
+        db.execute(
+            "INSERT INTO prevention_policies (policy_id, name, description, category, threshold, severity, action, approval_required, enabled, version, created_by, updated_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)",
+            (policy_id, payload.name.strip(), payload.description.strip(), payload.category.strip().lower(), payload.threshold, payload.severity, payload.action, int(payload.approval_required), int(payload.enabled), user["username"], user["username"], now, now),
+        )
+    write_audit(user, "prevention_policy_created", policy_id, json.dumps(payload.model_dump()))
+    return {"policy_id": policy_id, **payload.model_dump(), "version": 1, "created_by": user["username"], "created_at": now, "updated_at": now}
+
+
+@app.put("/api/v1/prevention/policies/{policy_id}")
+def update_prevention_policy(policy_id: str, payload: PolicyDefinition, user: dict[str, str] = Depends(current_user)):
+    _require_policy_admin(user)
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as db:
+        cursor = db.execute(
+            "UPDATE prevention_policies SET name = ?, description = ?, category = ?, threshold = ?, severity = ?, action = ?, approval_required = ?, enabled = ?, version = version + 1, updated_by = ?, updated_at = ? WHERE policy_id = ?",
+            (payload.name.strip(), payload.description.strip(), payload.category.strip().lower(), payload.threshold, payload.severity, payload.action, int(payload.approval_required), int(payload.enabled), user["username"], now, policy_id),
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Policy not found")
+        row = db.execute("SELECT * FROM prevention_policies WHERE policy_id = ?", (policy_id,)).fetchone()
+    write_audit(user, "prevention_policy_updated", policy_id, json.dumps({**payload.model_dump(), "version": row["version"]}))
+    return {**dict(row), "approval_required": bool(row["approval_required"]), "enabled": bool(row["enabled"])}
+
+
+@app.delete("/api/v1/prevention/policies/{policy_id}")
+def deactivate_prevention_policy(policy_id: str, user: dict[str, str] = Depends(current_user)):
+    _require_policy_admin(user)
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as db:
+        cursor = db.execute(
+            "UPDATE prevention_policies SET enabled = 0, version = version + 1, updated_by = ?, updated_at = ? WHERE policy_id = ?",
+            (user["username"], now, policy_id),
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Policy not found")
+    write_audit(user, "prevention_policy_deactivated", policy_id, json.dumps({"version_incremented": True}))
+    return {"policy_id": policy_id, "status": "deactivated"}
+
+
+@app.post("/api/v1/prevention/policies/evaluate")
+def evaluate_prevention_policies(payload: dict[str, Any], user: dict[str, str] = Depends(current_user)):
+    try:
+        incident_id = int(payload.get("incident_id"))
+    except (TypeError, ValueError) as error:
+        raise HTTPException(status_code=422, detail="A stored incident ID is required") from error
+    incident = incident_context(incident_id)
+    category = str(incident["category"]).lower()
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT policy_id, name, category, threshold, severity, action, approval_required, version FROM prevention_policies WHERE enabled = 1 AND threshold <= ? AND (lower(category) IN ('all', '*', ?) ) ORDER BY threshold DESC, severity DESC",
+            (incident["risk_score"], category),
+        ).fetchall()
+    matches = [{**dict(row), "approval_required": bool(row["approval_required"])} for row in rows]
+    result = {
+        "incident_id": f"INC-{incident_id:04d}",
+        "matched_policies": matches,
+        "actions": sorted({item["action"] for item in matches}),
+        "approval_required": any(item["approval_required"] for item in matches),
+        "mode": "recommendation_only",
+        "evaluated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    evaluation_id = "policy_eval_" + secrets.token_urlsafe(8)
+    result["evaluation_id"] = evaluation_id
+    save_feature_record(evaluation_id, "policy_evaluation", user, result)
+    write_audit(user, "prevention_policies_evaluated", evaluation_id, json.dumps({"incident_id": incident_id, "match_count": len(matches)}))
+    return result
 
 
 def incident_context(incident_id: int) -> dict:
@@ -958,29 +1749,37 @@ def demo_scenarios(user: dict[str, str] = Depends(current_user)):
 def login(request: LoginRequest):
     initialize_database()
     username = request.username.strip()
+    username_key = hashlib.sha256(username.casefold().encode("utf-8")).hexdigest()
+    failure_key = f"login-failures:{username_key}"
+    lock_key = f"login-lock:{username_key}"
+    if EPHEMERAL_STATE.get(lock_key):
+        raise HTTPException(status_code=429, detail="Too many failed login attempts. Try again later.")
     with get_db() as db:
         user = db.execute(
             """
-            SELECT username, role, password_hash, email 
-            FROM users 
+            SELECT username, role, password_hash, email, status
+            FROM users
             WHERE lower(username) = lower(?) OR (email != '' AND lower(email) = lower(?))
-            ORDER BY 
-                CASE 
-                    WHEN lower(username) = lower(?) THEN 0 
+            ORDER BY
+                CASE
+                    WHEN lower(username) = lower(?) THEN 0
                     WHEN role = 'head_admin' THEN 1
-                    ELSE 2 
-                END 
+                    ELSE 2
+                END
             LIMIT 1
             """,
             (username, username, username),
         ).fetchone()
-    if not user:
+    if not user or user["status"] != "active" or not verify_password(request.password, user["password_hash"]):
+        failures = EPHEMERAL_STATE.record_window_event(failure_key, window_seconds=LOGIN_FAILURE_WINDOW_SECONDS)
+        if failures >= LOGIN_FAILURE_LIMIT:
+            EPHEMERAL_STATE.set(lock_key, {"locked": True}, ttl_seconds=LOGIN_FAILURE_WINDOW_SECONDS)
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    valid = verify_password(request.password, user["password_hash"])
-    if not valid and user["username"].lower() == "admin" and request.password == "admin123":
-        valid = True
-    if not valid:
-        raise HTTPException(status_code=401, detail="Invalid username or password")
+    EPHEMERAL_STATE.clear_window(failure_key)
+    EPHEMERAL_STATE.pop(lock_key)
+    if len(user["password_hash"]) == 64 and not user["password_hash"].startswith("$2"):
+        with get_db() as db:
+            db.execute("UPDATE users SET password_hash = ? WHERE username = ?", (hash_password(request.password), user["username"]))
     return issue_session(user)
 
 
@@ -1062,6 +1861,8 @@ def analyze_threat(request: ThreatAnalysisRequest, user: dict[str, str] = Depend
     if not request.payload.strip():
         raise HTTPException(status_code=400, detail="Payload content cannot be empty.")
     assessment = evaluate_threat_payload(request.category, request.payload)
+    if request.category.lower() in {"auth_logs", "ato"}:
+        assessment = apply_user_login_baseline(assessment, request.payload, user)
     assessment["iocs"] = enrich_iocs(extract_iocs(request.payload))
     incident_id = store_incident(request.category, request.payload, assessment, metadata=request.metadata)
     persist_cyberguard_x(incident_id, {"id": incident_id, "category": request.category, "payload": request.payload, "risk_score": assessment["risk_score"], "risk_level": assessment["risk_level"], "assessment": assessment, "created_at": datetime.now(timezone.utc).isoformat()})
@@ -1076,6 +1877,8 @@ def preview_threat(request: ThreatAnalysisRequest, user: dict[str, str] = Depend
     if not request.payload.strip():
         raise HTTPException(status_code=400, detail="Payload content cannot be empty.")
     assessment = evaluate_threat_payload(request.category, request.payload)
+    if request.category.lower() in {"auth_logs", "ato"}:
+        assessment = apply_user_login_baseline(assessment, request.payload, user, learn=False)
     assessment["iocs"] = enrich_iocs(extract_iocs(request.payload))
     return {"status": "success", "category": request.category, "assessment": assessment}
 
@@ -1110,6 +1913,15 @@ async def analyze_file(category: str = Form(...), file: UploadFile = File(...), 
     email_result = analyze_eml(content) if is_eml else None
     payload = email_result["payload"] if email_result else (content.decode("utf-8", errors="replace") if is_text else f"Uploaded {file.content_type or 'media'} file: {filename}")
     assessment = evaluate_threat_payload(category, payload)
+    if category.lower() in {"auth_logs", "ato"}:
+        assessment = apply_user_login_baseline(assessment, payload, user)
+    if category.lower() == "malware":
+        malware_scan = scan_artifact(content, filename)
+        assessment["malware_scan"] = malware_scan
+        assessment["indicators"].extend({"name": match["rule"], "score": f"{match['meta'].get('risk_score', 70)}%", "weight": match["meta"].get("risk_score", 70)} for match in malware_scan["matches"])
+        assessment["risk_score"] = max(assessment["risk_score"], malware_scan["risk_score"])
+        if malware_scan["matches"]:
+            assessment["xai_explanation"] += " " + " ".join(malware_scan["reasons"])
     assessment["iocs"] = enrich_iocs(extract_iocs(payload))
     if email_result:
         assessment["risk_score"] = max(assessment["risk_score"], email_result["score"])
@@ -1130,7 +1942,10 @@ async def analyze_file(category: str = Form(...), file: UploadFile = File(...), 
             assessment["indicators"].extend(qr_assessment["indicators"])
             assessment["xai_explanation"] += " " + qr_assessment["xai_explanation"]
     score = int(assessment["risk_score"])
+    prior_level = assessment["risk_level"]
     assessment["risk_level"] = "Critical" if score >= 80 else "High" if score >= 60 else "Medium" if score >= 40 else "Low" if score >= 20 else "Safe"
+    if assessment["risk_level"] != prior_level:
+        assessment["xai_explanation"] = assessment["xai_explanation"].replace(f"{prior_level} Risk:", f"{assessment['risk_level']} Risk:", 1)
     incident_id = store_incident(category, payload, assessment, filename, file_hash, metadata_payload)
     persist_cyberguard_x(incident_id, {"id": incident_id, "category": category, "payload": payload, "risk_score": assessment["risk_score"], "risk_level": assessment["risk_level"], "assessment": assessment, "created_at": datetime.now(timezone.utc).isoformat()})
     write_audit(user, "analyze_file", f"incident:{incident_id}", filename)
@@ -1150,6 +1965,33 @@ def analyze_website(payload: dict[str, Any], user: dict[str, str] = Depends(curr
         raise HTTPException(status_code=400, detail=str(error)) from error
     text = " ".join([inspection["final_url"], inspection["title"], *inspection["findings"]])
     assessment = evaluate_threat_payload("url", text)
+    certificate = inspection.get("tls_certificate") or {}
+    registration = inspection.get("domain_registration") or {}
+    enrichment_reasons = []
+    if certificate.get("verified") and certificate.get("days_remaining") is not None and certificate["days_remaining"] <= 14:
+        assessment["risk_score"] = min(99, assessment["risk_score"] + 20)
+        enrichment_reasons.append("The verified TLS certificate is expired or expires within 14 days.")
+        assessment["indicators"].append({"name": "TLS Certificate Expiry", "score": "90%", "weight": 20})
+    if registration.get("age_days") is not None and registration["age_days"] <= 30:
+        assessment["risk_score"] = min(99, assessment["risk_score"] + 25)
+        enrichment_reasons.append(f"The domain registration is recent ({registration['age_days']} days old).")
+        assessment["indicators"].append({"name": "Domain Registration Age", "score": "88%", "weight": 25})
+    brand_mismatches = inspection.get("brand_mismatches", [])
+    if inspection.get("credential_form") and brand_mismatches:
+        assessment["risk_score"] = min(99, assessment["risk_score"] + 35)
+        enrichment_reasons.append(f"Credential form claims a known brand on an unrelated domain ({', '.join(brand_mismatches)}).")
+        assessment["indicators"].append({"name": "Credential Form Brand Mismatch", "score": "94%", "weight": 35})
+    if inspection.get("credential_form") and inspection.get("cross_origin_form_actions"):
+        assessment["risk_score"] = min(99, assessment["risk_score"] + 20)
+        enrichment_reasons.append("Credential form submits to a different registered domain.")
+        assessment["indicators"].append({"name": "Cross-Domain Credential Submission", "score": "90%", "weight": 20})
+    if enrichment_reasons:
+        assessment["xai_explanation"] += " " + " ".join(enrichment_reasons)
+        assessment["explanation_summary"] += " " + " ".join(enrichment_reasons)
+    score = assessment["risk_score"]
+    assessment["risk_level"] = "Critical" if score >= 80 else "High" if score >= 60 else "Medium" if score >= 40 else "Low" if score >= 20 else "Safe"
+    if assessment["risk_level"] in {"High", "Critical"} and not any(action.get("id") == "block_domain" for action in assessment["recommended_actions"]):
+        assessment["recommended_actions"].insert(0, {"id": "block_domain", "label": "Block Suspicious Domain / IP"})
     assessment["website_inspection"] = inspection
     assessment["iocs"] = enrich_iocs(extract_iocs(text))
     metadata = normalize_residency_metadata(payload.get("metadata"))
@@ -1196,6 +2038,8 @@ def incidents(search: Optional[str] = Query(default=None), status: Optional[str]
         result.append({
             "id": f"INC-{row['id']:04d}",
             "database_id": row["id"],
+            "payload": row["payload"],
+            "risk_score": row["risk_score"],
             "timestamp": row["created_at"],
             "source": row["filename"] or row["category"].replace("_", " ").title(),
             "target": "Security Operations Center",
@@ -1220,8 +2064,22 @@ def incidents(search: Optional[str] = Query(default=None), status: Optional[str]
 @app.patch("/api/v1/incidents/{incident_id}")
 def update_incident(incident_id: int, request: IncidentUpdate, user: dict[str, str] = Depends(current_user)):
     allowed_statuses = {"New", "Investigating", "Contained", "Mitigated", "Closed"}
-    if request.status and request.status not in allowed_statuses:
+    if request.status is not None and request.status not in allowed_statuses:
         raise HTTPException(status_code=400, detail=f"Status must be one of: {', '.join(sorted(allowed_statuses))}")
+    if (request.status is not None or request.assigned_to is not None) and user.get("role") not in {"lead", "sub_admin", "head_admin"}:
+        raise HTTPException(status_code=403, detail="Lead or administrator role required to change incident workflow")
+    assignee = None
+    if request.assigned_to is not None:
+        assignee = request.assigned_to.strip()
+        if not assignee:
+            raise HTTPException(status_code=422, detail="Assignee must name an active user")
+        with get_db() as db:
+            active_assignee = db.execute(
+                "SELECT 1 FROM users WHERE lower(username) = lower(?) AND status = 'active'",
+                (assignee,),
+            ).fetchone()
+        if not active_assignee:
+            raise HTTPException(status_code=422, detail="Assignee must name an active user")
     with get_db() as db:
         current = db.execute("SELECT notes FROM incidents WHERE id = ?", (incident_id,)).fetchone()
         if not current:
@@ -1229,7 +2087,8 @@ def update_incident(incident_id: int, request: IncidentUpdate, user: dict[str, s
         notes = current["notes"] or ""
         if request.note:
             notes = f"{notes}\n[{datetime.now(timezone.utc).isoformat()}] {user['username']}: {request.note}".strip()
-        db.execute("UPDATE incidents SET status = COALESCE(?, status), assigned_to = COALESCE(?, assigned_to), notes = ? WHERE id = ?", (request.status, request.assigned_to, notes, incident_id))
+        db.execute("UPDATE incidents SET status = COALESCE(?, status), assigned_to = COALESCE(?, assigned_to), notes = ? WHERE id = ?", (request.status, assignee, notes, incident_id))
+    write_audit(user, "incident_updated", f"incident:{incident_id}", json.dumps({"status": request.status, "assigned_to": assignee, "comment_added": bool(request.note)}))
     return {"status": "updated", "incident_id": incident_id}
 
 

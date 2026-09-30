@@ -102,6 +102,8 @@ def identity_trust_evaluation(login_context: dict[str, Any] | None) -> dict[str,
     country = str(context.get("country") or "US")
     login_count = int(context.get("login_count") or 0)
     source_ip = str(context.get("source_ip") or "")
+    mfa_enabled = bool(context.get("mfa_enabled", True))
+    behavioral_anomaly = bool(context.get("behavioral_anomaly", False))
     score = 80
 
     if device.lower() in {"new-device", "unknown-device"}:
@@ -112,6 +114,10 @@ def identity_trust_evaluation(login_context: dict[str, Any] | None) -> dict[str,
         score -= 10
     if source_ip.startswith("203.") or source_ip.startswith("198."):
         score -= 10
+    if not mfa_enabled:
+        score -= 12
+    if behavioral_anomaly:
+        score -= 20
 
     score = max(0, min(100, score))
     if score >= 75:
@@ -124,7 +130,18 @@ def identity_trust_evaluation(login_context: dict[str, Any] | None) -> dict[str,
         status = "blocked"
         required_action = "block_session"
 
-    return {"trust_score": score, "status": status, "required_action": required_action}
+    return {
+        "trust_score": score,
+        "status": status,
+        "required_action": required_action,
+        "signals": {
+            "new_or_unknown_device": device.lower() in {"new-device", "unknown-device"},
+            "unfamiliar_country": country.upper() not in {"US", "IN", "GB", "EU"},
+            "repeated_login_observations": login_count >= 3,
+            "mfa_enabled": mfa_enabled,
+            "behavioral_anomaly": behavioral_anomaly,
+        },
+    }
 
 
 def insider_threat_risk(user_activity: dict[str, Any] | None) -> dict[str, Any]:

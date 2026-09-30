@@ -35,9 +35,13 @@ export default function IncidentTable({ incidents = [], accessToken, onRefresh, 
 
   const updateIncident = async (incident, nextStatus) => {
     setSaving(incident.database_id);
+    setFeedbackMessage(null);
     try {
       await axios.patch(`${apiBaseUrl}/api/v1/incidents/${incident.database_id}`, { status: nextStatus }, { headers: { Authorization: `Bearer ${accessToken}` } });
       onRefresh?.();
+    } catch (error) {
+      setExpanded(incident.id);
+      setFeedbackMessage({ incidentId: incident.database_id, text: error.response?.data?.detail || 'Unable to update incident status.', error: true });
     } finally {
       setSaving(null);
     }

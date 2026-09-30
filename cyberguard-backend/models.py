@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict, Any, Literal
 
 class ThreatAnalysisRequest(BaseModel):
     category: str
@@ -69,6 +69,41 @@ class IncidentUpdate(BaseModel):
 
 class IncidentComment(BaseModel):
     comment: str
+
+class IdentityTrustRequest(BaseModel):
+    device: str
+    country: str
+    source_ip: str
+    mfa_enabled: bool
+    behavioral_anomaly: bool = False
+
+class InsiderRiskRequest(BaseModel):
+    downloads: int = Field(default=0, ge=0, le=100000)
+    off_hours: bool = False
+    privilege_change: bool = False
+    sensitive_access: int = Field(default=0, ge=0, le=100000)
+
+class DeceptionInteractionRequest(BaseModel):
+    host: str = Field(min_length=1, max_length=120)
+    actor: str = Field(min_length=1, max_length=120)
+    resource: str = Field(min_length=1, max_length=200)
+    event_type: str = Field(min_length=1, max_length=40)
+    source_ip: Optional[str] = None
+
+class PolicyDefinition(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=1000)
+    category: str = Field(default="all", min_length=1, max_length=40)
+    threshold: int = Field(default=70, ge=0, le=100)
+    severity: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"] = "HIGH"
+    action: Literal["monitor", "require_mfa", "block", "isolate", "open_incident", "contain"] = "require_mfa"
+    approval_required: bool = True
+    enabled: bool = True
+
+class ContainmentRequestCreate(BaseModel):
+    incident_id: int = Field(gt=0)
+    action: Literal["monitor", "require_mfa", "revoke_session", "block_ip", "isolate_host", "quarantine_message"]
+    target: str = Field(min_length=1, max_length=160)
 
 class UserCreate(BaseModel):
     username: str

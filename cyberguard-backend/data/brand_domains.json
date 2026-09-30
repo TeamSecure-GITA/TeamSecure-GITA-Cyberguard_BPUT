@@ -1,0 +1,15 @@
+{
+  "brands": {
+    "microsoft": "microsoft.com",
+    "google": "google.com",
+    "bput": "bput.ac.in",
+    "paypal": "paypal.com",
+    "office": "office.com",
+    "sbi": "sbi.co.in",
+    "hdfc": "hdfcbank.com",
+    "icici": "icicibank.com",
+    "amazon": "amazon.com",
+    "flipkart": "flipkart.com",
+    "paytm": "paytm.com"
+  }
+}
