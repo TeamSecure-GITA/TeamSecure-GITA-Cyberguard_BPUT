@@ -1,14 +1,15 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
+import { getApiBaseUrl } from '../apiConfig';
 import { KeyRound, Users, ClipboardList, ShieldAlert } from 'lucide-react';
 import CloudflareWafPanel from './CloudflareWafPanel';
 
-const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+const apiBaseUrl = getApiBaseUrl();
 
 export default function AdminConsole({ accessToken, routeData = null }) {
   const [users, setUsers] = useState([]);
   const [audit, setAudit] = useState([]);
-  const [security, setSecurity] = useState({ events: [], blocked_ips: [], owner_email: 'teamsecure.project@gmail.com' });
+  const [security, setSecurity] = useState({ events: [], blocked_ips: [], owner_email: '' });
   const [form, setForm] = useState({ username: '', password: '', role: 'analyst' });
   const [error, setError] = useState(null);
   const routing = routeData;

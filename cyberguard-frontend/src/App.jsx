@@ -231,17 +231,9 @@ export default function App() {
           currentSession={session}
           currentLang={language}
           onLanguageChange={setLanguage}
-          onOpenWorkspace={async () => {
-            if (!session) {
-              try {
-                await handleQuickLogin('teamsecure.project@gmail.com', 'Secure@9040');
-              } catch (err) {
-                console.error('Quick login failed:', err);
-              }
-            } else {
-              setViewMode('workspace');
-              setActiveTab('dashboard');
-            }
+          onOpenWorkspace={() => {
+            setViewMode('workspace');
+            setActiveTab('dashboard');
           }}
           onApprovedSession={(approvedSession) => {
             setSession(approvedSession);

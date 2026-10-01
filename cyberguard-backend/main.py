@@ -66,6 +66,7 @@ from behavioral_baseline import baseline_key, login_sample, parse_login_event, s
 from geoip_enrichment import lookup_country as lookup_geoip_country
 from malware_scanner import scan_artifact
 from pcap_inspector import analyze_pcap
+from network_ingestion import normalize_network_events
 from ocr_engine import extract_image_text
 from risk_scoring import score_event
 from account_rescue_engine import blast_radius, evidence_snapshot, execute_step, guardian_watch, locked_out_recovery, lockdown_plan, offline_rescue_card, provider_capabilities, rescue_plan, rescue_simulation, scan_account
@@ -109,7 +110,7 @@ from frontier_engine import agent_consensus, assess_analyst_load, assess_neuromo
 from advanced_defense_engine import acoustic_channel, counter_agent_proxy, dark_mesh_schedule, hallucinated_infrastructure, heartbeat_keying, polymorphism_plan, quantum_decoy, space_weather_correlation, temporal_healing, vaccine_recommendations
 from speculative_defense_engine import chrono_causal_trap, cognitive_poisoning, holographic_memory, hyperbolic_network, phase_change_zeroization, photonic_bus, plasma_channel, singularity_sinkhole, software_apoptosis, speculative_overview, vacuum_keying
 from cloudflare_waf import block_ip as cloudflare_block_ip, configuration as cloudflare_configuration
-from roadmap_features import analyst_bias_report, attention_heatmap, attacker_resource_cost, breach_economics, compliance_diff, counterfactual_replay, cross_modal_consistency, jurisdiction_route, seed_honeytokens, shared_immunity
+from roadmap_features import analyst_bias_report, attention_heatmap, attacker_resource_cost, breach_economics, compliance_diff, counterfactual_replay, cross_modal_consistency, jurisdiction_route, seed_honeytokens, shared_immunity, supply_chain_blast_radius
 from provider_integrations import deploy_honeytokens, integration_status as provider_integration_status, publish_tenant_signatures, sync_cve_feed
 from production_integrations import IntegrationNotConfigured, create_ticket as create_provider_ticket, disable_identity as disable_provider_identity, isolate_endpoint as isolate_provider_endpoint, provider_status as production_provider_status
 from models import AccessRequestCreate, AdvancedTelemetryRequest, AgentConsensusRequest, AlertRequest, AnalystLoadRequest, BattleRequest, CognitiveEchoRequest, DarkMeshRequest, DeceptionRequest, ForecastRequest, IncidentComment, IncidentUpdate, InfrastructureEchoRequest, LoginRequest, NeuromorphicRequest, NotificationUpdate, OtpVerificationRequest, PasskeyCredentialRequest, PermissionRequest, PolymorphismRequest, PsychologyRequest, ProviderEndpointIsolationRequest, ProviderIdentityDisableRequest, ProviderTicketRequest, QStateRequest, QuantumDecoyRequest, ResponseExecutionRequest, SatelliteRequest, ScannerRequest, SimulationRequest, SpeculativeTelemetryRequest, TemporalHealingRequest, ThreatAnalysisRequest, ThreatIntelLookup, TopologyMorphRequest, ThreatPhysicsRequest, UserCreate, VaccineRequest
@@ -124,15 +125,13 @@ LOGIN_FAILURE_WINDOW_SECONDS = max(60, int(os.getenv("CYBERGUARD_LOGIN_FAILURE_W
 
 
 def validate_auth_configuration(environment: str, jwt_secret: str, allow_anonymous_eval: bool, admin_username: str, admin_password: str):
-    if environment != "production":
-        return
-    if not jwt_secret:
+    if environment == "production" and not jwt_secret:
         raise RuntimeError("CYBERGUARD_JWT_SECRET must be set to a unique value in production")
-    if len(jwt_secret) < 32:
+    if environment == "production" and len(jwt_secret) < 32:
         raise RuntimeError("CYBERGUARD_JWT_SECRET must contain at least 32 characters in production")
     if not admin_username or len(admin_password) < 16:
-        raise RuntimeError("Production requires CYBERGUARD_HEAD_ADMIN_USERNAME and a CYBERGUARD_HEAD_ADMIN_PASSWORD of at least 16 characters")
-    if allow_anonymous_eval:
+        raise RuntimeError("Set CYBERGUARD_HEAD_ADMIN_USERNAME and a CYBERGUARD_HEAD_ADMIN_PASSWORD of at least 16 characters before startup")
+    if environment == "production" and allow_anonymous_eval:
         raise RuntimeError("CYBERGUARD_ALLOW_ANONYMOUS_EVAL cannot be enabled in production")
 
 
@@ -155,8 +154,8 @@ PUBLIC_APP_URL = os.getenv(
     else "http://127.0.0.1:5173",
 )
 ACCESS_REQUEST_TTL_HOURS = max(1, int(os.getenv("CYBERGUARD_ACCESS_REQUEST_TTL_HOURS", "24")))
-HEAD_ADMIN_USERNAME = configured_head_admin_username or "teamsecure.project@gmail.com"
-HEAD_ADMIN_PASSWORD = configured_head_admin_password or "Secure@9040"
+HEAD_ADMIN_USERNAME = configured_head_admin_username
+HEAD_ADMIN_PASSWORD = configured_head_admin_password
 MAX_UPLOAD_BYTES = max(1_000_000, int(os.getenv("CYBERGUARD_MAX_UPLOAD_BYTES", "10485760")))
 STARTED_AT = datetime.now(timezone.utc)
 EPHEMERAL_STATE = EphemeralStore.from_environment()
@@ -194,9 +193,9 @@ DHCP_LEASES = {
 }
 
 IDP_USER_REGISTRY = {
-    "user_admin": {"name": "Amit Sharma", "role": "Network Administrator", "status": "ACTIVE", "password": "admin123"},
-    "user_faculty": {"name": "Dr. Mishra", "role": "Professor", "status": "ACTIVE", "password": "faculty123"},
-    "user_student": {"name": "Rohan Das", "role": "Student", "status": "SUSPENDED", "password": "student123"},
+    "user_admin": {"name": "Amit Sharma", "role": "Network Administrator", "status": "ACTIVE", "password": os.getenv("CYBERGUARD_IDP_ADMIN_PASSWORD", "")},
+    "user_faculty": {"name": "Dr. Mishra", "role": "Professor", "status": "ACTIVE", "password": os.getenv("CYBERGUARD_IDP_FACULTY_PASSWORD", "")},
+    "user_student": {"name": "Rohan Das", "role": "Student", "status": "SUSPENDED", "password": os.getenv("CYBERGUARD_IDP_STUDENT_PASSWORD", "")},
 }
 
 def get_db():
@@ -291,7 +290,7 @@ def idp_authenticate_user(payload: dict | None, user: dict[str, str] | None = No
     if profile["status"] == "SUSPENDED":
         return {"auth_status": "DENIED", "user": profile["name"], "reason": "Account quarantined automatically due to active security event alerts."}
 
-    if profile["password"] != password:
+    if not profile["password"] or profile["password"] != password:
         return {"auth_status": "DENIED", "user": profile["name"], "reason": "Invalid credentials for IdP authentication."}
 
     hardware_context = correlate_dhcp_ip(source_ip)
@@ -643,12 +642,23 @@ def initialize_database():
         if "metadata" not in columns:
             db.execute("ALTER TABLE incidents ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
         users = []
+        configured_demo_accounts = []
         if CYBERGUARD_ENV != "production":
-            users.extend([
-                ("analyst", hash_password("analyst123"), "analyst", "", None, "active"),
-                ("lead", hash_password("lead123"), "lead", "", None, "active"),
-                ("admin", hash_password("admin123"), "admin", SECURITY_OWNER_EMAIL, HEAD_ADMIN_USERNAME, "active"),
-            ])
+            demo_accounts = (
+                ("analyst", "CYBERGUARD_DEMO_ANALYST_PASSWORD", "analyst", "", None),
+                ("lead", "CYBERGUARD_DEMO_LEAD_PASSWORD", "lead", "", None),
+                ("admin", "CYBERGUARD_DEMO_ADMIN_PASSWORD", "admin", SECURITY_OWNER_EMAIL, HEAD_ADMIN_USERNAME),
+            )
+            for username, password_key, role, email, parent in demo_accounts:
+                password = os.getenv(password_key, "")
+                if password:
+                    configured_demo_accounts.append((username, password))
+                    users.append((username, hash_password(password), role, email, parent, "active"))
+                else:
+                    db.execute(
+                        "UPDATE users SET status = 'disabled' WHERE lower(username) = lower(?) AND role = ?",
+                        (username, role),
+                    )
         users.append((HEAD_ADMIN_USERNAME, hash_password(HEAD_ADMIN_PASSWORD), "head_admin", SECURITY_OWNER_EMAIL, None, "active"))
         db.executemany("INSERT OR IGNORE INTO users (username, password_hash, role, email, parent_username, status) VALUES (?, ?, ?, ?, ?, ?)", users)
         if CYBERGUARD_ENV == "production":
@@ -664,6 +674,12 @@ def initialize_database():
             "UPDATE users SET password_hash = ?, role = 'head_admin', email = ?, status = 'active' WHERE lower(username) = lower(?)",
             (hash_password(HEAD_ADMIN_PASSWORD), SECURITY_OWNER_EMAIL, HEAD_ADMIN_USERNAME),
         )
+        if CYBERGUARD_ENV != "production":
+            for username, password in configured_demo_accounts:
+                db.execute(
+                    "UPDATE users SET password_hash = ?, status = 'active' WHERE lower(username) = lower(?)",
+                    (hash_password(password), username),
+                )
 
 
 @asynccontextmanager
@@ -1665,17 +1681,43 @@ def alert_quality(user: dict[str, str] | None = None) -> dict:
 
 def persist_cyberguard_x(incident_id: int, incident: dict):
     genome = build_genome(incident)
-    timeline = build_timeline(incident)
     related = recent_incident_context()
     campaign = correlate_incident(incident, [item for item in related if item["id"] != incident_id])
     with get_db() as db:
         now = datetime.now(timezone.utc).isoformat()
+        stored_incident = db.execute(
+            "SELECT created_at FROM incidents WHERE id = ?",
+            (incident_id,),
+        ).fetchone()
+        timeline = build_timeline(incident, [
+            {
+                "type": "incident_created",
+                "label": "Incident created",
+                "detail": "Telemetry was recorded as an incident.",
+                "timestamp": stored_incident["created_at"],
+            },
+            {
+                "type": "analysis_completed",
+                "label": "Threat analysis completed",
+                "detail": "Risk assessment and indicators were persisted.",
+                "timestamp": now,
+            },
+            {
+                "type": "campaign_correlated",
+                "label": "Campaign correlation completed",
+                "detail": "The incident was compared with available incident evidence.",
+                "timestamp": now,
+            },
+        ])
         db.execute("INSERT INTO threat_fingerprints (incident_id, fingerprint, genome_json, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(incident_id) DO UPDATE SET fingerprint = excluded.fingerprint, genome_json = excluded.genome_json, created_at = excluded.created_at", (incident_id, genome["fingerprint"], serialize_genome(genome), now))
         db.execute("INSERT OR IGNORE INTO campaigns (campaign_id, confidence, stage, created_at) VALUES (?, ?, ?, ?)", (campaign["campaign_id"], campaign["confidence"], campaign["stage"], now))
         for match in campaign["related_incidents"]:
             db.execute("INSERT OR IGNORE INTO campaign_incidents (campaign_id, incident_id, score) VALUES (?, ?, ?)", (campaign["campaign_id"], match["incident_id"], match["score"]))
         db.execute("INSERT INTO campaign_incidents (campaign_id, incident_id, score) VALUES (?, ?, ?) ON CONFLICT DO NOTHING", (campaign["campaign_id"], incident_id, 100))
-        db.executemany("INSERT INTO incident_timelines (incident_id, event_json, created_at) VALUES (?, ?, ?)", [(incident_id, json.dumps(event), now) for event in timeline])
+        db.executemany(
+            "INSERT INTO incident_timelines (incident_id, event_json, created_at) VALUES (?, ?, ?)",
+            [(incident_id, json.dumps(event), event["timestamp"]) for event in timeline],
+        )
 
 
 @app.get("/")
@@ -1983,6 +2025,34 @@ def analyze_threat(request: ThreatAnalysisRequest, user: dict[str, str] = Depend
     return {"status": "success", "incident_id": incident_id, "category": request.category, "assessment": assessment, "user": user["username"]}
 
 
+@app.post("/api/v1/network/ingest")
+def ingest_network_telemetry(payload: dict[str, Any], user: dict[str, str] = Depends(current_user)):
+    try:
+        normalized = normalize_network_events(payload)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    serialized = json.dumps(normalized)
+    assessment = evaluate_threat_payload("network", serialized)
+    if assessment["risk_score"] < 40:
+        return {
+            "status": "accepted",
+            "detected": False,
+            "incident_id": None,
+            "assessment": assessment,
+        }
+
+    incident = analyze_threat(
+        ThreatAnalysisRequest(category="network", payload=serialized),
+        user,
+    )
+    return {
+        **incident,
+        "status": "incident_created",
+        "detected": True,
+    }
+
+
 @app.post("/api/v1/analyze/preview")
 def preview_threat(request: ThreatAnalysisRequest, user: dict[str, str] = Depends(current_user)):
     if not request.payload.strip():
@@ -2241,6 +2311,23 @@ def update_incident(incident_id: int, request: IncidentUpdate, user: dict[str, s
         if request.note:
             notes = f"{notes}\n[{datetime.now(timezone.utc).isoformat()}] {user['username']}: {request.note}".strip()
         db.execute("UPDATE incidents SET status = COALESCE(?, status), assigned_to = COALESCE(?, assigned_to), notes = ? WHERE id = ?", (request.status, assignee, notes, incident_id))
+        if request.status is not None or assignee is not None or request.note:
+            timestamp = datetime.now(timezone.utc).isoformat()
+            event = {
+                "type": "workflow_updated",
+                "label": "Incident workflow updated",
+                "detail": json.dumps({
+                    "status": request.status,
+                    "assigned_to": assignee,
+                    "comment_added": bool(request.note),
+                }),
+                "timestamp": timestamp,
+                "status": "complete",
+            }
+            db.execute(
+                "INSERT INTO incident_timelines (incident_id, event_json, created_at) VALUES (?, ?, ?)",
+                (incident_id, json.dumps(event), timestamp),
+            )
     write_audit(user, "incident_updated", f"incident:{incident_id}", json.dumps({"status": request.status, "assigned_to": assignee, "comment_added": bool(request.note)}))
     return {"status": "updated", "incident_id": incident_id}
 
@@ -2286,7 +2373,28 @@ def incident_correlations(incident_id: int, user: dict[str, str] = Depends(curre
 @app.get("/incidents/{incident_id}/attack-chain")
 @app.get("/incidents/{incident_id}/timeline")
 def incident_attack_chain(incident_id: int, user: dict[str, str] = Depends(current_user)):
-    return {"incident_id": incident_id, "events": build_timeline(incident_context(incident_id))}
+    incident = incident_context(incident_id)
+    with get_db() as db:
+        timeline_rows = db.execute(
+            "SELECT event_json FROM incident_timelines WHERE incident_id = ? ORDER BY created_at",
+            (incident_id,),
+        ).fetchall()
+        action_rows = db.execute(
+            "SELECT action_id, status, created_at FROM actions WHERE incident_id IN (?, ?) ORDER BY created_at",
+            (str(incident_id), f"INC-{incident_id:04d}"),
+        ).fetchall()
+    events = [json.loads(row["event_json"]) for row in timeline_rows]
+    events.extend(
+        {
+            "type": "response_action",
+            "label": "Response action recorded",
+            "detail": f"{row['action_id']} ({row['status']})",
+            "timestamp": row["created_at"],
+            "status": "complete",
+        }
+        for row in action_rows
+    )
+    return {"incident_id": incident_id, "events": build_timeline(incident, events)}
 
 
 @app.get("/api/v1/incidents/{incident_id}/intent")
@@ -3153,6 +3261,24 @@ def roadmap_immunity_publish(request: dict, user: dict[str, str] = Depends(head_
 @app.get("/api/v1/roadmap/resource/{incident_id}")
 def roadmap_resource_cost(incident_id: int, user: dict[str, str] = Depends(current_user)):
     return attacker_resource_cost(incident_context(incident_id))
+
+
+@app.post("/api/v1/roadmap/supply-chain")
+def roadmap_supply_chain(request: dict, user: dict[str, str] = Depends(current_user)):
+    nodes = request.get("nodes", [])
+    dependencies = request.get("dependencies", request.get("edges", []))
+    compromised_nodes = request.get("compromised_nodes", [])
+    try:
+        result = supply_chain_blast_radius(nodes, dependencies, compromised_nodes)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    write_audit(
+        user,
+        "supply_chain_blast_radius",
+        f"{len(nodes)} nodes",
+        f"{result['affected_count']} downstream nodes",
+    )
+    return result
 
 
 @app.get("/api/v1/roadmap/attention")

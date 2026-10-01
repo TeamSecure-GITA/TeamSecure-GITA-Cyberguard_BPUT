@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ArrowDown, Loader2, Play } from 'lucide-react';
 import axios from 'axios';
+import { getApiBaseUrl } from '../apiConfig';
 
 const AVAILABLE_ACTIONS = [
   { id: 'isolate', label: 'Isolate Host Endpoint', reduction: 28, desc: 'Cut network connectivity' },
@@ -9,7 +10,7 @@ const AVAILABLE_ACTIONS = [
   { id: 'notify', label: 'Notify Target Users', reduction: 8, desc: 'Security alert push' },
 ];
 
-export default function ResponseSimulatorPanel({ incident, accessToken, apiBaseUrl = 'http://127.0.0.1:8000' }) {
+export default function ResponseSimulatorPanel({ incident, accessToken, apiBaseUrl = getApiBaseUrl() }) {
   const [selectedActions, setSelectedActions] = useState(['isolate', 'revoke']);
   const [simulation, setSimulation] = useState(null);
   const [loading, setLoading] = useState(false);

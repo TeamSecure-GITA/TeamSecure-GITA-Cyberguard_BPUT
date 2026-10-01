@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { CheckCircle2, AlertTriangle, FileText, Network } from 'lucide-react';
 import axios from 'axios';
+import { getApiBaseUrl } from '../apiConfig';
 
 export default function ComplianceTab({ accessToken }) {
   const [complianceData, setComplianceData] = useState([
@@ -52,7 +53,7 @@ export default function ComplianceTab({ accessToken }) {
   };
 
   useEffect(() => {
-    const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+    const apiBaseUrl = getApiBaseUrl();
     const config = { headers: { Authorization: `Bearer ${accessToken}` } };
     Promise.all([
       axios.get(`${apiBaseUrl}/api/v1/compliance/controls`, config),

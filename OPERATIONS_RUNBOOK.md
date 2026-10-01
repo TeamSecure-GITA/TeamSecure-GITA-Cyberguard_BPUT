@@ -42,11 +42,12 @@ Terminate TLS at the reverse proxy or managed platform. Set `CYBERGUARD_ENV=prod
 
 ## Vercel + Render login deployment
 
-- Vercel production builds use `cyberguard-frontend/.env.production`, which points `VITE_API_URL` at `https://cyberguard-backend.onrender.com`. If the Render service has a different public hostname, set that exact URL as Vercel's `VITE_API_URL` and redeploy the frontend.
-- Render must deploy the `cyberguard-backend` web service successfully. The API root must return HTTP 200 before frontend login can work; a Render 503 means the service is unavailable/asleep or its latest build/start failed, not that the username/password was rejected.
-- Set Render `CYBERGUARD_FRONTEND_ORIGINS=https://teamsecure-gita-cyberguard.vercel.app` and `CYBERGUARD_PUBLIC_APP_URL` to the same URL.
+- Configure the Vercel project root directory as `cyberguard-frontend`. Use `npm ci`, `npm run build`, and `dist` for install, build, and output. The production build requires a public HTTPS `VITE_API_URL`; `cyberguard-frontend/.env.production` supplies the default Render URL. If Render assigned a different hostname, set the exact public API origin in Vercel and redeploy.
+- Deploy the Render Blueprint from this repository so the `cyberguard-backend` service uses `rootDir: cyberguard-backend`, its backend requirements, and the `uvicorn main:app` start command. Set `CYBERGUARD_FRONTEND_ORIGINS` to the exact Vercel origin and `CYBERGUARD_PUBLIC_APP_URL` to that same origin.
+- Verify `https://<render-host>/health` returns HTTP 200 with `{"status":"Active","system":"CYBERGUARD AI Engine v2.0"}`. A 404 indicates the hostname is not serving this backend/revision; a 5xx means the service is unhealthy and its Render deploy/runtime logs must be checked. Do not consider the frontend deployed successfully until its browser smoke test can reach this backend.
+- The Vercel build intentionally fails when `VITE_API_URL` is missing, non-HTTPS, or points at loopback. Confirm the Vercel deployment is built from the latest repository revision; an old bundle can still contain hard-coded localhost API URLs.
 - Set `CYBERGUARD_HEAD_ADMIN_USERNAME` and `CYBERGUARD_HEAD_ADMIN_PASSWORD` in Render to the credentials the operator will use. Keep both private; the password must be at least 16 characters. On backend startup the configured head-admin password is hashed and applied to that account.
-- After updating Render or Vercel settings, redeploy both services. Verify the Render root and `/api/v1/auth/login` before testing the Vercel login form.
+- After updating Render or Vercel settings, redeploy both services. Run `verify_all.ps1` with `API_URL`, `CYBERGUARD_FRONTEND_URL`, `CYBERGUARD_HEAD_ADMIN_USERNAME`, and `CYBERGUARD_HEAD_ADMIN_PASSWORD` set in the local process environment. Never put administrator credentials in Vercel's `VITE_*` variables or share them in logs/chat.
 
 ## Incident response
 

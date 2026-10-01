@@ -11,6 +11,7 @@ from typing import List
 from urllib.parse import parse_qs, urlparse
 from xml.etree import ElementTree
 from regional_scam_detector import analyze_regional_scam
+from dlp_engine import analyze_dlp
 
 import tldextract
 
@@ -87,7 +88,48 @@ def model_signal(payload: str) -> tuple[int, dict | None]:
     else:
         return 0, None
     score = round(probability * 100)
-    return score, {"name": "Trained Text Model Output", "model_output": score, "model": "TF-IDF + Logistic Regression" if TEXT_MODEL is not None else FALLBACK_TEXT_MODEL["algorithm"]}
+    indicator = {"name": "Trained Text Model Output", "model_output": score, "model": "TF-IDF + Logistic Regression" if TEXT_MODEL is not None else FALLBACK_TEXT_MODEL["algorithm"]}
+    if TEXT_MODEL is not None:
+        indicator["feature_attribution"] = model_feature_attribution(payload)
+    return score, indicator
+
+
+def model_feature_attribution(payload: str, limit: int = 5) -> dict:
+    """Explain a linear text-model margin without presenting terms as causal evidence."""
+    if TEXT_MODEL is None:
+        return {"status": "unavailable", "reason": "The deployed text model does not expose linear feature weights.", "features": []}
+    try:
+        vectorizer = TEXT_MODEL.named_steps["tfidf"]
+        classifier = TEXT_MODEL.named_steps["classifier"]
+        if len(classifier.coef_) != 1 or len(classifier.classes_) != 2:
+            return {"status": "unavailable", "reason": "Feature attribution supports only binary linear classifiers.", "features": []}
+        values = vectorizer.transform([payload]).tocsr()
+        coefficients = classifier.coef_[0]
+        suspicious_index = list(classifier.classes_).index(1)
+        direction = 1 if suspicious_index == 1 else -1
+        contributions = []
+        feature_names = vectorizer.get_feature_names_out()
+        for index, value in zip(values.indices, values.data):
+            contribution = float(value) * float(coefficients[index]) * direction
+            if contribution == 0:
+                continue
+            term = str(feature_names[index])
+            if re.search(r"[@:/\\\d]", term) or len(term) > 48:
+                term = "[redacted feature]"
+            contributions.append({
+                "feature": term,
+                "effect": "suspicious" if contribution > 0 else "benign",
+                "logit_contribution": round(contribution, 5),
+            })
+        contributions.sort(key=lambda item: abs(item["logit_contribution"]), reverse=True)
+        return {
+            "status": "available",
+            "method": "tfidf_logistic_logit_contribution",
+            "interpretation": "Signed local model-margin contribution; not causal evidence or a calibrated probability.",
+            "features": contributions[:max(1, min(int(limit), 10))],
+        }
+    except (AttributeError, KeyError, TypeError, ValueError, IndexError):
+        return {"status": "unavailable", "reason": "The configured model pipeline is incompatible with linear feature attribution.", "features": []}
 
 def analyze_phishing_and_url(payload: str) -> tuple[int, List[str], List[dict]]:
     score = 5
@@ -668,6 +710,11 @@ def analyze_technical_activity(payload: str, category: str = "network") -> tuple
         score = min(99, score + structured_score - 15)
         reasons.extend(structured_reasons)
         indicators.extend(structured_indicators)
+    if category == "exfiltration":
+        dlp_result = analyze_dlp(payload)
+        score = min(99, score + dlp_result["risk_score"])
+        reasons.extend(dlp_result["reasons"])
+        indicators.extend(dlp_result["indicators"])
     return min(score, 99), reasons, indicators
 
 def adversarial_self_test(category: str, payload: str) -> dict:

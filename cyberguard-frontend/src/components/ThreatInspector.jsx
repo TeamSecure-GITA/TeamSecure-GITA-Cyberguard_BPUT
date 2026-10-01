@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Mail, Video, Link, FileText, UserX, AlertTriangle, Upload, Search, Loader2, PlayCircle, Globe, Trash2 } from 'lucide-react';
 import axios from 'axios';
+import { getApiBaseUrl } from '../apiConfig';
 
 export default function ThreatInspector({ accessToken }) {
   const [activeSubTab, setActiveSubTab] = useState('email');
@@ -28,7 +29,7 @@ export default function ThreatInspector({ accessToken }) {
   const [contactBusy, setContactBusy] = useState(false);
   const [contactError, setContactError] = useState('');
 
-  const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+  const apiBaseUrl = getApiBaseUrl();
   const fileAnalysisTabs = ['image', 'audio', 'video', 'deepfake', 'email_file', 'malware'];
   const showLivePreview = activeSubTab === 'email' && Boolean(inputText.trim());
   const liveAssessment = showLivePreview && livePreview.payload === inputText ? livePreview.assessment : null;
@@ -470,9 +471,23 @@ export default function ThreatInspector({ accessToken }) {
           <div className="space-y-1.5 pt-2">
             <span className="text-[10px] font-bold text-slate-400 uppercase">Engine Indicators</span>
             {analysisResult.indicators.map((ind, idx) => (
-              <div key={idx} className="flex justify-between text-xs bg-slate-800/40 p-2 rounded border border-slate-800">
-                <span className="text-slate-300">{ind.name}</span>
-                <span className="font-mono text-cyan-400 font-bold">{ind.score}{ind.weight ? ` · weight ${ind.weight}` : ''}</span>
+              <div key={idx} className="text-xs bg-slate-800/40 p-2 rounded border border-slate-800">
+                <div className="flex justify-between gap-3">
+                  <span className="text-slate-300">{ind.name}</span>
+                  <span className="font-mono text-cyan-400 font-bold">{ind.score}{ind.weight ? ` · weight ${ind.weight}` : ''}</span>
+                </div>
+                {ind.feature_attribution?.status === 'available' && (
+                  <div className="mt-2 border-t border-slate-700/70 pt-2" aria-label="Local text model feature attribution">
+                    <p className="text-[10px] text-slate-400">{ind.feature_attribution.interpretation}</p>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {ind.feature_attribution.features.map((feature, featureIndex) => (
+                        <span key={`${feature.feature}-${featureIndex}`} className={`rounded px-1.5 py-1 text-[10px] ${feature.effect === 'suspicious' ? 'bg-rose-500/10 text-rose-200' : 'bg-emerald-500/10 text-emerald-200'}`}>
+                          {feature.feature} · {feature.effect} {feature.logit_contribution}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>

@@ -1,3 +1,5 @@
+import os
+
 from locust import HttpUser, between, task
 
 
@@ -5,8 +7,18 @@ class CyberGuardLoadUser(HttpUser):
     wait_time = between(1, 3)
 
     def on_start(self):
-        response = self.client.post("/api/v1/auth/login", json={"username": "analyst", "password": "analyst123"})
-        self.token = response.json().get("access_token", "")
+        username = os.getenv("CYBERGUARD_LOAD_TEST_USERNAME", "")
+        password = os.getenv("CYBERGUARD_LOAD_TEST_PASSWORD", "")
+        if not username or not password:
+            raise RuntimeError("Set CYBERGUARD_LOAD_TEST_USERNAME and CYBERGUARD_LOAD_TEST_PASSWORD before running Locust.")
+        response = self.client.post(
+            "/api/v1/auth/login",
+            json={"username": username, "password": password},
+        )
+        response.raise_for_status()
+        self.token = response.json().get("access_token")
+        if not self.token:
+            raise RuntimeError("The configured load-test user did not return an access token.")
         self.headers = {"Authorization": f"Bearer {self.token}"}
 
     @task(3)

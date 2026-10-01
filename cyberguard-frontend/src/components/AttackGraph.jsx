@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import ReactFlow, { Background, Controls, MarkerType } from 'reactflow';
 import axios from 'axios';
+import { getApiBaseUrl } from '../apiConfig';
 import { GitBranch, RefreshCw } from 'lucide-react';
 import 'reactflow/dist/style.css';
 
-const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+const apiBaseUrl = getApiBaseUrl();
 
 const initialNodes = [
   { id: '1', position: { x: 50, y: 120 }, data: { label: 'Attacker (Threat Origin)' }, style: { background: '#ef4444', color: '#fff', borderRadius: '8px', border: '1px solid #b91c1c', fontWeight: 'bold', fontSize: '11px' } },
@@ -25,6 +26,19 @@ const initialEdges = [
 export default function AttackGraph({ accessToken }) {
   const [mode, setMode] = useState('inferred'); // 'inferred' or 'topology'
   const [incidents, setIncidents] = useState([]);
+  const [supplyChainInventory, setSupplyChainInventory] = useState(JSON.stringify([
+    { id: 'vendor-1', name: 'Shared package vendor', criticality: 'high' },
+    { id: 'service-1', name: 'Payments API', criticality: 'critical' },
+    { id: 'service-2', name: 'Customer portal', criticality: 'high' },
+  ], null, 2));
+  const [supplyChainDependencies, setSupplyChainDependencies] = useState(JSON.stringify([
+    { supplier: 'vendor-1', dependent: 'service-1' },
+    { supplier: 'service-1', dependent: 'service-2' },
+  ], null, 2));
+  const [compromisedNodes, setCompromisedNodes] = useState('["vendor-1"]');
+  const [supplyChainResult, setSupplyChainResult] = useState(null);
+  const [supplyChainError, setSupplyChainError] = useState('');
+  const [supplyChainBusy, setSupplyChainBusy] = useState(false);
   const [selectedIncidentOverride, setSelectedIncidentOverride] = useState(null);
   const selectedIncidentId = incidents.some((incident) => incident.database_id === selectedIncidentOverride)
     ? selectedIncidentOverride
@@ -33,7 +47,7 @@ export default function AttackGraph({ accessToken }) {
   const [chainEvents, setChainEvents] = useState([]);
   const [loadedGraphKey, setLoadedGraphKey] = useState(null);
   const requestKey = mode === 'topology' ? 'topology' : `incident:${selectedIncidentId ?? 'none'}`;
-  const loading = Boolean(mode === 'topology' || selectedIncidentId) && loadedGraphKey !== requestKey;
+  const loading = Boolean(mode === 'topology' || (mode === 'inferred' && selectedIncidentId)) && loadedGraphKey !== requestKey;
 
   // Fetch recent incidents for selection
   useEffect(() => {
@@ -59,7 +73,7 @@ export default function AttackGraph({ accessToken }) {
         })
         .catch(() => {})
         .finally(() => { if (active) setLoadedGraphKey(requestKey); });
-    } else if (selectedIncidentId) {
+    } else if (mode === 'inferred' && selectedIncidentId) {
       axios.get(`${apiBaseUrl}/api/v1/incidents/${selectedIncidentId}/attack-chain`, config)
         .then((res) => {
           const events = res.data.events || [];
@@ -110,6 +124,66 @@ export default function AttackGraph({ accessToken }) {
     }
     return () => { active = false; };
   }, [mode, selectedIncidentId, accessToken, requestKey]);
+
+  const analyzeSupplyChain = async () => {
+    setSupplyChainError('');
+    setSupplyChainBusy(true);
+    try {
+      const response = await axios.post(`${apiBaseUrl}/api/v1/roadmap/supply-chain`, {
+        nodes: JSON.parse(supplyChainInventory),
+        dependencies: JSON.parse(supplyChainDependencies),
+        compromised_nodes: JSON.parse(compromisedNodes),
+      }, { headers: { Authorization: 'Bearer ' + accessToken } });
+      const result = response.data;
+      setSupplyChainResult(result);
+      const affectedById = new Map(result.affected_nodes.map((node) => [node.id, node]));
+      const ids = [...new Set([
+        ...result.compromised_nodes,
+        ...result.affected_nodes.map((node) => node.id),
+      ])];
+      const nodes = ids.map((id, index) => {
+        const knownNode = affectedById.get(id);
+        return {
+          id,
+          position: { x: 60 + (index % 4) * 210, y: 60 + Math.floor(index / 4) * 120 },
+          data: { label: knownNode ? knownNode.name : id + ' (compromised)' },
+          style: {
+            background: result.compromised_nodes.includes(id) ? '#dc2626' : '#0284c7',
+            color: '#fff',
+            borderRadius: '8px',
+            border: '1px solid rgba(255,255,255,0.25)',
+            fontWeight: 'bold',
+            fontSize: '11px',
+          },
+        };
+      });
+      const edgeMap = new Map();
+      result.affected_nodes.forEach((node) => {
+        node.dependency_chain.slice(0, -1).forEach((supplier, index) => {
+          const dependent = node.dependency_chain[index + 1];
+          const id = `${supplier}-${dependent}`;
+          edgeMap.set(id, {
+            id,
+            source: supplier,
+            target: dependent,
+            label: 'supplier dependency',
+            markerEnd: { type: MarkerType.ArrowClosed, color: '#38bdf8' },
+            style: { stroke: '#38bdf8' },
+          });
+        });
+      });
+      setGraph({ nodes, edges: [...edgeMap.values()] });
+    } catch (error) {
+      setSupplyChainResult(null);
+      const detail = error.response?.data?.detail;
+      const message = Array.isArray(detail)
+        ? detail.map((item) => item.msg || JSON.stringify(item)).join('; ')
+        : detail || error.message || 'Supply-chain analysis failed.';
+      setSupplyChainError(message);
+    } finally {
+      setSupplyChainBusy(false);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -165,9 +239,54 @@ export default function AttackGraph({ accessToken }) {
             >
               SOC Topology
             </button>
+            <button
+              type="button"
+              onClick={() => setMode('supply-chain')}
+              className={`px-3 py-1 text-xs font-semibold rounded-md transition ${
+                mode === 'supply-chain'
+                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Supply Chain
+            </button>
           </div>
         </div>
       </div>
+
+      {mode === 'supply-chain' && (
+        <section className="bg-cardBg border border-slate-700/60 rounded-xl p-5 shadow-lg space-y-3">
+          <div>
+            <h3 className="text-sm font-bold text-white">Supplier compromise blast radius</h3>
+            <p className="text-xs text-slate-400 mt-1">
+              Enter your supplier-to-dependent inventory. This is a data-driven simulation using only the graph and compromise signals you provide.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+            <label className="text-xs text-slate-300 space-y-1">
+              Nodes (JSON array)
+              <textarea value={supplyChainInventory} onChange={(event) => setSupplyChainInventory(event.target.value)} rows={7} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 font-mono text-[11px] text-slate-200" />
+            </label>
+            <label className="text-xs text-slate-300 space-y-1">
+              Dependencies (JSON array)
+              <textarea value={supplyChainDependencies} onChange={(event) => setSupplyChainDependencies(event.target.value)} rows={7} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 font-mono text-[11px] text-slate-200" />
+            </label>
+            <label className="text-xs text-slate-300 space-y-1">
+              Compromised node IDs (JSON array)
+              <textarea value={compromisedNodes} onChange={(event) => setCompromisedNodes(event.target.value)} rows={7} className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 font-mono text-[11px] text-slate-200" />
+            </label>
+          </div>
+          <button type="button" disabled={supplyChainBusy} onClick={analyzeSupplyChain} className="px-4 py-2 rounded-lg bg-cyan-500/20 border border-cyan-500/40 text-cyan-200 text-xs font-semibold disabled:opacity-50">
+            {supplyChainBusy ? 'Calculating…' : 'Calculate blast radius'}
+          </button>
+          {supplyChainError && <p role="alert" className="text-xs text-rose-300">{supplyChainError}</p>}
+          {supplyChainResult && (
+            <p className="text-xs text-slate-300" role="status">
+              {supplyChainResult.affected_count} downstream node(s) affected — {supplyChainResult.mode}.
+            </p>
+          )}
+        </section>
+      )}
 
       {/* Graph Visualizer Canvas */}
       <div className="bg-cardBg border border-slate-700/60 rounded-xl p-4 shadow-lg h-[460px] flex flex-col">

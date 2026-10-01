@@ -5,7 +5,7 @@ services:
     rootDir: cyberguard-backend
     buildCommand: pip install -r requirements.txt -r requirements-models.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /
+    healthCheckPath: /health
     envVars:
       - key: CYBERGUARD_JWT_SECRET
         generateValue: true
@@ -22,7 +22,7 @@ services:
       - key: CYBERGUARD_HEAD_ADMIN_PASSWORD
         sync: false
       - key: CYBERGUARD_FRONTEND_ORIGINS
-        value: https://teamsecure-gita-cyberguard.vercel.app,http://localhost:5173,http://127.0.0.1:5173
+        value: https://teamsecure-gita-cyberguard.vercel.app
       - key: CYBERGUARD_PUBLIC_APP_URL
         value: https://teamsecure-gita-cyberguard.vercel.app
       - key: CYBERGUARD_DB_PATH

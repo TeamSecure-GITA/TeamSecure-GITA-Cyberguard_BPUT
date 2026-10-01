@@ -72,7 +72,7 @@ import website_inspector
 from extended_intel import scan_payload
 from models import ForecastRequest, LoginRequest, SimulationRequest, ThreatAnalysisRequest, ThreatIntelLookup
 from models import ProviderEndpointIsolationRequest, ProviderIdentityDisableRequest, ProviderTicketRequest
-from roadmap_features import analyst_bias_report, attention_heatmap, attacker_resource_cost, breach_economics, compliance_diff, counterfactual_replay, cross_modal_consistency, jurisdiction_route, seed_honeytokens, shared_immunity
+from roadmap_features import analyst_bias_report, attention_heatmap, attacker_resource_cost, breach_economics, compliance_diff, counterfactual_replay, cross_modal_consistency, jurisdiction_route, seed_honeytokens, shared_immunity, supply_chain_blast_radius
 from prevention_engine import (
     campaign_aware_prevention,
     containment_action_plan,
@@ -756,17 +756,61 @@ def test_text_model_risk_gate_uses_configured_confidence_threshold(monkeypatch):
 def test_text_training_defaults_to_uci_and_saves_a_usable_artifact(tmp_path):
     assert DEFAULT_DATASET.name == "uci_sms_spam.csv"
     dataset = tmp_path / "messages.csv"
-    dataset.write_text(
-        "text,label\n" + "".join(f"normal campus notice {index},0\n" for index in range(20))
-        + "".join(f"urgent prize claim verify account {index},1\n" for index in range(20)),
-        encoding="utf-8",
+    rows = [
+        *[(f"normal campus notice benignword{index}", 0) for index in range(20)],
+        *[(f"urgent prize claim verify account spamword{index}", 1) for index in range(20)],
+    ]
+    dataset.write_text("text,label\n" + "".join(f"{text},{label}\n" for text, label in rows), encoding="utf-8")
+    from sklearn.model_selection import train_test_split
+
+    train_texts, holdout_texts, _, _ = train_test_split(
+        [text for text, _ in rows],
+        [label for _, label in rows],
+        test_size=0.25,
+        random_state=42,
+        stratify=[label for _, label in rows],
     )
     model_path = tmp_path / "model.joblib"
+    metrics_path = tmp_path / "metrics.json"
 
-    model = train_text_model(dataset, model_path)
+    model = train_text_model(dataset, model_path, metrics_path)
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    vocabulary = model.named_steps["tfidf"].vocabulary_
 
     assert model_path.exists()
+    assert metrics["artifact_is_holdout_evaluated"] is True
+    assert metrics["holdout_reused_for_artifact_training"] is False
+    assert metrics["artifact_training_samples"] == len(train_texts)
+    assert metrics["evaluation_holdout_samples"] == len(holdout_texts)
+    assert all(text.split()[-1] not in vocabulary for text in holdout_texts)
     assert model.predict_proba(["urgent verify account"])[0][1] > model.predict_proba(["normal campus notice"])[0][1]
+
+
+def test_trained_text_model_explains_local_linear_features_without_raw_identifiers(monkeypatch, tmp_path):
+    pytest.importorskip("sklearn")
+    dataset = tmp_path / "explainable-messages.csv"
+    dataset.write_text(
+        "text,label\n"
+        + "".join(f"normal campus notice routineword{index},0\n" for index in range(20))
+        + "".join(f"urgent verify credentials threatword{index},1\n" for index in range(20)),
+        encoding="utf-8",
+    )
+    model = train_text_model(dataset, tmp_path / "explainable-model.joblib")
+    monkeypatch.setattr(detection_engine, "TEXT_MODEL", model)
+    monkeypatch.setattr(detection_engine, "FALLBACK_TEXT_MODEL", None)
+
+    score, indicator = detection_engine.model_signal(
+        "urgent verify credentials threatword3 contact analyst@example.test at 203.0.113.5"
+    )
+    attribution = indicator["feature_attribution"]
+
+    assert 0 <= score <= 100
+    assert attribution["status"] == "available"
+    assert attribution["method"] == "tfidf_logistic_logit_contribution"
+    assert any(feature["effect"] == "suspicious" for feature in attribution["features"])
+    serialized = json.dumps(attribution)
+    assert "analyst@example.test" not in serialized
+    assert "203.0.113.5" not in serialized
 
 
 def test_flower_client_redacts_local_data_and_requires_both_labels(tmp_path):
@@ -895,7 +939,17 @@ def test_cyberguard_x_artifacts_are_available():
     incident_id = result["incident_id"]
     assert incident_genome(incident_id, lead)["genome"]["fingerprint"]
     assert incident_correlations(incident_id, lead)["campaign_id"]
-    assert len(incident_attack_chain(incident_id, lead)["events"]) == 4
+    timeline = incident_attack_chain(incident_id, lead)["events"]
+    assert {event["type"] for event in timeline} == {
+        "incident_created",
+        "analysis_completed",
+        "campaign_correlated",
+    }
+    assert all(event["timestamp"] for event in timeline)
+    assert all(event["type"] not in {"signal", "triage", "response"} for event in timeline)
+    main.update_incident(incident_id, main.IncidentUpdate(status="Contained"), lead)
+    timeline = incident_attack_chain(incident_id, lead)["events"]
+    assert timeline[-1]["type"] == "workflow_updated"
     assert threat_forecast(ForecastRequest(horizon=3), lead)["forecast"][-1]["step"] == 3
     assert incident_simulation(incident_id, SimulationRequest(actions=["isolate", "revoke"]), lead)["projected_risk"] < result["assessment"]["risk_score"]
 
@@ -1286,6 +1340,59 @@ def test_limited_roadmap_workflows_are_functional():
     assert replay["counterfactual_risk"] > replay["baseline_risk"]
     diff = compliance_diff([{"id": "control-1", "status": "Needs Review"}], [{"id": "CVE-TEST", "severity": "high"}])
     assert diff["gap_count"] == 2
+
+
+def test_supply_chain_blast_radius_propagates_only_through_supplied_dependencies():
+    nodes = [
+        {"id": "vendor", "name": "Shared package vendor", "criticality": "high"},
+        {"id": "service-a", "name": "Payments API", "criticality": "critical"},
+        {"id": "service-b", "name": "Analytics", "criticality": "medium"},
+        {"id": "unrelated", "name": "Unrelated system", "criticality": "low"},
+    ]
+    dependencies = [
+        {"supplier": "vendor", "dependent": "service-a"},
+        {"source": "service-a", "target": "service-b"},
+        {"supplier": "service-b", "dependent": "vendor"},
+    ]
+
+    result = supply_chain_blast_radius(nodes, dependencies, ["vendor"])
+
+    assert result["affected_count"] == 2
+    assert [node["id"] for node in result["affected_nodes"]] == ["service-a", "service-b"]
+    assert next(node for node in result["affected_nodes"] if node["id"] == "service-b")["dependency_chain"] == [
+        "vendor",
+        "service-a",
+        "service-b",
+    ]
+    assert result["mode"].startswith("data-driven simulation")
+    assert "unrelated" not in {node["id"] for node in result["affected_nodes"]}
+
+
+def test_supply_chain_blast_radius_rejects_unknown_graph_references():
+    with pytest.raises(ValueError, match="unknown node"):
+        supply_chain_blast_radius(
+            [{"id": "vendor"}],
+            [{"supplier": "vendor", "dependent": "unknown"}],
+            ["vendor"],
+        )
+
+    with pytest.raises(HTTPException) as error:
+        main.roadmap_supply_chain(
+            {"nodes": [{"id": "vendor"}], "dependencies": [], "compromised_nodes": ["unknown"]},
+            {"username": "lead", "role": "lead"},
+        )
+    assert error.value.status_code == 422
+
+    result = main.roadmap_supply_chain(
+        {
+            "nodes": [{"id": "vendor"}, {"id": "service"}],
+            "dependencies": [{"supplier": "vendor", "dependent": "service"}],
+            "compromised_nodes": ["vendor"],
+        },
+        {"username": "lead", "role": "lead"},
+    )
+    assert result["affected_count"] == 1
+    assert result["affected_nodes"][0]["id"] == "service"
 
 
 def test_counterfactual_replay_rejects_unmodeled_variables_and_actions():
