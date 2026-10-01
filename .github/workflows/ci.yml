@@ -59,7 +59,7 @@ jobs:
           exit 1
       - name: Start test frontend
         run: |
-          npm run dev -- --host 127.0.0.1 > /tmp/cyberguard-vite.log 2>&1 &
+          VITE_API_URL=http://127.0.0.1:8000 npm run dev -- --host 127.0.0.1 > /tmp/cyberguard-vite.log 2>&1 &
           for attempt in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:5173/ > /dev/null; then
               exit 0
