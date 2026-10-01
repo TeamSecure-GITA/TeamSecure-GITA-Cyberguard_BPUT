@@ -1,4 +1,5 @@
 import ast
+import asyncio
 import hashlib
 import html
 import ipaddress
@@ -64,6 +65,9 @@ from detection_engine import FALLBACK_TEXT_MODEL, TEXT_MODEL, adversarial_self_t
 from behavioral_baseline import baseline_key, login_sample, parse_login_event, score_login_deviation, successful_login
 from geoip_enrichment import lookup_country as lookup_geoip_country
 from malware_scanner import scan_artifact
+from pcap_inspector import analyze_pcap
+from ocr_engine import extract_image_text
+from risk_scoring import score_event
 from account_rescue_engine import blast_radius, evidence_snapshot, execute_step, guardian_watch, locked_out_recovery, lockdown_plan, offline_rescue_card, provider_capabilities, rescue_plan, rescue_simulation, scan_account
 from prevention_engine import campaign_aware_prevention, containment_action_plan, deception_trigger_check, identity_trust_evaluation, insider_threat_risk, policy_aware_prevention, risk_aware_prevention_decision
 from models import IdentityTrustRequest
@@ -81,6 +85,7 @@ from response_simulator import simulate_response
 from self_healing import recommend_healing
 from threat_intel import enrich_iocs, extract_iocs
 from email_authenticity import analyze_eml
+from contact_impersonation import build_style_profile, compare_contact_message
 from website_inspector import inspect_website
 from playbook_engine import load_playbooks, plan_playbook, validate_playbook
 from llm_assistant import generate_analysis
@@ -293,7 +298,11 @@ def idp_authenticate_user(payload: dict | None, user: dict[str, str] | None = No
     suspicious_ip = source_ip in DHCP_LEASES and DHCP_LEASES[source_ip].get("hostname") == "Unknown-Kali-Linux"
     with get_db() as db:
         suspicious_event = db.execute(
-            "SELECT 1 FROM siem_events WHERE source_ip = ? OR hostname = ? LIMIT 1",
+            "SELECT 1 FROM siem_events "
+            "WHERE (source_ip = ? OR hostname = ?) "
+            "AND severity IN ('HIGH', 'CRITICAL') "
+            "AND event IN ('suspicious_login', 'malware_detected', 'privilege_escalation') "
+            "LIMIT 1",
             (source_ip, hardware_context.get("hostname")),
         ).fetchone() is not None
 
@@ -361,6 +370,16 @@ def initialize_database():
                 parent_username TEXT,
                 status TEXT NOT NULL DEFAULT 'active'
             );
+            CREATE TABLE IF NOT EXISTS known_contacts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner_username TEXT NOT NULL,
+                name TEXT NOT NULL,
+                identifiers TEXT NOT NULL,
+                style_profile TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(owner_username, name)
+            );
+            CREATE INDEX IF NOT EXISTS idx_known_contacts_owner ON known_contacts (owner_username, name);
             CREATE TABLE IF NOT EXISTS passkeys (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT NOT NULL,
@@ -676,7 +695,6 @@ app.add_middleware(
         for origin in configured_origins.split(",")
         if origin.strip()
     ],
-    allow_origin_regex=r"^https://.*\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -871,6 +889,7 @@ def normalize_residency_metadata(metadata: Any) -> dict[str, str]:
 
 def store_incident(category: str, payload: str, assessment: dict, filename: str | None = None, file_hash: str | None = None, metadata: dict | None = None):
     residency = normalize_residency_metadata(metadata)
+    score_event(assessment)
     with get_db() as db:
         cursor = db.execute(
             "INSERT INTO incidents (category, payload, filename, file_hash, risk_score, risk_level, assessment, metadata, created_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1826,11 +1845,133 @@ def me(user: dict[str, str] = Depends(current_user)):
     return user
 
 
+@app.get("/api/v1/known-contacts")
+def list_known_contacts(user: dict[str, str] = Depends(current_user)):
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT id, name, identifiers, style_profile, created_at FROM known_contacts WHERE owner_username = ? ORDER BY name",
+            (user["username"],),
+        ).fetchall()
+    return {
+        "contacts": [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "identifiers": json.loads(row["identifiers"]),
+                "sample_count": json.loads(row["style_profile"]).get("sample_count", 0),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+    }
+
+
+@app.post("/api/v1/known-contacts")
+def create_known_contact(payload: dict[str, Any], user: dict[str, str] = Depends(current_user)):
+    name = str(payload.get("name") or "").strip()[:120]
+    identifiers = payload.get("identifiers")
+    samples = payload.get("sample_messages")
+    if not name:
+        raise HTTPException(status_code=400, detail="A contact name is required.")
+    if not isinstance(identifiers, list) or not identifiers or len(identifiers) > 20:
+        raise HTTPException(status_code=400, detail="Provide between 1 and 20 known contact identifiers.")
+    normalized_identifiers = list(dict.fromkeys(
+        value.strip()[:200]
+        for value in identifiers
+        if isinstance(value, str) and value.strip()
+    ))
+    if not normalized_identifiers:
+        raise HTTPException(status_code=400, detail="At least one valid contact identifier is required.")
+    if not isinstance(samples, list) or len(samples) > 20 or any(not isinstance(value, str) or len(value) > 4000 for value in samples):
+        raise HTTPException(status_code=400, detail="Provide up to 20 sample messages, each no longer than 4,000 characters.")
+    try:
+        style_profile = build_style_profile(samples)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    try:
+        with get_db() as db:
+            db.execute(
+                "INSERT INTO known_contacts (owner_username, name, identifiers, style_profile, created_at) VALUES (?, ?, ?, ?, ?)",
+                (user["username"], name, json.dumps(normalized_identifiers), json.dumps(style_profile), datetime.now(timezone.utc).isoformat()),
+            )
+            row = db.execute(
+                "SELECT id, name, identifiers, style_profile, created_at FROM known_contacts WHERE owner_username = ? AND name = ?",
+                (user["username"], name),
+            ).fetchone()
+    except sqlite3.IntegrityError as error:
+        raise HTTPException(status_code=409, detail="A contact with this name already exists in your profile.") from error
+    write_audit(user, "known_contact_create", f"contact:{row['id']}", f"Stored style features from {style_profile['sample_count']} examples")
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "identifiers": json.loads(row["identifiers"]),
+        "sample_count": style_profile["sample_count"],
+        "created_at": row["created_at"],
+    }
+
+
+@app.delete("/api/v1/known-contacts/{contact_id}")
+def delete_known_contact(contact_id: int, user: dict[str, str] = Depends(current_user)):
+    with get_db() as db:
+        row = db.execute(
+            "SELECT id FROM known_contacts WHERE id = ? AND owner_username = ?",
+            (contact_id, user["username"]),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Known contact profile not found.")
+        db.execute("DELETE FROM known_contacts WHERE id = ? AND owner_username = ?", (contact_id, user["username"]))
+    write_audit(user, "known_contact_delete", f"contact:{contact_id}", "Deleted known contact profile")
+    return {"status": "deleted", "id": contact_id}
+
+
+def apply_known_contact_comparison(assessment: dict[str, Any], category: str, payload: str, metadata: dict[str, Any] | None, user: dict[str, str]):
+    if category.lower() != "impersonation" or not isinstance(metadata, dict):
+        return assessment
+    raw_contact_id = metadata.get("known_contact_id")
+    if raw_contact_id in (None, ""):
+        return assessment
+    try:
+        contact_id = int(raw_contact_id)
+    except (TypeError, ValueError) as error:
+        raise HTTPException(status_code=400, detail="Known contact identifier must be an integer.") from error
+    with get_db() as db:
+        contact = db.execute(
+            "SELECT id, name, identifiers, style_profile FROM known_contacts WHERE id = ? AND owner_username = ?",
+            (contact_id, user["username"]),
+        ).fetchone()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Known contact profile not found.")
+
+    comparison = compare_contact_message(payload, json.loads(contact["identifiers"]), json.loads(contact["style_profile"]))
+    assessment["known_contact_comparison"] = {
+        "contact_id": contact["id"],
+        "contact_name": contact["name"],
+        "sender_match": comparison["sender_match"],
+        "vocabulary_similarity": comparison["vocabulary_similarity"],
+        "sample_count": comparison["sample_count"],
+        "caveat": comparison["caveat"],
+    }
+    if comparison["risk_score"]:
+        previous_level = assessment["risk_level"]
+        assessment["risk_score"] = min(99, int(assessment["risk_score"]) + comparison["risk_score"])
+        assessment["indicators"].extend(comparison["indicators"])
+        evidence = " ".join(comparison["reasons"])
+        assessment["xai_explanation"] += " " + evidence + " " + comparison["caveat"]
+        assessment["explanation_summary"] += " " + evidence
+        score = assessment["risk_score"]
+        assessment["risk_level"] = "Critical" if score >= 80 else "High" if score >= 60 else "Medium" if score >= 40 else "Low" if score >= 20 else "Safe"
+        if assessment["risk_level"] != previous_level:
+            assessment["xai_explanation"] = assessment["xai_explanation"].replace(f"{previous_level} Risk:", f"{assessment['risk_level']} Risk:", 1)
+    return assessment
+
+
 @app.post("/api/v1/analyze")
 def analyze_threat(request: ThreatAnalysisRequest, user: dict[str, str] = Depends(current_user)):
     if not request.payload.strip():
         raise HTTPException(status_code=400, detail="Payload content cannot be empty.")
     assessment = evaluate_threat_payload(request.category, request.payload)
+    assessment = apply_known_contact_comparison(assessment, request.category, request.payload, request.metadata, user)
     if request.category.lower() in {"auth_logs", "ato"}:
         assessment = apply_user_login_baseline(assessment, request.payload, user)
     assessment["iocs"] = enrich_iocs(extract_iocs(request.payload))
@@ -1847,8 +1988,10 @@ def preview_threat(request: ThreatAnalysisRequest, user: dict[str, str] = Depend
     if not request.payload.strip():
         raise HTTPException(status_code=400, detail="Payload content cannot be empty.")
     assessment = evaluate_threat_payload(request.category, request.payload)
+    assessment = apply_known_contact_comparison(assessment, request.category, request.payload, request.metadata, user)
     if request.category.lower() in {"auth_logs", "ato"}:
         assessment = apply_user_login_baseline(assessment, request.payload, user, learn=False)
+    score_event(assessment)
     assessment["iocs"] = enrich_iocs(extract_iocs(request.payload))
     return {"status": "success", "category": request.category, "assessment": assessment}
 
@@ -1880,15 +2023,30 @@ async def analyze_file(category: str = Form(...), file: UploadFile = File(...), 
     filename = file.filename or "upload"
     is_eml = (file.content_type or "").lower() == "message/rfc822" or filename.lower().endswith(".eml")
     is_text = (file.content_type or "").startswith("text/") or filename.lower().endswith((".txt", ".log", ".json", ".csv"))
+    content_type = (file.content_type or "").lower()
+    is_pcap = category.lower() == "network" and (
+        filename.lower().endswith((".pcap", ".pcapng"))
+        or content_type in {"application/vnd.tcpdump.pcap", "application/x-pcap", "application/pcap"}
+    )
+    network_capture = None
+    if is_pcap:
+        try:
+            network_capture = analyze_pcap(content)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        except RuntimeError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+    is_image = content_type.startswith("image/") or filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"))
+    ocr_result = extract_image_text(content) if is_image else None
     email_result = analyze_eml(content) if is_eml else None
-    payload = email_result["payload"] if email_result else (content.decode("utf-8", errors="replace") if is_text else f"Uploaded {file.content_type or 'media'} file: {filename}")
+    payload = email_result["payload"] if email_result else json.dumps(network_capture) if network_capture else (content.decode("utf-8", errors="replace") if is_text else f"Uploaded {file.content_type or 'media'} file: {filename}")
     assessment = evaluate_threat_payload(category, payload)
     if category.lower() in {"auth_logs", "ato"}:
         assessment = apply_user_login_baseline(assessment, payload, user)
     if category.lower() == "malware":
         malware_scan = scan_artifact(content, filename)
         assessment["malware_scan"] = malware_scan
-        assessment["indicators"].extend({"name": match["rule"], "score": f"{match['meta'].get('risk_score', 70)}%", "weight": match["meta"].get("risk_score", 70)} for match in malware_scan["matches"])
+        assessment["indicators"].extend({"name": match["rule"], "weight": match["meta"].get("risk_score", 70)} for match in malware_scan["matches"])
         assessment["risk_score"] = max(assessment["risk_score"], malware_scan["risk_score"])
         if malware_scan["matches"]:
             assessment["xai_explanation"] += " " + " ".join(malware_scan["reasons"])
@@ -1899,7 +2057,32 @@ async def analyze_file(category: str = Form(...), file: UploadFile = File(...), 
         assessment["xai_explanation"] += " " + " ".join(email_result["reasons"])
         assessment["sender_authenticity"] = email_result["metadata"]
         assessment["sender_identity_verification"] = email_result["identity_verification"]
-    if not is_text and not email_result:
+        assessment["email_html_inspection"] = email_result["html_inspection"]
+    if network_capture:
+        assessment["network_capture_summary"] = {
+            "packet_count": network_capture["packet_count"],
+            "flow_count": len(network_capture["flows"]),
+        }
+    if ocr_result:
+        assessment["ocr_analysis"] = {
+            "status": ocr_result["status"],
+            "character_count": ocr_result.get("character_count", 0),
+            "truncated": ocr_result.get("truncated", False),
+        }
+        if ocr_result["status"] == "text_detected":
+            ocr_assessment = evaluate_threat_payload("email", ocr_result["text"])
+            assessment["risk_score"] = max(assessment["risk_score"], ocr_assessment["risk_score"])
+            assessment["indicators"].extend(
+                {**indicator, "name": f"OCR: {indicator['name']}"}
+                for indicator in ocr_assessment["indicators"]
+            )
+            assessment["xai_explanation"] += " OCR text was evaluated for phishing indicators. " + ocr_assessment["xai_explanation"]
+            assessment["explanation_summary"] += " OCR: " + ocr_assessment["explanation_summary"]
+            assessment["ocr_analysis"]["risk_score"] = ocr_assessment["risk_score"]
+            assessment["ocr_analysis"]["evidence"] = ocr_assessment["explanation_summary"]
+        elif ocr_result.get("reason"):
+            assessment["ocr_analysis"]["reason"] = ocr_result["reason"]
+    if not is_text and not email_result and not network_capture:
         media_result = analyze_media(content, file.content_type or "", filename, category)
         assessment["risk_score"] = max(assessment["risk_score"], media_result["score"])
         assessment["indicators"].extend(media_result["indicators"])
@@ -1941,20 +2124,20 @@ def analyze_website(payload: dict[str, Any], user: dict[str, str] = Depends(curr
     if certificate.get("verified") and certificate.get("days_remaining") is not None and certificate["days_remaining"] <= 14:
         assessment["risk_score"] = min(99, assessment["risk_score"] + 20)
         enrichment_reasons.append("The verified TLS certificate is expired or expires within 14 days.")
-        assessment["indicators"].append({"name": "TLS Certificate Expiry", "score": "90%", "weight": 20})
+        assessment["indicators"].append({"name": "TLS Certificate Expiry", "weight": 20})
     if registration.get("age_days") is not None and registration["age_days"] <= 30:
         assessment["risk_score"] = min(99, assessment["risk_score"] + 25)
         enrichment_reasons.append(f"The domain registration is recent ({registration['age_days']} days old).")
-        assessment["indicators"].append({"name": "Domain Registration Age", "score": "88%", "weight": 25})
+        assessment["indicators"].append({"name": "Domain Registration Age", "weight": 25})
     brand_mismatches = inspection.get("brand_mismatches", [])
     if inspection.get("credential_form") and brand_mismatches:
         assessment["risk_score"] = min(99, assessment["risk_score"] + 35)
         enrichment_reasons.append(f"Credential form claims a known brand on an unrelated domain ({', '.join(brand_mismatches)}).")
-        assessment["indicators"].append({"name": "Credential Form Brand Mismatch", "score": "94%", "weight": 35})
+        assessment["indicators"].append({"name": "Credential Form Brand Mismatch", "weight": 35})
     if inspection.get("credential_form") and inspection.get("cross_origin_form_actions"):
         assessment["risk_score"] = min(99, assessment["risk_score"] + 20)
         enrichment_reasons.append("Credential form submits to a different registered domain.")
-        assessment["indicators"].append({"name": "Cross-Domain Credential Submission", "score": "90%", "weight": 20})
+        assessment["indicators"].append({"name": "Cross-Domain Credential Submission", "weight": 20})
     if enrichment_reasons:
         assessment["xai_explanation"] += " " + " ".join(enrichment_reasons)
         assessment["explanation_summary"] += " " + " ".join(enrichment_reasons)
@@ -2321,11 +2504,35 @@ async def media_trust(file: UploadFile = File(...), user: dict[str, str] = Depen
 
 @app.websocket("/api/v1/ws/events")
 async def events_socket(websocket: WebSocket):
-    await websocket.accept()
+    protocol = "cyberguard.events.v1"
+    offered_protocols = websocket.scope.get("subprotocols", [])
+    token = next((value for value in offered_protocols if value != protocol), None)
     try:
+        current_user(f"Bearer {token}" if token else None)
+    except HTTPException:
+        await websocket.close(code=4401)
+        return
+
+    await websocket.accept(subprotocol=protocol if protocol in offered_protocols else None)
+    try:
+        with get_db() as db:
+            last_event_id = db.execute("SELECT COALESCE(MAX(id), 0) AS id FROM incidents").fetchone()["id"]
+        await websocket.send_json({"type": "ready"})
+        next_heartbeat = time.monotonic() + 20
         while True:
-            await websocket.send_json({"type": "heartbeat", "status": "connected"})
-            await websocket.receive_text()
+            await asyncio.sleep(1)
+            with get_db() as db:
+                rows = db.execute(
+                    "SELECT id, category, risk_score, risk_level, created_at FROM incidents WHERE id > ? ORDER BY id ASC LIMIT 100",
+                    (last_event_id,),
+                ).fetchall()
+            for row in rows:
+                event = dict(row)
+                await websocket.send_json({"type": "incident_created", "incident": event})
+                last_event_id = event["id"]
+            if time.monotonic() >= next_heartbeat:
+                await websocket.send_json({"type": "heartbeat", "status": "connected"})
+                next_heartbeat = time.monotonic() + 20
     except WebSocketDisconnect:
         return
 
@@ -2742,9 +2949,9 @@ def model_status(user: dict[str, str] = Depends(current_user)):
 @app.get("/api/v1/compliance/controls")
 def compliance_controls(user: dict[str, str] = Depends(current_user)):
     return {"controls": [
-        {"id": "cert-in-6h", "framework": "CERT-In 6-Hour Reporting", "status": "Compliant", "score": 100, "evidence": "Persisted incident records and alert dispatch API"},
-        {"id": "dpdp-rbac", "framework": "DPDP Act / Privacy", "status": "Compliant", "score": 98, "evidence": "JWT authentication and Analyst/Lead authorization"},
-        {"id": "iso-access", "framework": "ISO 27001 Access Control", "status": "Needs Review", "score": 84, "evidence": "Role controls active; production SSO remains required"},
+        {"id": "cert-in-6h", "framework": "CERT-In 6-Hour Reporting", "status": "Self-assessed", "score": None, "evidence": "Incident records and alert APIs exist; reporting timelines and operational evidence require independent validation."},
+        {"id": "dpdp-rbac", "framework": "DPDP Act / Privacy", "status": "Self-assessed", "score": None, "evidence": "Authentication and role controls exist; privacy obligations require legal and operational review."},
+        {"id": "iso-access", "framework": "ISO 27001 Access Control", "status": "Self-assessed", "score": None, "evidence": "Role controls exist; production SSO, retention, and independent control testing remain unverified."},
     ]}
 
 

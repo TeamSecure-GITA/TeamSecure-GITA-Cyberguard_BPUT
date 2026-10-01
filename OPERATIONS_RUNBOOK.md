@@ -4,6 +4,12 @@
 
 Use `docker-compose.prod.yml` for the backend, PostgreSQL, Redis, frontend, and scheduled worker. Set `CYBERGUARD_POSTGRES_PASSWORD`, `CYBERGUARD_JWT_SECRET`, and `CYBERGUARD_FRONTEND_ORIGINS` before startup. Use a URL-safe PostgreSQL password (letters, digits, `_`, or `-`) because Compose embeds it in the connection URL. The worker runs CVE synchronization; production backups must use PostgreSQL-native `pg_dump`/`pg_restore`, not the SQLite-only backup worker.
 
+## AI and enrichment runtime
+
+Render and Docker install `requirements-models.txt` for local pretrained image/audio inference and install Tesseract for image OCR. The model weights occupy about 0.72 GB on disk and need additional runtime memory; select a host sized for CPU inference. Keep `CYBERGUARD_ENABLE_PRETRAINED_MEDIA=true` only where both models are available, and verify the actual weights with `python check_models.py` or `GET /api/v1/models/status`. `CYBERGUARD_ENABLE_RDAP` and `CYBERGUARD_ENABLE_CT` control website-registration and Certificate Transparency lookups; these enrichments require outbound HTTPS access and report unavailable status when providers cannot be reached.
+
+Run `verify_all.ps1` from the project root for backend tests, frontend lint/build, deployment configuration, dependency consistency, and model inference. Set `API_URL` and `CYBERGUARD_FRONTEND_URL` to include deployed API health and Playwright smoke checks.
+
 ## Health and monitoring
 
 - `GET /` is the container health check.

@@ -203,11 +203,11 @@ export default function App() {
   }, [session, incidents.length, demoSeeded, apiBaseUrl]);
 
   React.useEffect(() => {
-    if (!session || typeof WebSocket === 'undefined') return undefined;
+    if (!session?.access_token || typeof WebSocket === 'undefined') return undefined;
     const socketUrl = `${apiBaseUrl.replace(/^http/, 'ws')}/api/v1/ws/events`;
     let socket;
     try {
-      socket = new WebSocket(socketUrl);
+      socket = new WebSocket(socketUrl, [session.access_token, 'cyberguard.events.v1']);
       socket.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data);
@@ -216,7 +216,6 @@ export default function App() {
           setRefreshKey((value) => value + 1);
         }
       };
-      socket.onopen = () => socket.send('subscribe');
     } catch {
       socket = undefined;
     }

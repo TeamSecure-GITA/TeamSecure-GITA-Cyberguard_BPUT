@@ -52,7 +52,7 @@ def score_login_deviation(sample: Mapping[str, Any], history: list[Mapping[str, 
         if value and known and value not in known:
             score += weight
             reasons.append(f"Login used a {key} not seen in this account's recent successful-login baseline.")
-            indicators.append({"name": label, "score": "85%", "weight": weight})
+            indicators.append({"name": label, "weight": weight})
     hour = sample.get("hour")
     known_hours = [item.get("hour") for item in history if isinstance(item.get("hour"), int)]
     if isinstance(hour, int) and known_hours:
@@ -60,5 +60,5 @@ def score_login_deviation(sample: Mapping[str, Any], history: list[Mapping[str, 
         if nearest_delta >= 4:
             score += 15
             reasons.append("Login hour is outside the account's recent successful-login pattern.")
-            indicators.append({"name": "Unusual Login Hour", "score": "75%", "weight": 15})
+            indicators.append({"name": "Unusual Login Hour", "weight": 15})
     return score, reasons, indicators

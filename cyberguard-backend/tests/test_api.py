@@ -412,12 +412,14 @@ def test_website_inspector_accepts_public_page_and_closes_response(monkeypatch):
     monkeypatch.setattr(website_inspector.socket, "getaddrinfo", lambda *args, **kwargs: [(None, None, None, None, ("93.184.216.34", 0))])
     monkeypatch.setattr(website_inspector, "_certificate_details", lambda hostname, address, port: {"status": "verified", "verified": True, "issuer": "Test CA", "issued_at": "2026-01-01T00:00:00+00:00", "expires_at": "2026-10-01T00:00:00+00:00", "age_days": 272, "days_remaining": 1})
     monkeypatch.setattr(website_inspector, "_domain_registration", lambda domain: {"status": "available", "available": True, "registered_at": "2026-09-01T00:00:00+00:00", "age_days": 29})
+    monkeypatch.setattr(website_inspector, "_certificate_transparency", lambda domain: {"status": "available", "available": True, "certificate_count": 2, "matching_names": [domain, f"www.{domain}"]})
 
     result = website_inspector.inspect_website("https://public.example/")
 
     assert result["title"] == "Safe page"
     assert result["tls_certificate"]["issuer"] == "Test CA"
     assert result["domain_registration"]["age_days"] == 29
+    assert result["certificate_transparency"]["certificate_count"] == 2
     assert any("expires in 1 days" in finding for finding in result["findings"])
     assert any("registered recently" in finding for finding in result["findings"])
     assert response.closed is True
@@ -450,6 +452,57 @@ def test_website_enrichment_changes_assessment_risk(monkeypatch):
     assert result["assessment"]["risk_level"] == "Medium"
     assert {item["name"] for item in result["assessment"]["indicators"]} == {"TLS Certificate Expiry", "Domain Registration Age"}
     assert "recent (10 days old)" in result["assessment"]["xai_explanation"]
+
+
+def test_certificate_transparency_adapter_parses_names_and_rejects_redirects(monkeypatch):
+    response_body = json.dumps([
+        {"name_value": "example.com\nwww.example.com"},
+        {"name_value": "unrelated.example.net"},
+    ]).encode()
+    captured = {}
+
+    class Response:
+        is_redirect = False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_content(self, chunk_size):
+            yield response_body
+
+        def close(self):
+            return None
+
+    class Session:
+        trust_env = True
+
+        def mount(self, prefix, adapter):
+            return None
+
+        def get(self, url, **kwargs):
+            captured.update({"url": url, **kwargs})
+            return Response()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(website_inspector, "CT_ENABLED", True)
+    monkeypatch.setattr(website_inspector, "_safe_addresses", lambda hostname: ["93.184.216.34"])
+    monkeypatch.setattr(website_inspector.requests, "Session", Session)
+
+    result = website_inspector._certificate_transparency("example.com")
+
+    assert result["status"] == "available"
+    assert result["certificate_count"] == 2
+    assert result["matching_names"] == ["example.com", "www.example.com"]
+    assert captured["url"].startswith("https://crt.sh/")
+    assert captured["allow_redirects"] is False
+
+    class RedirectResponse(Response):
+        is_redirect = True
+
+    monkeypatch.setattr(Session, "get", lambda self, url, **kwargs: RedirectResponse())
+    assert website_inspector._certificate_transparency("example.com")["status"] == "redirect_rejected"
 
 
 def test_pinned_website_adapter_connects_to_resolved_ip_and_keeps_tls_hostname(monkeypatch):
@@ -540,6 +593,27 @@ def test_eml_analysis_exposes_sender_identity_assessment(monkeypatch):
     assert any(item["name"] == "Sender Identity Verification" for item in result["indicators"])
 
 
+def test_eml_analysis_flags_hidden_links_iframes_and_external_forms():
+    result = analyze_eml(
+        b"From: alerts@bput.ac.in\r\n"
+        b"MIME-Version: 1.0\r\n"
+        b"Content-Type: text/html; charset=utf-8\r\n\r\n"
+        b"<div style='display:none'><a href='https://login.attacker.example'>hidden</a></div>"
+        b"<iframe src='https://frame.example'></iframe>"
+        b"<form action='https://collect.example/submit'></form>"
+    )
+
+    inspection = result["html_inspection"]
+    assert len(inspection["hidden_links"]) == 1
+    assert len(inspection["iframes"]) == 1
+    assert inspection["external_form_actions"] == ["https://collect.example/submit"]
+    assert {indicator["name"] for indicator in result["indicators"]} >= {
+        "Hidden Email Links",
+        "Email HTML Iframes",
+        "External Email Form Action",
+    }
+
+
 def test_pretrained_detector_maps_ai_voice_and_real_labels_correctly():
     assert _is_suspicious_label("AIVoice")
     assert _is_suspicious_label("AI-generated speech")
@@ -553,6 +627,8 @@ def test_media_status_distinguishes_cached_from_loaded_weights(monkeypatch, tmp_
     audio_path = tmp_path / "audio"
     image_path.mkdir()
     audio_path.mkdir()
+    (image_path / "model.safetensors").write_bytes(b"x" * 1_000_000)
+    (audio_path / "model.safetensors").write_bytes(b"x" * 1_000_000)
     monkeypatch.setattr(deepfake_models, "_IMAGE_MODEL", str(image_path))
     monkeypatch.setattr(deepfake_models, "_AUDIO_MODEL", str(audio_path))
     monkeypatch.setattr(deepfake_models, "_PIPELINES", {})
@@ -564,6 +640,25 @@ def test_media_status_distinguishes_cached_from_loaded_weights(monkeypatch, tmp_
     assert status["mode"] == "pretrained-cached"
     assert status["weights_cached"] == {"image": True, "audio": True}
     assert status["loaded"] == []
+
+
+def test_media_status_rejects_git_lfs_pointer_weights(monkeypatch, tmp_path):
+    image_path = tmp_path / "image"
+    audio_path = tmp_path / "audio"
+    image_path.mkdir()
+    audio_path.mkdir()
+    (image_path / "model.safetensors").write_text("version https://git-lfs.github.com/spec/v1\noid sha256:test\nsize 1234567\n")
+    monkeypatch.setattr(deepfake_models, "_IMAGE_MODEL", str(image_path))
+    monkeypatch.setattr(deepfake_models, "_AUDIO_MODEL", str(audio_path))
+    monkeypatch.setattr(deepfake_models, "_PIPELINES", {})
+    monkeypatch.setattr(deepfake_models, "_LOAD_ERRORS", {})
+    monkeypatch.setenv("CYBERGUARD_ENABLE_PRETRAINED_MEDIA", "true")
+
+    status = deepfake_models.model_status()
+
+    assert status["mode"] == "invalid-weights"
+    assert status["weights_cached"] == {"image": False, "audio": False}
+    assert status["weight_status"]["image"]["reason"] == "Git-LFS pointer"
 
 
 def test_media_inspection_status_reflects_missing_heuristic_dependencies(monkeypatch):
@@ -759,6 +854,40 @@ def test_admin_and_threat_intel_routes():
     assert threat_intel_lookup(ThreatIntelLookup(value="8.8.8.8"), admin)["results"]
 
 
+def test_compliance_controls_do_not_claim_unverified_scores():
+    controls = compliance_controls({"username": "admin", "role": "admin"})["controls"]
+
+    assert all(control["status"] == "Self-assessed" for control in controls)
+    assert all(control["score"] is None for control in controls)
+
+
+def test_websocket_pushes_new_incident_metadata_for_authenticated_user(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "events.db")
+    initialize_database()
+    session = login(LoginRequest(username="lead", password="lead123"))
+    token = session["access_token"]
+
+    with TestClient(main.app).websocket_connect(
+        "/api/v1/ws/events",
+        subprotocols=[token, "cyberguard.events.v1"],
+    ) as websocket:
+        assert websocket.receive_json() == {"type": "ready"}
+        incident_id = main.store_incident(
+            "url",
+            "malicious example",
+            {"risk_score": 75, "risk_level": "High"},
+        )
+
+        event = websocket.receive_json()
+
+    assert event["type"] == "incident_created"
+    assert event["incident"]["id"] == incident_id
+    assert event["incident"]["category"] == "url"
+    assert "payload" not in event["incident"]
+
+
 def test_cyberguard_x_artifacts_are_available():
     initialize_database()
     lead = login(LoginRequest(username="lead", password="lead123"))["user"]
@@ -925,6 +1054,36 @@ def test_siem_dhcp_and_idp_correlation_workflow():
     assert blocked["auth_status"] == "BLOCKED"
 
 
+def test_idp_allows_trusted_login_with_low_severity_success_event(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "idp-siem.db")
+    initialize_database()
+    lead = {"username": "lead", "role": "lead"}
+    siem_ingest_event(
+        {
+            "source_ip": "192.168.1.10",
+            "event_type": "authentication_success",
+            "severity": "LOW",
+            "source_host": "Admin-Workstation",
+        },
+        lead,
+    )
+
+    auth = idp_authenticate_user(
+        {"username": "user_admin", "password": "admin123", "source_ip": "192.168.1.10"},
+        lead,
+    )
+
+    assert auth["auth_status"] == "SUCCESS"
+
+
+def test_cors_allows_only_configured_origins():
+    cors = next(middleware for middleware in main.app.user_middleware if middleware.cls.__name__ == "CORSMiddleware")
+
+    expected_origins = [origin.strip() for origin in main.configured_origins.split(",") if origin.strip()]
+    assert cors.kwargs["allow_origins"] == expected_origins
+    assert cors.kwargs.get("allow_origin_regex") is None
+
+
 def test_siem_demo_seed_is_persistent_and_idempotent(tmp_path, monkeypatch):
     monkeypatch.setattr("main.DB_PATH", tmp_path / "siem.db")
     initialize_database()
@@ -953,7 +1112,9 @@ def test_sprint_1_intelligence_signals_are_available():
     assert incident_intent(incident_id, lead)["confidence"] >= 50
     assert incident_drift(incident_id, lead)["drift_score"] >= 0
     assert incident_memory(incident_id, lead)["status"] in {"memory-hit", "fresh-analysis"}
-    assert incident_explainability(incident_id, lead)["explainability_score"] >= 0
+    explainability = incident_explainability(incident_id, lead)
+    assert explainability["contribution_status"] == "available"
+    assert explainability["risk_score"] == result["assessment"]["risk_score"]
 
     outcome = record_alert_outcome(incident_id, "phishing", result["assessment"]["risk_score"], "malicious", "lead")
     report = alert_quality(lead)

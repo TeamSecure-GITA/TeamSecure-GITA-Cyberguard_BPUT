@@ -6,25 +6,25 @@ export default function ComplianceTab({ accessToken }) {
   const [complianceData, setComplianceData] = useState([
     {
       framework: 'CERT-In 6-Hour Reporting Mandate',
-      status: 'Compliant',
-      score: '100%',
-      description: 'Automated threat categorization and incident log generation configured for immediate reporting.',
-      icon: CheckCircle2,
-      color: 'text-emerald-400',
+      status: 'Self-assessed',
+      score: null,
+      description: 'Incident records and alert APIs exist; reporting timelines and operational evidence require independent validation.',
+      icon: AlertTriangle,
+      color: 'text-amber-400',
     },
     {
       framework: 'DPDP Act (Data Protection & Privacy)',
-      status: 'Compliant',
-      score: '98%',
-      description: 'Role-Based Access Control (RBAC) enforced with dynamic PII masking on threat logs.',
-      icon: CheckCircle2,
-      color: 'text-emerald-400',
+      status: 'Self-assessed',
+      score: null,
+      description: 'Authentication and role controls exist; privacy obligations require legal and operational review.',
+      icon: AlertTriangle,
+      color: 'text-amber-400',
     },
     {
       framework: 'ISO 27001 ISMS Controls',
-      status: 'Needs Review',
-      score: '84%',
-      description: 'Access control policies matched. Real-time log retention strategy needs validation.',
+      status: 'Self-assessed',
+      score: null,
+      description: 'Role controls exist; production SSO, retention, and independent control testing remain unverified.',
       icon: AlertTriangle,
       color: 'text-amber-400',
     },
@@ -83,7 +83,7 @@ export default function ComplianceTab({ accessToken }) {
             <div key={idx} className="bg-cardBg border border-slate-700/60 rounded-xl p-5 space-y-3">
               <div className="flex justify-between items-start">
                 <Icon className={item.color} size={24} />
-                <span className="text-lg font-bold text-slate-200">{item.score}</span>
+                <span className="text-xs font-semibold text-slate-300">{item.score == null ? 'Not assessed' : item.score}</span>
               </div>
               <div>
                 <h3 className="text-sm font-semibold text-slate-200">{item.framework}</h3>

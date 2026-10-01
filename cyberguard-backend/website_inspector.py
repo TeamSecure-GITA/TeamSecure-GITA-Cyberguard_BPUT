@@ -15,7 +15,9 @@ from requests.adapters import HTTPAdapter
 from detection_engine import BRAND_DOMAINS
 
 MAX_RESPONSE_BYTES = 1_000_000
+MAX_CT_RESPONSE_BYTES = 512_000
 RDAP_ENABLED = os.getenv("CYBERGUARD_ENABLE_RDAP", "false").lower() in {"1", "true", "yes"}
+CT_ENABLED = os.getenv("CYBERGUARD_ENABLE_CT", "true").lower() in {"1", "true", "yes"}
 TRUSTED_BRAND_VARIANTS = {
     "google": {"google.com", "google.co.in"},
     "sbi": {"sbi.co.in", "onlinesbi.sbi"},
@@ -201,6 +203,88 @@ def _domain_registration(domain: str) -> dict[str, Any]:
         session.close()
 
 
+def _certificate_transparency(domain: str) -> dict[str, Any]:
+    if not CT_ENABLED:
+        return {"status": "disabled", "available": False, "certificate_count": 0, "matching_names": []}
+
+    hostname = domain.lower().rstrip(".")
+    if not hostname or len(hostname) > 253 or not re.fullmatch(r"(?i)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}", hostname):
+        return {"status": "invalid_domain", "available": False, "certificate_count": 0, "matching_names": []}
+
+    providers = (
+        (
+            "crt.sh",
+            "crt.sh",
+            f"https://crt.sh/?q=%25.{quote(hostname, safe='')}&output=json",
+            lambda record: record.get("name_value", "").splitlines() if isinstance(record.get("name_value"), str) else [],
+        ),
+        (
+            "certspotter",
+            "api.certspotter.com",
+            f"https://api.certspotter.com/v1/issuances?domain={quote(hostname, safe='')}&include_subdomains=true&expand=dns_names",
+            lambda record: record.get("dns_names", []) if isinstance(record.get("dns_names"), list) else [],
+        ),
+    )
+    redirect_rejected = False
+    for provider_name, provider_host, url, extract_names in providers:
+        session = None
+        response = None
+        try:
+            addresses = _safe_addresses(provider_host)
+            session = requests.Session()
+            session.trust_env = False
+            session.mount("https://", _PinnedAddressAdapter(provider_host, addresses[0], 443))
+            response = session.get(
+                url,
+                timeout=(3, 5),
+                allow_redirects=False,
+                stream=True,
+                headers={"Accept": "application/json"},
+            )
+            if response.is_redirect:
+                redirect_rejected = True
+                continue
+            response.raise_for_status()
+            body = bytearray()
+            for chunk in response.iter_content(8192):
+                body.extend(chunk)
+                if len(body) > MAX_CT_RESPONSE_BYTES:
+                    raise ValueError("Certificate Transparency response exceeded the inspection size limit")
+            records = json.loads(body)
+            if not isinstance(records, list):
+                raise ValueError("Certificate Transparency response was not a JSON list")
+            matching_names = set()
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                for name in extract_names(record):
+                    if not isinstance(name, str):
+                        continue
+                    normalized = name.strip().lower().lstrip("*.").rstrip(".")
+                    if normalized == hostname or normalized.endswith("." + hostname):
+                        matching_names.add(normalized)
+            return {
+                "status": "available",
+                "available": True,
+                "provider": provider_name,
+                "certificate_count": len(records),
+                "matching_names": sorted(matching_names)[:100],
+            }
+        except (OSError, requests.RequestException, ValueError, json.JSONDecodeError):
+            continue
+        finally:
+            if response is not None:
+                response.close()
+            if session is not None:
+                session.close()
+    return {
+        "status": "redirect_rejected" if redirect_rejected else "unavailable",
+        "available": False,
+        "certificate_count": 0,
+        "matching_names": [],
+    }
+
+
 def inspect_website(url: str) -> dict[str, Any]:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -257,15 +341,18 @@ def inspect_website(url: str) -> dict[str, Any]:
         page_identity = analyze_page_identity(response.url, text)
         tls_certificate = _certificate_details(final_parsed.hostname, addresses[0], final_parsed.port or 443) if final_parsed.scheme == "https" else None
         domain_registration = _domain_registration(final_parsed.hostname) if final_parsed.scheme == "https" else {"status": "not_applicable", "available": False, "registered_at": None, "age_days": None}
+        certificate_transparency = _certificate_transparency(final_parsed.hostname) if final_parsed.scheme == "https" else {"status": "not_applicable", "available": False, "certificate_count": 0, "matching_names": []}
         if tls_certificate and tls_certificate["days_remaining"] is not None and tls_certificate["days_remaining"] <= 14:
             findings.append(f"TLS certificate expires in {tls_certificate['days_remaining']} days.")
         if domain_registration["age_days"] is not None and domain_registration["age_days"] <= 30:
             findings.append(f"Domain was registered recently ({domain_registration['age_days']} days ago).")
+        if certificate_transparency["available"]:
+            findings.append(f"Certificate Transparency returned {certificate_transparency['certificate_count']} certificate record(s) for this domain.")
         if page_identity["credential_form"] and page_identity["brand_mismatches"]:
             findings.append(f"Credential form claims brand identities hosted on an unrelated domain: {', '.join(page_identity['brand_mismatches'])}.")
         if page_identity["credential_form"] and page_identity["cross_origin_form_actions"]:
             findings.append("Credential form submits to a different registered domain.")
-        return {"final_url": response.url, "status_code": response.status_code, "redirects": hops, "title": title[:200], "findings": findings, "content_length": len(body), "sample": text[:2000], "tls_certificate": tls_certificate, "domain_registration": domain_registration, **page_identity}
+        return {"final_url": response.url, "status_code": response.status_code, "redirects": hops, "title": title[:200], "findings": findings, "content_length": len(body), "sample": text[:2000], "tls_certificate": tls_certificate, "domain_registration": domain_registration, "certificate_transparency": certificate_transparency, **page_identity}
     finally:
         if response is not None:
             response.close()
