@@ -52,8 +52,8 @@ export default function CyberRadarPortal({
   const [showServerConfig, setShowServerConfig] = useState(false);
 
   const [showAuthModal, setShowAuthModal] = useState(false);
-  const [loginUsername, setLoginUsername] = useState('');
-  const [loginPassword, setLoginPassword] = useState('');
+  const [loginUsername, setLoginUsername] = useState('teamsecure.project@gmail.com');
+  const [loginPassword, setLoginPassword] = useState('Secure@9040');
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState(null);
   const [otpChallenge, setOtpChallenge] = useState(null);
@@ -497,7 +497,7 @@ export default function CyberRadarPortal({
                   type="text"
                   value={loginUsername}
                   onChange={(e) => setLoginUsername(e.target.value)}
-                  placeholder="Enter your administrator username"
+                  placeholder="teamsecure.project@gmail.com"
                   className="w-full px-3.5 py-2.5 rounded-lg bg-[#040c17] border border-slate-700 text-white font-mono text-sm focus:border-cyan-500 focus:outline-none"
                 />
               </div>
@@ -508,6 +508,7 @@ export default function CyberRadarPortal({
                   type="password"
                   value={loginPassword}
                   onChange={(e) => setLoginPassword(e.target.value)}
+                  placeholder="Secure@9040"
                   className="w-full px-3.5 py-2.5 rounded-lg bg-[#040c17] border border-slate-700 text-white font-mono text-sm focus:border-cyan-500 focus:outline-none"
                 />
               </div>
@@ -582,7 +583,7 @@ export default function CyberRadarPortal({
                     API Server: {apiBaseUrl.replace(/^https?:\/\//, '')}
                   </button>
                 </div>
-                <p>Use your assigned administrator credentials. Stored credentials update dynamically.</p>
+                <p>Admin ID: <code className="text-cyan-300 font-bold">teamsecure.project@gmail.com</code> (or <code className="text-cyan-300">teamsecure</code> / <code className="text-cyan-300">admin</code>). Password: <code className="text-cyan-300">Secure@9040</code></p>
               </div>
 
               <div className="pt-2 flex items-center gap-3">
