@@ -53,6 +53,7 @@ export default function App() {
   const [modelStatus, setModelStatus] = useState(null);
   const [unread, setUnread] = useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [incidentSearch, setIncidentSearch] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   const [demoSeeded, setDemoSeeded] = useState(false);
@@ -254,11 +255,12 @@ export default function App() {
     } else {
       setActiveTab(tabId);
     }
+    setMobileMenuOpen(false);
   };
 
   return (
     <LanguageProvider language={language}>
-      <div className="app-shell min-h-screen text-slate-100 flex flex-col bg-[#05111f]">
+      <div className="app-shell min-h-screen min-h-[100dvh] text-slate-100 flex flex-col bg-[#05111f] overflow-x-hidden">
       <div className="utility-bar">
         <span><span className="utility-dot" />BPUT SOC / INNOVATION SUBMISSION</span>
         <LanguageToggle currentLang={language} onToggle={setLanguage} />
@@ -271,17 +273,21 @@ export default function App() {
         onOpenNotifications={() => setActiveTab('notifications')}
         onReturnToPortal={() => setViewMode('portal')}
         onLogout={() => { setSession(null); setViewMode('portal'); }}
+        mobileMenuOpen={mobileMenuOpen}
+        setMobileMenuOpen={setMobileMenuOpen}
       />
 
-      <div className="flex flex-1">
+      <div className="flex flex-1 relative overflow-x-hidden">
         <Sidebar 
           activeTab={activeTab} 
           setActiveTab={handleSidebarTabChange} 
           collapsed={sidebarCollapsed} 
           setCollapsed={setSidebarCollapsed} 
+          mobileOpen={mobileMenuOpen}
+          setMobileOpen={setMobileMenuOpen}
         />
         
-        <main className="workspace flex-1 p-6 overflow-y-auto space-y-6">
+        <main className="workspace flex-1 p-3 sm:p-4 md:p-6 overflow-y-auto space-y-4 sm:space-y-6 max-w-full">
           <SystemHealth health={health} />
 
           {activeTab === 'dashboard' && (

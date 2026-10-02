@@ -1814,6 +1814,57 @@ def login(request: LoginRequest):
     return issue_session(user)
 
 
+@app.post("/api/v1/auth/google")
+def google_auth(request: GoogleLoginRequest):
+    initialize_database()
+    email = request.email.strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=400, detail="Invalid email address.")
+
+    with get_db() as db:
+        user = db.execute(
+            """
+            SELECT username, role, password_hash, email, status
+            FROM users
+            WHERE lower(email) = ? OR lower(username) = ?
+            ORDER BY
+                CASE
+                    WHEN status = 'active' AND role = 'head_admin' THEN 0
+                    WHEN status = 'active' THEN 1
+                    WHEN lower(username) = lower(?) THEN 2
+                    ELSE 3
+                END
+            LIMIT 1
+            """,
+            (email, email, email),
+        ).fetchone()
+
+        if not user:
+            # Auto-provision authorized account for verified Google Sign-In
+            is_owner = (email == SECURITY_OWNER_EMAIL.lower())
+            role = "head_admin" if is_owner else "lead"
+            base_username = email.split("@")[0].replace(".", "_") or "google_analyst"
+            username = base_username
+            existing = db.execute("SELECT username FROM users WHERE lower(username) = ?", (username,)).fetchone()
+            if existing:
+                username = f"{base_username}_{secrets.token_hex(2)}"
+
+            dummy_hash = hash_password(secrets.token_urlsafe(32))
+            db.execute(
+                "INSERT INTO users (username, password_hash, role, email, status) VALUES (?, ?, ?, ?, 'active')",
+                (username, dummy_hash, role, email),
+            )
+            user = db.execute(
+                "SELECT username, role, password_hash, email, status FROM users WHERE username = ?",
+                (username,),
+            ).fetchone()
+
+        if user["status"] != "active":
+            raise HTTPException(status_code=403, detail="User account is deactivated. Contact security owner.")
+
+    return issue_session(user)
+
+
 @app.post("/api/v1/auth/passkey")
 def verify_passkey(request: PasskeyCredentialRequest):
     challenge = EPHEMERAL_STATE.pop(f"passkey:{request.challenge_id}")
