@@ -19,7 +19,7 @@ def analyze_regional_scam(payload: str) -> tuple[int, list[str], list[dict[str, 
         for name in matched_upi:
             score += 20
             reasons.append(f"Digital-payment scam signal detected: {name}.")
-            indicators.append({"name": name.title(), "score": "88%", "weight": 20})
+            indicators.append({"name": name.title(), "weight": 20})
         categories.append("upi-fraud")
 
     arrest_signals = {
@@ -33,7 +33,7 @@ def analyze_regional_scam(payload: str) -> tuple[int, list[str], list[dict[str, 
         for name in matched_arrest:
             score += 20
             reasons.append(f"Fake-authority call signal detected: {name}.")
-            indicators.append({"name": name.title(), "score": "92%", "weight": 20})
+            indicators.append({"name": name.title(), "weight": 20})
         categories.append("digital-arrest")
 
     regional_patterns = {
@@ -46,7 +46,7 @@ def analyze_regional_scam(payload: str) -> tuple[int, list[str], list[dict[str, 
             languages.append(language)
             score += 15
             reasons.append(f"{language} scam-language pattern detected; verify through an official channel.")
-            indicators.append({"name": f"{language} Scam Language", "score": "78%", "weight": 15})
+            indicators.append({"name": f"{language} Scam Language", "weight": 15})
     if not reasons:
         return 0, [], [], None, []
     if "upi-fraud" in categories and "digital-arrest" in categories:

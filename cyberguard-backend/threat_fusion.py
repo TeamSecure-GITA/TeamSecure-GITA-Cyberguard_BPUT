@@ -210,18 +210,34 @@ def detect_memory_hits(payload: str, history: list[dict[str, Any]] | None = None
 
 def score_explainability(incident: dict[str, Any]) -> dict[str, Any]:
     assessment = incident.get("assessment", {})
-    indicators = assessment.get("indicators", []) or []
-    iocs = assessment.get("iocs", []) or []
     risk_score = int(incident.get("risk_score", 0) or 0)
-    score = min(99, 30 + len(indicators) * 8 + len(iocs) * 9 + min(25, risk_score // 3))
-    if not indicators and not iocs:
-        score = max(0, score - 18)
-    trust = "high" if score >= 75 else "medium" if score >= 45 else "low"
+    scoring = assessment.get("scoring")
+    if not isinstance(scoring, dict) or scoring.get("method") != "evidence_weighted_attribution_v1":
+        return {
+            "summary": "This legacy incident has no stored evidence attribution; no explainability score is inferred.",
+            "contribution_status": "unavailable_for_legacy_incident",
+            "risk_score": risk_score,
+            "indicator_count": len(assessment.get("indicators", []) or []),
+            "contributions": [],
+        }
+
+    indicators = assessment.get("indicators", []) or []
     return {
-        "summary": "Model explanation is traceable and evidence-backed." if trust == "high" else "Model explanation is partially supported; analyst verification recommended." if trust == "medium" else "Model explanation is weak; manual review advised.",
-        "explainability_score": score,
-        "explanation_trust": trust,
+        "summary": scoring["interpretation"],
+        "contribution_status": "available",
         "risk_score": risk_score,
+        "indicator_count": len(indicators),
+        "contributions": [
+            {
+                "name": item.get("name", "Unnamed signal"),
+                "share": item.get("score"),
+                "risk_points": item.get("contribution", 0),
+                "weight": item.get("weight"),
+                "feature_attribution": item.get("feature_attribution"),
+            }
+            for item in indicators
+        ],
+        "evidence_summary": scoring.get("evidence_summary"),
     }
 
 

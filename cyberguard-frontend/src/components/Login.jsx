@@ -6,8 +6,8 @@ import { getApiBaseUrl } from '../apiConfig';
 
 export default function Login({ onLogin }) {
   const apiBaseUrl = getApiBaseUrl();
-  const [username, setUsername] = useState('teamsecure.project@gmail.com');
-  const [password, setPassword] = useState('Secure@9040');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
 
@@ -43,14 +43,14 @@ export default function Login({ onLogin }) {
           <div><h1 className="text-xl font-black text-white">CYBERGUARD</h1><p className="text-xs text-slate-400">Secure SOC access</p></div>
         </div>
         <label className="block text-xs font-semibold text-slate-400">Username
-          <input value={username} onChange={(event) => setUsername(event.target.value)} className="mt-2 w-full bg-darkBg border border-slate-700 rounded-lg p-3 text-sm text-white focus:border-cyan-500 focus:outline-none" />
+          <input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} className="mt-2 w-full bg-darkBg border border-slate-700 rounded-lg p-3 text-sm text-white focus:border-cyan-500 focus:outline-none" />
         </label>
         <label className="block text-xs font-semibold text-slate-400">Password
-          <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} className="mt-2 w-full bg-darkBg border border-slate-700 rounded-lg p-3 text-sm text-white focus:border-cyan-500 focus:outline-none" />
+          <input autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} className="mt-2 w-full bg-darkBg border border-slate-700 rounded-lg p-3 text-sm text-white focus:border-cyan-500 focus:outline-none" />
         </label>
         {error && <p className="text-xs text-red-400">{error}</p>}
         <button disabled={loading} className="w-full py-3 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-sm font-semibold flex items-center justify-center gap-2"><LockKeyhole size={16} />{loading ? 'Signing in...' : <><LogIn size={16} />Sign in</>}</button>
-        <p className="text-[11px] text-slate-500">Head administrator: teamsecure.project@gmail.com</p>
+        <p className="text-[11px] text-slate-500">Use credentials configured by your CyberGuard administrator.</p>
       </form>
     </main>
   );

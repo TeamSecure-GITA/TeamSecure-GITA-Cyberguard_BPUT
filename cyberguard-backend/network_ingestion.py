@@ -1,0 +1,56 @@
+"""Normalize Zeek and Suricata JSON records for network detection."""
+
+from __future__ import annotations
+
+from math import isfinite
+from typing import Any
+
+MAX_INGEST_EVENTS = 1_000
+
+
+def _number(value: Any) -> int:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0
+    return int(number) if isfinite(number) and number > 0 else 0
+
+
+def normalize_network_events(payload: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    entries = payload.get("events", payload.get("flows", payload.get("records")))
+    if entries is None:
+        entries = [payload]
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("Provide a non-empty events, flows, or records array.")
+    if len(entries) > MAX_INGEST_EVENTS:
+        raise ValueError(f"Network ingestion is limited to {MAX_INGEST_EVENTS} events per request.")
+
+    normalized = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise ValueError(f"Network event {index} must be a JSON object.")
+
+        flow = entry.get("flow") if isinstance(entry.get("flow"), dict) else {}
+        alert = entry.get("alert") if isinstance(entry.get("alert"), dict) else {}
+        source_ip = entry.get("src_ip", entry.get("id.orig_h", ""))
+        destination_ip = entry.get("dest_ip", entry.get("dst_ip", entry.get("id.resp_h", "")))
+        destination_port = entry.get("dest_port", entry.get("dst_port", entry.get("id.resp_p")))
+        if not any((source_ip, destination_ip, destination_port, entry.get("event_type"), alert.get("signature"))):
+            raise ValueError(f"Network event {index} does not contain a supported Zeek or Suricata field.")
+
+        normalized.append({
+            "src_ip": str(source_ip)[:128],
+            "dst_ip": str(destination_ip)[:128],
+            "destination_port": _number(destination_port),
+            "dst_port": _number(destination_port),
+            "protocol": str(entry.get("proto", entry.get("proto_name", entry.get("protocol", ""))))[:24],
+            "bytes_out": _number(entry.get("orig_bytes", flow.get("bytes_toserver", entry.get("bytes_out", 0)))),
+            "bytes_in": _number(entry.get("resp_bytes", flow.get("bytes_toclient", entry.get("bytes_in", 0)))),
+            "packets_out": _number(flow.get("pkts_toserver", entry.get("packets_out", 0))),
+            "packets_in": _number(flow.get("pkts_toclient", entry.get("packets_in", 0))),
+            "timestamp": str(entry.get("ts", entry.get("timestamp", "")))[:64],
+            "event_type": str(entry.get("event_type", entry.get("event", "")))[:80],
+            "signature": str(alert.get("signature", entry.get("signature", "")))[:256],
+        })
+
+    return {"flows": normalized}

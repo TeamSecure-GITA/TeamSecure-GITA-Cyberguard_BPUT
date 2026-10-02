@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
+import { getApiBaseUrl } from '../apiConfig';
 import { Activity, BrainCircuit, Crosshair, GitBranch, HeartPulse, Link2, Play, Radar, ShieldCheck, Sparkles, Swords, Waypoints } from 'lucide-react';
 import ThreatDNA from './ThreatDNA';
 import CampaignCorrelation from './CampaignCorrelation';
@@ -7,7 +8,7 @@ import AttackChainTimeline from './AttackChainTimeline';
 import RiskForecastGraph from './RiskForecastGraph';
 import ResponseSimulatorPanel from './ResponseSimulatorPanel';
 
-const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+const apiBaseUrl = getApiBaseUrl();
 const panelClass = 'glass-panel p-5';
 
 function RiskBar({ value, color = 'var(--cyan)' }) {
@@ -119,7 +120,7 @@ export default function ThreatIntelligence({ accessToken, incidents = [] }) {
         <div className={panelClass}><span className="eyebrow">Threat genome</span><strong className="intel-kpi-value">{genome?.fingerprint || incidentGenomeFallback?.fingerprint || '--------'}</strong><span className="intel-kpi-note">Fingerprint / {genome?.similarity_score ?? incidentGenomeFallback?.similarity_score ?? 0}% similarity</span></div>
         <div className={panelClass}><span className="eyebrow">Intent confidence</span><strong className="intel-kpi-value">{intent?.confidence ?? correlations?.confidence ?? selectedIncident?.riskScore ?? selectedIncident?.risk_score ?? 0}%</strong><span className="intel-kpi-note">{intent?.status || 'assessing'} / {intent?.summary || 'attacker goal analysis'}</span></div>
         <div className={panelClass}><span className="eyebrow">Fingerprint drift</span><strong className="intel-kpi-value">{drift?.drift_score ?? 0}%</strong><span className="intel-kpi-note">{drift?.status || 'stable'} / {drift?.mutation_summary || 'no drift signal'}</span></div>
-        <div className={panelClass}><span className="eyebrow">Explainability</span><strong className="intel-kpi-value">{explainability?.explainability_score ?? selectedIncident?.riskScore ?? selectedIncident?.risk_score ?? 0}%</strong><span className="intel-kpi-note">{explainability?.explanation_trust || 'medium'} / {alertQuality?.overall_score ?? 0}% alert-quality</span></div>
+        <div className={panelClass}><span className="eyebrow">Evidence attribution</span><strong className="intel-kpi-value">{explainability?.contribution_status === 'available' ? `${explainability.indicator_count} signals` : 'Unavailable'}</strong><span className="intel-kpi-note">{explainability?.contribution_status === 'available' ? explainability.summary : 'Legacy incidents have no normalized contribution data.'} / {alertQuality?.overall_score ?? 0}% alert-quality</span></div>
       </div>
     )}
 
@@ -170,4 +171,3 @@ export default function ThreatIntelligence({ accessToken, incidents = [] }) {
     <div className={panelClass}><div className="eyebrow flex items-center gap-2"><BrainCircuit size={13} /> 10 / cyber brain XAI</div><div className="brain-strip"><strong>{selectedIncident?.id || 'No incident selected'}</strong><span>{selectedIncident?.explanation || 'The explainable reasoning layer will appear after the first analyzed incident.'}</span><span className="brain-status">MODEL EVIDENCE LINKED</span></div></div>
   </div>;
 }
-

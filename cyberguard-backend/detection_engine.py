@@ -11,6 +11,7 @@ from typing import List
 from urllib.parse import parse_qs, urlparse
 from xml.etree import ElementTree
 from regional_scam_detector import analyze_regional_scam
+from dlp_engine import analyze_dlp
 
 import tldextract
 
@@ -68,7 +69,7 @@ def model_signal(payload: str) -> tuple[int, dict | None]:
     except Exception:
         transformer_result = None
     if transformer_result:
-        return transformer_result["score"], {"name": "Fine-tuned Transformer Confidence", "score": f"{transformer_result['score']}%", "model": transformer_result["model"]}
+        return transformer_result["score"], {"name": "Fine-tuned Transformer Output", "model_output": transformer_result["score"], "model": transformer_result["model"]}
     if TEXT_MODEL is not None:
         probability = float(TEXT_MODEL.predict_proba([payload])[0][1])
     elif FALLBACK_TEXT_MODEL is not None:
@@ -87,7 +88,48 @@ def model_signal(payload: str) -> tuple[int, dict | None]:
     else:
         return 0, None
     score = round(probability * 100)
-    return score, {"name": "Trained Text Model Confidence", "score": f"{score}%", "model": "TF-IDF + Logistic Regression" if TEXT_MODEL is not None else FALLBACK_TEXT_MODEL["algorithm"]}
+    indicator = {"name": "Trained Text Model Output", "model_output": score, "model": "TF-IDF + Logistic Regression" if TEXT_MODEL is not None else FALLBACK_TEXT_MODEL["algorithm"]}
+    if TEXT_MODEL is not None:
+        indicator["feature_attribution"] = model_feature_attribution(payload)
+    return score, indicator
+
+
+def model_feature_attribution(payload: str, limit: int = 5) -> dict:
+    """Explain a linear text-model margin without presenting terms as causal evidence."""
+    if TEXT_MODEL is None:
+        return {"status": "unavailable", "reason": "The deployed text model does not expose linear feature weights.", "features": []}
+    try:
+        vectorizer = TEXT_MODEL.named_steps["tfidf"]
+        classifier = TEXT_MODEL.named_steps["classifier"]
+        if len(classifier.coef_) != 1 or len(classifier.classes_) != 2:
+            return {"status": "unavailable", "reason": "Feature attribution supports only binary linear classifiers.", "features": []}
+        values = vectorizer.transform([payload]).tocsr()
+        coefficients = classifier.coef_[0]
+        suspicious_index = list(classifier.classes_).index(1)
+        direction = 1 if suspicious_index == 1 else -1
+        contributions = []
+        feature_names = vectorizer.get_feature_names_out()
+        for index, value in zip(values.indices, values.data):
+            contribution = float(value) * float(coefficients[index]) * direction
+            if contribution == 0:
+                continue
+            term = str(feature_names[index])
+            if re.search(r"[@:/\\\d]", term) or len(term) > 48:
+                term = "[redacted feature]"
+            contributions.append({
+                "feature": term,
+                "effect": "suspicious" if contribution > 0 else "benign",
+                "logit_contribution": round(contribution, 5),
+            })
+        contributions.sort(key=lambda item: abs(item["logit_contribution"]), reverse=True)
+        return {
+            "status": "available",
+            "method": "tfidf_logistic_logit_contribution",
+            "interpretation": "Signed local model-margin contribution; not causal evidence or a calibrated probability.",
+            "features": contributions[:max(1, min(int(limit), 10))],
+        }
+    except (AttributeError, KeyError, TypeError, ValueError, IndexError):
+        return {"status": "unavailable", "reason": "The configured model pipeline is incompatible with linear feature attribution.", "features": []}
 
 def analyze_phishing_and_url(payload: str) -> tuple[int, List[str], List[dict]]:
     score = 5
@@ -100,7 +142,7 @@ def analyze_phishing_and_url(payload: str) -> tuple[int, List[str], List[dict]]:
     if detected_keywords:
         score += 6
         reasons.append(f"High-urgency language and social engineering indicators detected ({', '.join(detected_keywords)}).")
-        indicators.append({"name": "Language Pressure Index", "score": "72%"})
+        indicators.append({"name": "Language Pressure Index", "weight": 6})
 
     authority_terms = ["admin", "registrar", "director", "finance", "bank", "support", "official", "security team"]
     matched_authority = [term for term in authority_terms if term in payload_lower]
@@ -111,23 +153,23 @@ def analyze_phishing_and_url(payload: str) -> tuple[int, List[str], List[dict]]:
     if matched_credentials:
         score += 24
         reasons.append(f"Credential-harvesting language requests sensitive information ({', '.join(matched_credentials)}).")
-        indicators.append({"name": "Credential Theft Construct", "score": "88%"})
+        indicators.append({"name": "Credential Theft Construct", "weight": 24})
     if matched_financial:
         score += 8
         reasons.append(f"Financial-action language is present ({', '.join(matched_financial)}); verify the request independently.")
-        indicators.append({"name": "Financial Request Signal", "score": "68%"})
+        indicators.append({"name": "Financial Request Signal", "weight": 8})
 
     sender_domains = re.findall(r"from:.*?@([\w.-]+\.[A-Za-z]{2,})", payload_lower)
     sender_mismatch = bool(sender_domains and any(domain.endswith(("gmail.com", "outlook.com", "yahoo.com", "hotmail.com")) for domain in sender_domains))
     if sender_mismatch:
         score += 10
         reasons.append("The sender channel does not match the claimed institutional identity.")
-        indicators.append({"name": "Sender Identity Mismatch", "score": "78%"})
+        indicators.append({"name": "Sender Identity Mismatch", "weight": 10})
 
     if matched_authority and (matched_credentials or sender_mismatch or re.search(r"https?://", payload_lower)):
         score += 12
         reasons.append(f"A request invokes an institutional identity ({', '.join(matched_authority)}) in a suspicious context.")
-        indicators.append({"name": "Authority Impersonation Signal", "score": "84%"})
+        indicators.append({"name": "Authority Impersonation Signal", "weight": 12})
 
     if re.search(r"https?://", payload_lower):
         url_score, url_reasons, url_indicators = analyze_url_intelligence(payload)
@@ -138,7 +180,7 @@ def analyze_phishing_and_url(payload: str) -> tuple[int, List[str], List[dict]]:
 
     if not reasons:
         reasons.append("No phishing or social-engineering patterns matched the content baseline.")
-        indicators.append({"name": "Baseline Email Hygiene", "score": "14%"})
+        indicators.append({"name": "Baseline Email Hygiene", "weight": 1})
 
     return min(score, 99), reasons, indicators
 
@@ -165,38 +207,38 @@ def analyze_url_intelligence(payload: str) -> tuple[int, List[str], List[dict]]:
         if len(host) >= 28 or digit_ratio > 0.25 or host.count("-") >= 2:
             score += 15
             reasons.append(f"URL lexical profile is unusual (length {len(host)}, digit ratio {digit_ratio:.2f}).")
-            indicators.append({"name": "Lexical URL Anomaly", "score": f"{min(round(55 + lexical_entropy * 6), 98)}%"})
+            indicators.append({"name": "Lexical URL Anomaly", "weight": 15, "entropy": round(lexical_entropy, 3)})
         if extracted.suffix in risky_tlds:
             score += 25
             reasons.append(f"URL intelligence flagged a high-risk top-level domain ({extracted.suffix}).")
-            indicators.append({"name": "URL Reputation Risk", "score": "86%"})
+            indicators.append({"name": "URL Reputation Risk", "weight": 25})
         if host in shorteners or extracted.domain in shorteners:
             score += 28
             reasons.append("Redirect shortener obscures the destination and requires analyst expansion.")
-            indicators.append({"name": "Redirect Obfuscation", "score": "88%"})
+            indicators.append({"name": "Redirect Obfuscation", "weight": 28})
         if "xn--" in host or re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", parsed_url.hostname or ""):
             score += 30
             reasons.append("URL uses an IDN or raw IP host, reducing domain identity confidence.")
-            indicators.append({"name": "Host Identity Confidence", "score": "91%"})
+            indicators.append({"name": "Raw IP or IDN Host", "weight": 30})
         for brand, trusted_domain in BRAND_DOMAINS.items():
             similarity = SequenceMatcher(None, registered_domain, trusted_domain).ratio()
             if brand in extracted.domain and registered_domain not in trusted_domains:
                 score += 30
                 reasons.append(f"Brand-like domain requires look-alike and typosquatting review ({host}).")
-                indicators.append({"name": "Typosquatting Similarity", "score": f"{round(similarity * 100)}%"})
+                indicators.append({"name": "Typosquatting Similarity", "weight": 30, "similarity": round(similarity, 3)})
                 break
         query_keys = set(parse_qs(parsed_url.query).keys())
         if query_keys.intersection({"url", "u", "redirect", "redirect_uri", "next", "return", "continue"}):
             score += 20
             reasons.append("Redirect parameter can conceal a second destination and needs expansion.")
-            indicators.append({"name": "Suspicious Redirect Chain", "score": "90%"})
+            indicators.append({"name": "Suspicious Redirect Chain", "weight": 20})
     if len(urls) > 1:
         score += 15
         reasons.append(f"Multiple URL hops detected ({len(urls)} destinations in one artifact).")
-        indicators.append({"name": "Redirect Hop Count", "score": f"{min(50 + len(urls) * 15, 98)}%"})
+        indicators.append({"name": "Redirect Hop Count", "weight": 15, "observed_hops": len(urls)})
     if not urls:
         reasons.append("No URL artifact was supplied for reputation enrichment.")
-        indicators.append({"name": "URL Extraction", "score": "0%"})
+        indicators.append({"name": "URL Extraction", "weight": 1, "observed_urls": 0})
     return min(score, 99), reasons, indicators
 
 def analyze_account_takeover(payload: str) -> tuple[int, List[str], List[dict]]:
@@ -207,8 +249,8 @@ def analyze_account_takeover(payload: str) -> tuple[int, List[str], List[dict]]:
     if "failed" in payload.lower() or "unauthorized" in payload.lower():
         score += 65
         reasons.append("High-frequency failed authentication attempts from anomalous IP subnets (Password Spraying signature).")
-        indicators.append({"name": "Authentication Anomaly Index", "score": "94%"})
-        indicators.append({"name": "Geographic / IP Distance Velocity", "score": "89%"})
+        indicators.append({"name": "Authentication Anomaly Index", "weight": 35})
+        indicators.append({"name": "Geographic / IP Distance Velocity", "weight": 30})
         
     return min(score, 99), reasons, indicators
 
@@ -231,7 +273,7 @@ def analyze_behavioral_ato(payload: str) -> tuple[int, List[str], List[dict]]:
         if signal in payload_lower:
             score += increment
             reasons.append(reason)
-            indicators.append({"name": f"{signal.title()} Signal", "score": f"{min(60 + increment, 98)}%"})
+            indicators.append({"name": f"{signal.title()} Signal", "weight": increment})
     try:
         event = json.loads(payload)
         if isinstance(event, dict):
@@ -258,13 +300,13 @@ def analyze_behavioral_ato(payload: str) -> tuple[int, List[str], List[dict]]:
                 reasons.append("New-device or repeated MFA-denial activity deviates from the account baseline.")
             if anomaly_score:
                 score += anomaly_score
-                indicators.append({"name": "Structured Behavioural Anomaly", "score": f"{min(55 + anomaly_score, 99)}%"})
-            indicators.append({"name": "Failure Rate", "score": f"{round(failure_rate * 100)}%"})
+                indicators.append({"name": "Structured Behavioural Anomaly", "weight": anomaly_score})
+            indicators.append({"name": "Failure Rate", "observed_value": round(failure_rate, 3)})
     except (TypeError, ValueError, json.JSONDecodeError):
         pass
     if not reasons:
         reasons.append("No account-behavior deviation matched the ATO baseline.")
-        indicators.append({"name": "Behavioral Baseline Match", "score": "18%"})
+        indicators.append({"name": "Behavioral Baseline Match", "weight": 1})
     return min(score, 99), reasons, indicators
 
 
@@ -283,26 +325,26 @@ def analyze_impersonation(payload: str) -> tuple[int, List[str], List[dict]]:
     if matched_authority:
         score += 30
         reasons.append(f"Authority-role language suggests a trusted-identity impersonation attempt ({', '.join(matched_authority)}).")
-        indicators.append({"name": "Trusted Role Impersonation", "score": "89%"})
+        indicators.append({"name": "Trusted Role Impersonation", "weight": 30})
     if matched_requests:
         score += 25
         reasons.append(f"High-impact request pattern detected ({', '.join(matched_requests)}).")
-        indicators.append({"name": "Request Coercion Pattern", "score": "87%"})
+        indicators.append({"name": "Request Coercion Pattern", "weight": 25})
     if matched_urgency:
         score += 15
         reasons.append(f"Urgency and authority pressure detected ({', '.join(matched_urgency)}).")
-        indicators.append({"name": "Urgency Pressure", "score": "86%"})
+        indicators.append({"name": "Urgency Pressure", "weight": 15})
     if claimed_identity:
         score += 10
         reasons.append(f"Claimed identity extracted from communication ({claimed_identity.group(1).strip()}).")
-        indicators.append({"name": "Claimed Identity", "score": "78%"})
+        indicators.append({"name": "Claimed Identity", "weight": 10})
     if re.search(r"from:.*@(gmail|outlook|yahoo)\.", payload_lower) or (matched_authority and re.search(r"@(gmail|outlook|yahoo)\.", payload_lower)):
         score += 20
         reasons.append("Contact channel does not match the claimed institutional identity.")
-        indicators.append({"name": "Contact Mismatch", "score": "93%"})
+        indicators.append({"name": "Contact Mismatch", "weight": 20})
     if not reasons:
         reasons.append("No trusted-identity impersonation pattern matched.")
-        indicators.append({"name": "Identity Consistency", "score": "22%"})
+        indicators.append({"name": "Identity Consistency", "weight": 1})
     return min(score, 99), reasons, indicators
 
 
@@ -310,13 +352,13 @@ def analyze_deepfake(payload: str) -> tuple[int, List[str], List[dict]]:
     payload_lower = payload.lower()
     score = 35
     reasons = ["Synthetic-media triage enabled; media decoder evidence is combined with content signals."]
-    indicators = [{"name": "Synthetic Media Triage", "score": "72%"}]
+    indicators = [{"name": "Synthetic Media Triage", "weight": 1}]
     signals = {"voice clone": 20, "face swap": 25, "lip sync": 18, "generated": 15, "synthetic": 15, "deepfake": 25}
     for signal, increment in signals.items():
         if signal in payload_lower:
             score += increment
             reasons.append(f"Synthetic-media marker detected: {signal}.")
-            indicators.append({"name": f"{signal.title()} Evidence", "score": f"{min(70 + increment, 98)}%"})
+            indicators.append({"name": f"{signal.title()} Evidence", "weight": increment})
     return min(score, 99), reasons, indicators
 
 
@@ -516,28 +558,34 @@ def analyze_structured_telemetry(payload: str, category: str) -> tuple[int, List
         if len(ports) >= 10:
             score += min(50, 20 + len(ports))
             reasons.append(f"Flow telemetry shows probing across {len(ports)} destination ports, consistent with network reconnaissance.")
-            indicators.append({"name": "Flow Port-Scan Breadth", "score": f"{min(60 + len(ports), 99)}%", "weight": min(50, 20 + len(ports))})
+            indicators.append({"name": "Flow Port-Scan Breadth", "weight": min(50, 20 + len(ports)), "unique_destination_ports": len(ports)})
 
         bytes_out = sum(number(record, "bytes_out", "bytes_sent", "bytes_tx") for record in records if isinstance(record, dict))
         bytes_in = sum(number(record, "bytes_in", "bytes_received", "bytes_rx") for record in records if isinstance(record, dict))
         if bytes_out >= 10_000_000 and bytes_out > max(bytes_in, 1) * 10:
             score += 40
             reasons.append(f"Outbound flow volume is {bytes_out / max(bytes_in, 1):.1f}x inbound volume ({int(bytes_out)} bytes out), consistent with possible exfiltration.")
-            indicators.append({"name": "Outbound Flow Volume Ratio", "score": "90%", "weight": 40})
+            indicators.append({"name": "Outbound Flow Volume Ratio", "weight": 40})
 
         timestamps = []
         for record in records:
-            if not isinstance(record, dict) or not isinstance(record.get("timestamp"), str):
+            if not isinstance(record, dict):
                 continue
-            try:
-                timestamps.append(datetime.fromisoformat(record["timestamp"].replace("Z", "+00:00")).timestamp())
-            except ValueError:
-                continue
+            record_timestamps = record.get("timestamps")
+            if not isinstance(record_timestamps, list):
+                record_timestamps = [record.get("timestamp")]
+            for timestamp in record_timestamps:
+                if not isinstance(timestamp, str):
+                    continue
+                try:
+                    timestamps.append(datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp())
+                except ValueError:
+                    continue
         intervals = [right - left for left, right in zip(sorted(timestamps), sorted(timestamps)[1:])]
         if len(intervals) >= 4 and 30 <= statistics.mean(intervals) <= 3600 and statistics.pstdev(intervals) / statistics.mean(intervals) <= 0.15:
             score += 25
             reasons.append("Network flows recur at a regular interval, consistent with beaconing behavior.")
-            indicators.append({"name": "Regular Flow Beaconing", "score": "82%", "weight": 25})
+            indicators.append({"name": "Regular Flow Beaconing", "weight": 25})
 
     if category == "api_logs":
         requests_per_minute = max((number(record, "requests_per_minute", "request_rate_per_minute") for record in records if isinstance(record, dict)), default=0)
@@ -552,12 +600,12 @@ def analyze_structured_telemetry(payload: str, category: str) -> tuple[int, List
             weight = min(50, 25 + round(requests_per_minute / 100))
             score += weight
             reasons.append(f"API telemetry records {requests_per_minute:.0f} requests per minute, above the configured abuse threshold.")
-            indicators.append({"name": "API Request Rate", "score": f"{min(65 + round(requests_per_minute / 100), 99)}%", "weight": weight})
+            indicators.append({"name": "API Request Rate", "weight": weight, "observed_requests_per_minute": round(requests_per_minute)})
         responses = [int(number(record, "status_code", "http_status")) for record in records if isinstance(record, dict) and number(record, "status_code", "http_status")]
         if responses and responses.count(429) / len(responses) >= 0.25:
             score += 20
             reasons.append("A high share of API responses are HTTP 429 rate-limit responses.")
-            indicators.append({"name": "API Rate-Limit Responses", "score": "80%", "weight": 20})
+            indicators.append({"name": "API Rate-Limit Responses", "weight": 20})
 
     if category == "system_logs":
         for record in records:
@@ -569,29 +617,29 @@ def analyze_structured_telemetry(payload: str, category: str) -> tuple[int, List
             if event_id == "1102" or "audit_log_cleared" in event_type or "logs_cleared" in event_type:
                 score += 45
                 reasons.append("System telemetry reports audit-log clearing, which can indicate evidence tampering.")
-                indicators.append({"name": "Audit Log Cleared", "score": "96%", "weight": 45})
+                indicators.append({"name": "Audit Log Cleared", "weight": 45})
             if event_id in {"4672", "4720", "4728", "4732", "4756"} or any(signal in event_type for signal in ("privilege_change", "admin_grant", "account_created")):
                 score += 25
                 reasons.append(f"System telemetry reports a privileged identity change (event {event_id or event_type}).")
-                indicators.append({"name": "Privileged Identity Change", "score": "86%", "weight": 25})
+                indicators.append({"name": "Privileged Identity Change", "weight": 25})
             if event_id == "7045" or "service_installed" in event_type:
                 score += 20
                 reasons.append("System telemetry reports a newly installed service; verify its publisher and executable path.")
-                indicators.append({"name": "New Service Installation", "score": "78%", "weight": 20})
+                indicators.append({"name": "New Service Installation", "weight": 20})
                 executable = str(record.get("image_path", record.get("service_path", ""))).lower()
                 if any(marker in executable for marker in ("\\temp\\", "\\appdata\\", "powershell", "rundll32")):
                     score += 20
                     reasons.append("The new service uses a suspicious executable path or interpreter.")
-                    indicators.append({"name": "Suspicious Service Executable", "score": "90%", "weight": 20})
+                    indicators.append({"name": "Suspicious Service Executable", "weight": 20})
             if event_id == "4698" or "scheduled_task_created" in event_type:
                 score += 20
                 reasons.append("System telemetry reports a new scheduled task; verify its owner and command.")
-                indicators.append({"name": "Scheduled Task Creation", "score": "78%", "weight": 20})
+                indicators.append({"name": "Scheduled Task Creation", "weight": 20})
                 task_command = str(record.get("command", record.get("task_command", ""))).lower()
                 if "-encodedcommand" in task_command or " -enc " in task_command:
                     score += 20
                     reasons.append("The scheduled task command uses encoded PowerShell arguments.")
-                    indicators.append({"name": "Encoded Scheduled Task Command", "score": "92%", "weight": 20})
+                    indicators.append({"name": "Encoded Scheduled Task Command", "weight": 20})
             if event_id == "4688" or "process_start" in event_type or "process_created" in event_type:
                 executable = str(record.get("image_path", record.get("newprocessname", ""))).lower()
                 command = str(record.get("command", record.get("commandline", ""))).lower()
@@ -602,7 +650,7 @@ def analyze_structured_telemetry(payload: str, category: str) -> tuple[int, List
                 if suspicious_command or suspicious_location or shell_pipe:
                     score += 30
                     reasons.append("Process telemetry combines a suspicious executable location or download/encoded-command pattern.")
-                    indicators.append({"name": "Suspicious Process Creation", "score": "90%", "weight": 30})
+                    indicators.append({"name": "Suspicious Process Creation", "weight": 30})
 
         failed_auth_count = sum(
             max(1, int(number(record, "count", "event_count", "occurrences")))
@@ -616,7 +664,7 @@ def analyze_structured_telemetry(payload: str, category: str) -> tuple[int, List
         if failed_auth_count >= 10:
             score += 30
             reasons.append(f"System logs contain {failed_auth_count} failed authentication events in the submitted window.")
-            indicators.append({"name": "System Authentication Failure Burst", "score": "88%", "weight": 30})
+            indicators.append({"name": "System Authentication Failure Burst", "weight": 30})
 
         event_rate = max((number(record, "events_per_minute", "event_rate_per_minute") for record in records if isinstance(record, dict)), default=0)
         for record in records:
@@ -629,7 +677,7 @@ def analyze_structured_telemetry(payload: str, category: str) -> tuple[int, List
         if event_rate >= 5000:
             score += 25
             reasons.append(f"System telemetry volume reached {event_rate:.0f} events per minute, indicating a logging burst or flood.")
-            indicators.append({"name": "System Log Event-Rate Burst", "score": "82%", "weight": 25})
+            indicators.append({"name": "System Log Event-Rate Burst", "weight": 25, "observed_events_per_minute": round(event_rate)})
 
     return min(score, 99), reasons, indicators
 
@@ -656,12 +704,17 @@ def analyze_technical_activity(payload: str, category: str = "network") -> tuple
         if signature in payload_lower:
             score += increment
             reasons.append(reason)
-            indicators.append({"name": f"{signature.title()} Signature", "score": f"{min(60 + increment, 98)}%"})
+            indicators.append({"name": f"{signature.title()} Signature", "weight": increment})
     structured_score, structured_reasons, structured_indicators = analyze_structured_telemetry(payload, category)
     if structured_reasons:
         score = min(99, score + structured_score - 15)
         reasons.extend(structured_reasons)
         indicators.extend(structured_indicators)
+    if category == "exfiltration":
+        dlp_result = analyze_dlp(payload)
+        score = min(99, score + dlp_result["risk_score"])
+        reasons.extend(dlp_result["reasons"])
+        indicators.extend(dlp_result["indicators"])
     return min(score, 99), reasons, indicators
 
 def adversarial_self_test(category: str, payload: str) -> dict:
@@ -733,10 +786,10 @@ def analyze_login_anomaly(payload: str) -> tuple[int, list[str], list[dict]]:
     except Exception:
         anomaly = min(99, 20 + round(sum(values) * 4))
     reasons = ["Login telemetry deviates from the shared low-risk authentication baseline."]
-    indicators = [{"name": "Isolation Forest Login Anomaly", "score": f"{anomaly}%", "weight": 30}]
+    indicators = [{"name": "Isolation Forest Login Anomaly", "model_output": anomaly, "weight": 30}]
     if event.get("impossible_travel"):
         reasons.append("Impossible-travel activity is inconsistent with the user baseline.")
-        indicators.append({"name": "Impossible Travel", "score": "94%", "weight": 25})
+        indicators.append({"name": "Impossible Travel", "weight": 25})
     return round(anomaly * 0.7), reasons, indicators
 
 
@@ -797,7 +850,7 @@ def evaluate_threat_payload(category: str, payload: str) -> dict:
         indicators.append(model_indicator)
         if model_score >= TEXT_MODEL_THRESHOLD:
             score = max(score, model_score)
-            reasons.append(f"Trained text classifier marked the payload as suspicious with {model_score}% confidence.")
+            reasons.append(f"Trained text classifier emitted a model score of {model_score}/100; this is not a calibrated probability.")
         
     # Risk Level Categorization Matrix
     if score >= 80:

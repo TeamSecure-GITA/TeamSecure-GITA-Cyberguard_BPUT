@@ -2,12 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { X, AlertOctagon, Cpu, ShieldAlert, Download } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import axios from 'axios';
+import { getApiBaseUrl } from '../apiConfig';
 
 export default function XaiModal({ incident, onClose, userRole, accessToken }) {
   const [detail, setDetail] = useState(null);
   const [genome, setGenome] = useState(null);
   const [correlations, setCorrelations] = useState(null);
-  const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+  const apiBaseUrl = getApiBaseUrl();
   useEffect(() => {
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') onClose();
@@ -136,8 +137,12 @@ export default function XaiModal({ incident, onClose, userRole, accessToken }) {
           </div>
 
           <div className="xai-section-grid">
-            <div className="xai-section"><div className="xai-section-title"><span>Risk factors</span><strong>{detail?.assessment?.signal_count || incident.indicators?.length || 0} signals</strong></div>{(detail?.assessment?.indicators || incident.indicators || []).slice(0, 5).map((indicator, index) => <div className="factor-row" key={`${indicator.name}-${index}`}><div><span>{indicator.name}</span><b>{indicator.score}</b></div><div className="factor-track"><i style={{ width: indicator.score }} /></div></div>)}</div>
-            <div className="xai-section"><div className="xai-section-title"><span>AI confidence</span><strong>{incident.riskScore}%</strong></div><div className="confidence-ring" style={{ '--confidence': incident.riskScore }}><div><b>{incident.riskScore}%</b><span>confidence</span></div></div><p className="confidence-copy">Confidence is based on model evidence, detector signals, and enriched indicators.</p></div>
+            <div className="xai-section"><div className="xai-section-title"><span>Risk factors</span><strong>{detail?.assessment?.signal_count || incident.indicators?.length || 0} signals</strong></div>{(detail?.assessment?.indicators || incident.indicators || []).slice(0, 5).map((indicator, index) => {
+              const hasEvidenceShare = indicator.score_kind === 'evidence_share';
+              const share = hasEvidenceShare ? Number.parseInt(indicator.score, 10) || 0 : 0;
+              return <div className="factor-row" key={`${indicator.name}-${index}`}><div><span>{indicator.name}</span><b>{hasEvidenceShare ? `${indicator.contribution} risk points · ${share}% share` : 'Legacy confidence unavailable'}</b></div><div className="factor-track"><i style={{ width: `${share}%` }} /></div></div>;
+            })}</div>
+            <div className="xai-section"><div className="xai-section-title"><span>Incident risk</span><strong>{incident.riskScore}/100</strong></div><div className="confidence-ring" style={{ '--confidence': incident.riskScore }}><div><b>{incident.riskScore}</b><span>risk score</span></div></div><p className="confidence-copy">Detector risk score is not a probability of compromise. Indicator bars show normalized shares of triggered evidence.</p></div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

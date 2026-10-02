@@ -1,4 +1,6 @@
 # seed_demo_data.py
+import os
+
 import requests
 
 API_URL = "http://127.0.0.1:8000/api/v1/analyze"
@@ -24,16 +26,27 @@ demo_scenarios = [
 
 def run_demo_seed():
     print("--- Seeding CYBERGUARD AI Engine Demo Data ---")
-    login = requests.post(LOGIN_URL, json={"username": "analyst", "password": "analyst123"})
+    password = os.getenv("CYBERGUARD_DEMO_ANALYST_PASSWORD", "")
+    if not password:
+        raise RuntimeError("Set CYBERGUARD_DEMO_ANALYST_PASSWORD to the configured analyst account password.")
+    login = requests.post(LOGIN_URL, json={"username": "analyst", "password": password}, timeout=10)
     login.raise_for_status()
-    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    token = login.json().get("access_token")
+    if not token:
+        raise RuntimeError("The configured analyst account did not return an access token.")
+    headers = {"Authorization": f"Bearer {token}"}
     for scenario in demo_scenarios:
-        res = requests.post(API_URL, json={"category": scenario["category"], "payload": scenario["payload"]}, headers=headers)
-        if res.status_code == 200:
-            data = res.json()["assessment"]
-            print(f"[SUCCESS] {scenario['name']}")
-            print(f"          Risk Level: {data['risk_level']} ({data['risk_score']}%)")
-            print(f"          XAI Explanation: {data['xai_explanation']}\n")
+        response = requests.post(
+            API_URL,
+            json={"category": scenario["category"], "payload": scenario["payload"]},
+            headers=headers,
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json()["assessment"]
+        print(f"[SUCCESS] {scenario['name']}")
+        print(f"          Risk Level: {data['risk_level']} ({data['risk_score']}%)")
+        print(f"          XAI Explanation: {data['xai_explanation']}\n")
 
 if __name__ == "__main__":
     run_demo_seed()

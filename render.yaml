@@ -3,20 +3,26 @@ services:
     name: cyberguard-backend
     runtime: python
     rootDir: cyberguard-backend
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt -r requirements-models.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /
+    healthCheckPath: /health
     envVars:
       - key: CYBERGUARD_JWT_SECRET
         generateValue: true
       - key: CYBERGUARD_ENV
         value: production
+      - key: CYBERGUARD_ENABLE_PRETRAINED_MEDIA
+        value: "true"
+      - key: CYBERGUARD_ENABLE_RDAP
+        value: "true"
+      - key: CYBERGUARD_ENABLE_CT
+        value: "true"
       - key: CYBERGUARD_HEAD_ADMIN_USERNAME
         sync: false
       - key: CYBERGUARD_HEAD_ADMIN_PASSWORD
         sync: false
       - key: CYBERGUARD_FRONTEND_ORIGINS
-        value: https://teamsecure-gita-cyberguard.vercel.app,http://localhost:5173,http://127.0.0.1:5173
+        value: https://teamsecure-gita-cyberguard.vercel.app
       - key: CYBERGUARD_PUBLIC_APP_URL
         value: https://teamsecure-gita-cyberguard.vercel.app
       - key: CYBERGUARD_DB_PATH
@@ -55,12 +61,3 @@ services:
       name: cyberguard-data
       mountPath: /var/data
       sizeGB: 1
-  - type: web
-    name: cyberguard-frontend
-    runtime: static
-    rootDir: cyberguard-frontend
-    buildCommand: npm ci && npm run build
-    staticPublishPath: dist
-    envVars:
-      - key: VITE_API_URL
-        value: https://cyberguard-backend.onrender.com

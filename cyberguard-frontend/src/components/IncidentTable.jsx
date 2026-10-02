@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { AlertCircle, CheckCircle2, ChevronDown, Eye, Search, Terminal } from 'lucide-react';
 import axios from 'axios';
+import { getApiBaseUrl } from '../apiConfig';
 
 const getSeverityBadge = (level) => {
   switch (level) {
@@ -17,7 +18,7 @@ const getSeverityBadge = (level) => {
   }
 };
 
-const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+const apiBaseUrl = getApiBaseUrl();
 
 export default function IncidentTable({ incidents = [], accessToken, onRefresh, onSelectIncident, initialSearch = '', routeData = null }) {
   const [searchOverride, setSearchOverride] = useState({ source: initialSearch, value: initialSearch });

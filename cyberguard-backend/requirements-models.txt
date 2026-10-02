@@ -1,0 +1,6 @@
+# Runtime needed for local pretrained image/audio inference, not model training.
+transformers>=4.45,<5
+accelerate>=0.34,<2
+torch>=2.4,<3
+torchvision>=0.19,<1
+scipy>=1.13,<2

@@ -25,14 +25,47 @@ jobs:
         working-directory: cyberguard-frontend
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: cyberguard-frontend/package-lock.json
+      - run: pip install -r ../cyberguard-backend/requirements-dev.txt
+      - name: Configure isolated smoke-test API
+        run: |
+          echo "CYBERGUARD_ENV=test" >> "$GITHUB_ENV"
+          echo "CYBERGUARD_HEAD_ADMIN_USERNAME=cyberguard-ci-admin" >> "$GITHUB_ENV"
+          echo "CYBERGUARD_HEAD_ADMIN_PASSWORD=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" >> "$GITHUB_ENV"
+          echo "CYBERGUARD_DB_PATH=$RUNNER_TEMP/cyberguard-smoke.sqlite" >> "$GITHUB_ENV"
+          echo "CYBERGUARD_ENABLE_PRETRAINED_MEDIA=false" >> "$GITHUB_ENV"
       - run: npm ci
       - run: npm run lint
       - run: npm run build
       - run: npx playwright install --with-deps chromium
-      - run: npm run dev -- --host 127.0.0.1 > /tmp/cyberguard-vite.log 2>&1 &
+      - name: Start test API
+        working-directory: cyberguard-backend
+        run: |
+          python -m uvicorn main:app --host 127.0.0.1 --port 8000 > /tmp/cyberguard-api.log 2>&1 &
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8000/health > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/cyberguard-api.log
+          exit 1
+      - name: Start test frontend
+        run: |
+          VITE_API_URL=http://127.0.0.1:8000 npm run dev -- --host 127.0.0.1 > /tmp/cyberguard-vite.log 2>&1 &
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:5173/ > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/cyberguard-vite.log
+          exit 1
       - run: npm run test:smoke

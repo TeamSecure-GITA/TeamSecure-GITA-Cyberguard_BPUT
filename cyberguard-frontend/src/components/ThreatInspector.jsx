@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Mail, Video, Link, FileText, UserX, AlertTriangle, Upload, Search, Loader2, PlayCircle, Globe } from 'lucide-react';
+import { Mail, Video, Link, FileText, UserX, AlertTriangle, Upload, Search, Loader2, PlayCircle, Globe, Trash2 } from 'lucide-react';
 import axios from 'axios';
+import { getApiBaseUrl } from '../apiConfig';
 
 export default function ThreatInspector({ accessToken }) {
   const [activeSubTab, setActiveSubTab] = useState('email');
@@ -20,8 +21,15 @@ export default function ThreatInspector({ accessToken }) {
   const [assistantLoading, setAssistantLoading] = useState(false);
   const [plainMode, setPlainMode] = useState(false);
   const [complaintDraft, setComplaintDraft] = useState(null);
+  const [knownContacts, setKnownContacts] = useState([]);
+  const [selectedContactId, setSelectedContactId] = useState('');
+  const [contactName, setContactName] = useState('');
+  const [contactIdentifiers, setContactIdentifiers] = useState('');
+  const [contactSamples, setContactSamples] = useState('');
+  const [contactBusy, setContactBusy] = useState(false);
+  const [contactError, setContactError] = useState('');
 
-  const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+  const apiBaseUrl = getApiBaseUrl();
   const fileAnalysisTabs = ['image', 'audio', 'video', 'deepfake', 'email_file', 'malware'];
   const showLivePreview = activeSubTab === 'email' && Boolean(inputText.trim());
   const liveAssessment = showLivePreview && livePreview.payload === inputText ? livePreview.assessment : null;
@@ -52,9 +60,25 @@ export default function ThreatInspector({ accessToken }) {
     };
   }, [showLivePreview, inputText, accessToken, apiBaseUrl]);
 
+  useEffect(() => {
+    if (activeSubTab !== 'impersonation' || !accessToken) return undefined;
+    let active = true;
+    axios.get(`${apiBaseUrl}/api/v1/known-contacts`, { headers: { Authorization: `Bearer ${accessToken}` } })
+      .then((response) => {
+        if (active) {
+          setContactError('');
+          setKnownContacts(response.data.contacts || []);
+        }
+      })
+      .catch((requestError) => {
+        if (active) setContactError(requestError.response?.data?.detail || 'Known contact profiles are unavailable.');
+      });
+    return () => { active = false; };
+  }, [activeSubTab, accessToken, apiBaseUrl]);
+
   const handleAnalyze = async (e) => {
     e.preventDefault();
-    const hasFileToAnalyze = fileAnalysisTabs.includes(activeSubTab) && selectedFile;
+    const hasFileToAnalyze = (fileAnalysisTabs.includes(activeSubTab) || activeSubTab === 'network') && selectedFile;
     if (!inputText.trim() && !hasFileToAnalyze) return;
 
     setLoading(true);
@@ -74,10 +98,14 @@ export default function ThreatInspector({ accessToken }) {
         if (incidentCountry) formData.append('metadata', JSON.stringify({ country: incidentCountry }));
         response = await axios.post(`${apiBaseUrl}/api/v1/analyze/file`, formData, config);
       } else {
+        const metadata = {
+          ...(incidentCountry ? { country: incidentCountry } : {}),
+          ...(activeSubTab === 'impersonation' && selectedContactId ? { known_contact_id: Number(selectedContactId) } : {}),
+        };
         response = await axios.post(`${apiBaseUrl}/api/v1/analyze`, {
           category: activeSubTab,
           payload: inputText,
-          metadata: incidentCountry ? { country: incidentCountry } : undefined,
+          metadata: Object.keys(metadata).length ? metadata : undefined,
         }, config);
       }
 
@@ -92,6 +120,42 @@ export default function ThreatInspector({ accessToken }) {
       setScanStage('idle');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const saveKnownContact = async () => {
+    setContactBusy(true);
+    setContactError('');
+    try {
+      const response = await axios.post(`${apiBaseUrl}/api/v1/known-contacts`, {
+        name: contactName,
+        identifiers: contactIdentifiers.split(/[,;\n]/).map((value) => value.trim()).filter(Boolean),
+        sample_messages: contactSamples.split(/\r?\n\s*\r?\n/).map((value) => value.trim()).filter(Boolean),
+      }, { headers: { Authorization: `Bearer ${accessToken}` } });
+      setKnownContacts((current) => [...current.filter((contact) => contact.id !== response.data.id), response.data]);
+      setSelectedContactId(String(response.data.id));
+      setContactName('');
+      setContactIdentifiers('');
+      setContactSamples('');
+    } catch (requestError) {
+      setContactError(requestError.response?.data?.detail || 'Could not save the contact profile.');
+    } finally {
+      setContactBusy(false);
+    }
+  };
+
+  const deleteKnownContact = async () => {
+    if (!selectedContactId) return;
+    setContactBusy(true);
+    setContactError('');
+    try {
+      await axios.delete(`${apiBaseUrl}/api/v1/known-contacts/${selectedContactId}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+      setKnownContacts((current) => current.filter((contact) => String(contact.id) !== selectedContactId));
+      setSelectedContactId('');
+    } catch (requestError) {
+      setContactError(requestError.response?.data?.detail || 'Could not delete the contact profile.');
+    } finally {
+      setContactBusy(false);
     }
   };
 
@@ -228,21 +292,49 @@ export default function ThreatInspector({ accessToken }) {
 
       {/* Input Form */}
       <div className="inspector-source-label"><span>02</span> Submit evidence <small>{activeSubTab.replace('_', ' ')} channel selected</small></div>
+      {activeSubTab === 'impersonation' && (
+        <section className="mb-4 space-y-3 border-y border-slate-800 py-4">
+          <div className="flex items-end gap-2">
+            <label className="grid flex-1 gap-1 text-xs text-slate-400">Known contact
+              <select value={selectedContactId} onChange={(event) => setSelectedContactId(event.target.value)} className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200">
+                <option value="">Keyword screening only</option>
+                {knownContacts.map((contact) => <option key={contact.id} value={contact.id}>{contact.name} · {contact.sample_count} samples</option>)}
+              </select>
+            </label>
+            <button type="button" onClick={deleteKnownContact} disabled={!selectedContactId || contactBusy} title="Delete selected contact profile" aria-label="Delete selected contact profile" className="grid h-9 w-9 place-items-center rounded-lg border border-slate-700 text-slate-300 hover:border-rose-500 hover:text-rose-300 disabled:opacity-40"><Trash2 size={15} /></button>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="grid gap-1 text-xs text-slate-400">Contact name
+              <input value={contactName} onChange={(event) => setContactName(event.target.value)} maxLength={120} className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200" />
+            </label>
+            <label className="grid gap-1 text-xs text-slate-400">Known identifiers
+              <input value={contactIdentifiers} onChange={(event) => setContactIdentifiers(event.target.value)} placeholder="Email, handle, or phone" className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200" />
+            </label>
+          </div>
+          <label className="grid gap-1 text-xs text-slate-400">Writing samples
+            <textarea rows={3} value={contactSamples} onChange={(event) => setContactSamples(event.target.value)} placeholder="Add at least three messages, separated by blank lines" className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200" />
+          </label>
+          <div className="flex flex-wrap items-center gap-3">
+            <button type="button" onClick={saveKnownContact} disabled={contactBusy || !contactName.trim() || !contactIdentifiers.trim() || contactSamples.split(/\r?\n\s*\r?\n/).filter((value) => value.trim()).length < 3} className="rounded-lg border border-cyan-700 px-3 py-2 text-xs font-semibold text-cyan-200 hover:bg-cyan-950 disabled:opacity-40">{contactBusy ? 'Saving...' : 'Save contact profile'}</button>
+            {contactError && <span role="alert" className="text-xs text-rose-300">{contactError}</span>}
+          </div>
+        </section>
+      )}
       <label className="mb-3 grid max-w-xs gap-1 text-xs text-slate-400">Incident residency
         <select value={incidentCountry} onChange={(event) => setIncidentCountry(event.target.value)} className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200">
           <option value="">Not specified</option><option value="IN">India</option><option value="US">United States</option><option value="EU">European Union</option><option value="GB">United Kingdom</option>
         </select>
       </label>
       <form onSubmit={handleAnalyze} className="inspector-form space-y-4">
-        {fileAnalysisTabs.includes(activeSubTab) ? (
+        {fileAnalysisTabs.includes(activeSubTab) || (activeSubTab === 'network' && selectedFile) ? (
           <div className={`dropzone border-2 border-dashed rounded-xl p-8 text-center ${dragActive ? 'dropzone-active' : ''}`} onDragOver={(event) => { event.preventDefault(); setDragActive(true); }} onDragLeave={() => setDragActive(false)} onDrop={(event) => { event.preventDefault(); acceptFile(event.dataTransfer.files?.[0]); }}>
             <Upload size={32} className="mx-auto text-slate-500 mb-2" />
-            <p className="text-xs text-slate-300 font-medium">{activeSubTab === 'malware' ? 'Upload a file for YARA signature triage' : 'Upload Image, Audio, Video, or an EML message'}</p>
+            <p className="text-xs text-slate-300 font-medium">{activeSubTab === 'malware' ? 'Upload a file for YARA signature triage' : activeSubTab === 'network' ? 'Upload a PCAP or PCAPNG capture for flow analysis' : 'Upload Image, Audio, Video, or an EML message'}</p>
             <input
               type="file"
               className="hidden"
               id="mediaUpload"
-              accept={activeSubTab === 'malware' ? '*/*' : 'image/*,audio/*,video/*,.eml,message/rfc822'}
+              accept={activeSubTab === 'malware' ? '*/*' : activeSubTab === 'network' ? '.pcap,.pcapng,application/vnd.tcpdump.pcap' : 'image/*,audio/*,video/*,.eml,message/rfc822'}
               onChange={(e) => acceptFile(e.target.files?.[0])}
             />
             <label
@@ -267,6 +359,11 @@ export default function ThreatInspector({ accessToken }) {
               placeholder={`Paste ${activeSubTab} payload, email headers, URL, or JSON logs here...`}
               className="w-full bg-darkBg border border-slate-700 rounded-xl p-3 text-xs text-slate-200 focus:outline-none focus:border-cyan-500 font-mono"
             />
+            {activeSubTab === 'network' && (
+              <label className="mt-3 grid max-w-md gap-1 text-xs text-slate-400">PCAP / PCAPNG capture
+                <input type="file" accept=".pcap,.pcapng,application/vnd.tcpdump.pcap" onChange={(event) => acceptFile(event.target.files?.[0])} className="text-xs text-slate-300 file:mr-3 file:rounded-lg file:border file:border-slate-700 file:bg-slate-900 file:px-3 file:py-2 file:text-slate-200" />
+              </label>
+            )}
             {activeSubTab === 'email' && inputText.trim() && (
               <div className="live-phishing-panel" aria-live="polite">
                 <div className="live-phishing-heading"><span className="live-pulse" /> LIVE PHISHING SIGNAL {liveLoading && <Loader2 size={12} className="animate-spin" />}</div>
@@ -328,6 +425,27 @@ export default function ThreatInspector({ accessToken }) {
           <p className="text-xs text-slate-200 bg-darkBg p-3 rounded-lg border border-slate-800 leading-relaxed font-mono">
             {plainMode ? analysisResult.plain_language_explanation : analysisResult.xai_explanation}
           </p>
+          {analysisResult.ocr_analysis && (
+            <div className="rounded-lg border border-sky-800/60 bg-sky-950/20 p-3 text-xs text-sky-100">
+              <strong>Image OCR · {analysisResult.ocr_analysis.status.replaceAll('_', ' ')}</strong>
+              {analysisResult.ocr_analysis.status === 'text_detected' ? (
+                <p className="mt-1 text-[11px] text-sky-200/80">{analysisResult.ocr_analysis.character_count} characters analyzed · text risk {analysisResult.ocr_analysis.risk_score}/100 · raw text is not retained in this result.</p>
+              ) : analysisResult.ocr_analysis.reason ? <p className="mt-1 text-[11px] text-sky-200/80">{analysisResult.ocr_analysis.reason}</p> : null}
+            </div>
+          )}
+          {analysisResult.network_capture_summary && (
+            <div className="rounded-lg border border-cyan-800/60 bg-cyan-950/20 p-3 text-xs text-cyan-100">
+              <strong>Network capture · {analysisResult.network_capture_summary.packet_count} packets</strong>
+              <p className="mt-1 text-[11px] text-cyan-200/80">Reconstructed {analysisResult.network_capture_summary.flow_count} TCP/UDP flows for network risk analysis.</p>
+            </div>
+          )}
+          {analysisResult.known_contact_comparison && (
+            <div className="rounded-lg border border-amber-700/50 bg-amber-950/20 p-3 text-xs text-amber-100">
+              <strong>{analysisResult.known_contact_comparison.contact_name}</strong>
+              <span> · sender {analysisResult.known_contact_comparison.sender_match === null ? 'not present' : analysisResult.known_contact_comparison.sender_match ? 'matches' : 'does not match'} · vocabulary similarity {Math.round(analysisResult.known_contact_comparison.vocabulary_similarity * 100)}%</span>
+              <p className="mt-1 text-[11px] text-amber-200/80">{analysisResult.known_contact_comparison.caveat}</p>
+            </div>
+          )}
           <div className="flex items-center gap-3">
             <button type="button" onClick={() => setPlainMode((value) => !value)} className="px-3 py-2 rounded-lg border border-amber-500/30 text-[10px] text-amber-200">{plainMode ? 'Technical explanation' : 'Explain to my grandmother'}</button>
             {analysisResult.incident_id && <button type="button" onClick={downloadComplaintDraft} className="px-3 py-2 rounded-lg border border-emerald-500/30 text-[10px] text-emerald-200">Draft cybercrime.gov.in complaint</button>}
@@ -353,9 +471,23 @@ export default function ThreatInspector({ accessToken }) {
           <div className="space-y-1.5 pt-2">
             <span className="text-[10px] font-bold text-slate-400 uppercase">Engine Indicators</span>
             {analysisResult.indicators.map((ind, idx) => (
-              <div key={idx} className="flex justify-between text-xs bg-slate-800/40 p-2 rounded border border-slate-800">
-                <span className="text-slate-300">{ind.name}</span>
-                <span className="font-mono text-cyan-400 font-bold">{ind.score}{ind.weight ? ` · weight ${ind.weight}` : ''}</span>
+              <div key={idx} className="text-xs bg-slate-800/40 p-2 rounded border border-slate-800">
+                <div className="flex justify-between gap-3">
+                  <span className="text-slate-300">{ind.name}</span>
+                  <span className="font-mono text-cyan-400 font-bold">{ind.score}{ind.weight ? ` · weight ${ind.weight}` : ''}</span>
+                </div>
+                {ind.feature_attribution?.status === 'available' && (
+                  <div className="mt-2 border-t border-slate-700/70 pt-2" aria-label="Local text model feature attribution">
+                    <p className="text-[10px] text-slate-400">{ind.feature_attribution.interpretation}</p>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {ind.feature_attribution.features.map((feature, featureIndex) => (
+                        <span key={`${feature.feature}-${featureIndex}`} className={`rounded px-1.5 py-1 text-[10px] ${feature.effect === 'suspicious' ? 'bg-rose-500/10 text-rose-200' : 'bg-emerald-500/10 text-emerald-200'}`}>
+                          {feature.feature} · {feature.effect} {feature.logit_contribution}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -364,7 +496,7 @@ export default function ThreatInspector({ accessToken }) {
           {analysisResult.sender_identity_verification && <div className="text-xs text-slate-200 bg-slate-800/40 border border-slate-700 rounded-lg p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <strong>Sender identity: {analysisResult.sender_identity_verification.status.replaceAll('_', ' ')}</strong>
-              <span className={analysisResult.sender_identity_verification.status === 'verified' ? 'text-emerald-300' : 'text-amber-300'}>{analysisResult.sender_identity_verification.confidence}% confidence</span>
+              <span className={analysisResult.sender_identity_verification.status === 'verified' ? 'text-emerald-300' : 'text-amber-300'}>risk {analysisResult.sender_identity_verification.risk_score}/100</span>
             </div>
             <div className="mt-1 text-slate-400">From domain: {analysisResult.sender_identity_verification.from_domain || 'unavailable'} · Authentication server: {analysisResult.sender_identity_verification.authserv_id || 'unreported'} ({analysisResult.sender_identity_verification.authentication_trusted ? 'trusted' : 'untrusted'})</div>
           </div>}
@@ -383,6 +515,7 @@ export default function ThreatInspector({ accessToken }) {
             <strong className="text-slate-200">Website identity and domain checks</strong>
             <div className="text-slate-400">TLS: {analysisResult.website_inspection.tls_certificate?.status || 'not checked'}{analysisResult.website_inspection.tls_certificate?.issuer ? ` · ${analysisResult.website_inspection.tls_certificate.issuer}` : ''}{analysisResult.website_inspection.tls_certificate?.days_remaining != null ? ` · ${analysisResult.website_inspection.tls_certificate.days_remaining} days remaining` : ''}</div>
             <div className="text-slate-400">Domain registration: {analysisResult.website_inspection.domain_registration?.status || 'not checked'}{analysisResult.website_inspection.domain_registration?.age_days != null ? ` · ${analysisResult.website_inspection.domain_registration.age_days} days old` : ''}</div>
+            <div className="text-slate-400">Certificate Transparency: {analysisResult.website_inspection.certificate_transparency?.status || 'not checked'}{analysisResult.website_inspection.certificate_transparency?.available ? ` · ${analysisResult.website_inspection.certificate_transparency.certificate_count} records · ${analysisResult.website_inspection.certificate_transparency.matching_names.join(', ') || 'no matching names'}` : ''}</div>
             {!!analysisResult.website_inspection.claimed_brands?.length && <div className="text-slate-400">Page claims: {analysisResult.website_inspection.claimed_brands.join(', ')}{analysisResult.website_inspection.brand_mismatches?.length ? ` · mismatched domain: ${analysisResult.website_inspection.brand_mismatches.join(', ')}` : ''}</div>}
             {!!analysisResult.website_inspection.cross_origin_form_actions?.length && <div className="text-rose-300">Credential form submits to: {analysisResult.website_inspection.cross_origin_form_actions.join(', ')}</div>}
             {(analysisResult.website_inspection.findings || []).map((finding) => <p key={finding} className="text-amber-200">{finding}</p>)}
