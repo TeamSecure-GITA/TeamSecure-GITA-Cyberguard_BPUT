@@ -259,13 +259,11 @@ export default function CyberRadarPortal({
 
           <button
             onClick={() => setShowAuthModal(true)}
-            aria-label={currentSession ? `Signed in: ${currentSession.user?.username || 'SOC Lead'}` : 'SOC Login'}
             className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg border border-slate-700/80 bg-slate-800/40 text-xs font-mono text-slate-300 hover:text-cyan-300 hover:border-cyan-500/40 transition-all shrink-0"
-            title="Authentication & Access"
+            title="SOC Login"
           >
             <Lock size={12} className="text-cyan-400" />
-            <span className="hidden sm:inline">{currentSession ? `Signed in: ${currentSession.user?.username || 'SOC Lead'}` : 'SOC Login'}</span>
-            <span className="sm:hidden">{currentSession ? 'Signed' : 'Login'}</span>
+            <span>{currentSession ? `Signed in: ${currentSession.user?.username || 'SOC Lead'}` : 'SOC Login'}</span>
           </button>
         </div>
       </header>
