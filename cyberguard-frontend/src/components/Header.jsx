@@ -76,12 +76,12 @@ export default function Header({
         </button>
 
         {/* Real-time Status Badge */}
-        <div className="hidden xl:inline-flex items-center gap-2 px-2.5 py-1 rounded-full border border-emerald-500/30 bg-emerald-950/30 text-emerald-400 font-mono text-[10px] shadow-[0_0_12px_rgba(16,185,129,0.15)]">
+        <div className="hidden sm:inline-flex items-center gap-2 px-2.5 py-1 rounded-full border border-emerald-500/30 bg-emerald-950/30 text-emerald-400 font-mono text-[10px] shadow-[0_0_12px_rgba(16,185,129,0.15)] shrink-0">
           <span className="relative flex h-1.5 w-1.5">
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
             <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
           </span>
-          <span className="font-semibold">[ • ACTIVE ]</span>
+          <span className="font-semibold">[ CYBERGUARD WORKSPACE READY ]</span>
         </div>
 
         {/* Role Badge */}

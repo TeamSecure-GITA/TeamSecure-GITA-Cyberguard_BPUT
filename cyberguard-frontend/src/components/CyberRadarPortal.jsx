@@ -248,16 +248,17 @@ export default function CyberRadarPortal({
         {/* Workspace status and controls */}
         <div className="flex items-center gap-2 sm:gap-4">
           <LanguageToggle currentLang={currentLang} onToggle={onLanguageChange} />
-          <div className="hidden lg:inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-emerald-500/30 bg-emerald-950/30 text-emerald-400 font-mono text-[11px] tracking-wider shadow-[0_0_15px_rgba(16,185,129,0.15)]">
+          <div className="inline-flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full border border-emerald-500/30 bg-emerald-950/30 text-emerald-400 font-mono text-[10px] sm:text-[11px] tracking-wider shadow-[0_0_15px_rgba(16,185,129,0.15)] shrink-0">
             <span className="relative flex h-2 w-2">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
             </span>
-            <span className="font-semibold">[ SOC READY ]</span>
+            <span className="font-semibold">[ CYBERGUARD WORKSPACE READY ]</span>
           </div>
 
           <button
             onClick={() => setShowAuthModal(true)}
+            aria-label={currentSession ? `Signed in: ${currentSession.user?.username || 'SOC Lead'}` : 'SOC Login'}
             className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg border border-slate-700/80 bg-slate-800/40 text-xs font-mono text-slate-300 hover:text-cyan-300 hover:border-cyan-500/40 transition-all shrink-0"
             title="Authentication & Access"
           >
