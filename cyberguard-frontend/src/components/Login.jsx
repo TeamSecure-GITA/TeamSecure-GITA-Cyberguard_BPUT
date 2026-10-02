@@ -4,7 +4,7 @@ import { LockKeyhole, LogIn, Shield, AlertTriangle } from 'lucide-react';
 import { getApiBaseUrl } from '../apiConfig';
 import { loginWithGoogle } from '../firebase';
 
-export default function Login({ onLogin }) {
+export default function Login({ onLogin, onReturnToPortal }) {
   const apiBaseUrl = getApiBaseUrl();
   const [username, setUsername] = useState('teamsecure.project@gmail.com');
   const [password, setPassword] = useState('Secure@9040');
@@ -60,15 +60,26 @@ export default function Login({ onLogin }) {
 
   return (
     <main className="min-h-screen min-h-[100dvh] w-full bg-[#040c17] text-slate-100 flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
-      <div className="w-full max-w-md bg-[#081726] border border-cyan-500/25 rounded-2xl p-5 sm:p-8 shadow-2xl shadow-cyan-950/40 space-y-5 my-auto">
-        <div className="flex items-center gap-3">
-          <div className="p-2.5 sm:p-3 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-400">
-            <Shield size={24} />
+      <div className="w-full max-w-md max-h-[96dvh] overflow-y-auto bg-[#081726] border border-cyan-500/25 rounded-2xl p-4 sm:p-6 shadow-2xl shadow-cyan-950/40 space-y-3.5 sm:space-y-4 my-auto">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2.5 sm:gap-3">
+            <div className="p-2 sm:p-2.5 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 shrink-0">
+              <Shield size={20} className="sm:w-6 sm:h-6" />
+            </div>
+            <div>
+              <h1 className="text-base sm:text-lg font-black text-white tracking-wide">CYBERGUARD AI</h1>
+              <p className="text-[11px] sm:text-xs text-slate-400">Secure SOC Operations Login</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-lg sm:text-xl font-black text-white tracking-wide">CYBERGUARD AI</h1>
-            <p className="text-xs text-slate-400">Secure SOC Operations Login</p>
-          </div>
+          {onReturnToPortal && (
+            <button
+              type="button"
+              onClick={onReturnToPortal}
+              className="text-xs text-slate-400 hover:text-cyan-300 font-mono underline"
+            >
+              Portal
+            </button>
+          )}
         </div>
 
         {/* Google One-Click Sign In */}
@@ -100,26 +111,26 @@ export default function Login({ onLogin }) {
           <span>{googleLoading ? 'Signing in with Google...' : 'Continue with Google'}</span>
         </button>
 
-        <div className="relative flex items-center justify-center my-3">
+        <div className="relative flex items-center justify-center my-2">
           <div className="border-t border-slate-800 w-full" />
-          <span className="bg-[#081726] px-3 text-[10px] uppercase tracking-wider font-mono text-slate-500 whitespace-nowrap">
+          <span className="bg-[#081726] px-2.5 text-[10px] uppercase tracking-wider font-mono text-slate-500 whitespace-nowrap">
             or continue with credentials
           </span>
           <div className="border-t border-slate-800 w-full" />
         </div>
 
-        <form onSubmit={submit} className="space-y-4">
-          <label className="block text-xs font-semibold text-slate-400">
+        <form onSubmit={submit} className="space-y-3">
+          <label className="block text-[11px] font-semibold text-slate-300">
             Username / Email
             <input
               autoComplete="username"
               value={username}
               onChange={(event) => setUsername(event.target.value)}
               placeholder="teamsecure.project@gmail.com"
-              className="mt-1.5 w-full bg-[#040c17] border border-slate-700/80 rounded-lg p-2.5 sm:p-3 text-xs sm:text-sm text-white focus:border-cyan-500 focus:outline-none transition-colors"
+              className="mt-1 w-full bg-[#040c17] border border-slate-700/80 rounded-lg p-2 sm:p-2.5 text-xs sm:text-sm text-white focus:border-cyan-500 focus:outline-none transition-colors"
             />
           </label>
-          <label className="block text-xs font-semibold text-slate-400">
+          <label className="block text-[11px] font-semibold text-slate-300">
             Password
             <input
               autoComplete="current-password"
@@ -127,12 +138,12 @@ export default function Login({ onLogin }) {
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               placeholder="Secure@9040"
-              className="mt-1.5 w-full bg-[#040c17] border border-slate-700/80 rounded-lg p-2.5 sm:p-3 text-xs sm:text-sm text-white focus:border-cyan-500 focus:outline-none transition-colors"
+              className="mt-1 w-full bg-[#040c17] border border-slate-700/80 rounded-lg p-2 sm:p-2.5 text-xs sm:text-sm text-white focus:border-cyan-500 focus:outline-none transition-colors"
             />
           </label>
 
           {error && (
-            <div className="p-3 rounded-lg bg-rose-950/40 border border-rose-500/30 text-xs text-rose-300 flex items-start gap-2">
+            <div className="p-2.5 rounded-lg bg-rose-950/40 border border-rose-500/30 text-xs text-rose-300 flex items-start gap-2">
               <AlertTriangle size={15} className="text-rose-400 mt-0.5 shrink-0" />
               <span>{error}</span>
             </div>
@@ -141,14 +152,14 @@ export default function Login({ onLogin }) {
           <button
             type="submit"
             disabled={loading || googleLoading}
-            className="w-full py-2.5 sm:py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 disabled:opacity-50 text-slate-950 text-xs sm:text-sm font-bold flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(16,185,129,0.25)] transition-all"
+            className="w-full py-2 sm:py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 disabled:opacity-50 text-slate-950 text-xs sm:text-sm font-bold flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(16,185,129,0.25)] transition-all"
           >
             <LockKeyhole size={16} />
             {loading ? 'Signing in...' : <><LogIn size={16} />Sign in</>}
           </button>
         </form>
 
-        <p className="text-[11px] text-slate-400 text-center font-mono">
+        <p className="text-[10px] sm:text-[11px] text-slate-400 text-center font-mono">
           Head administrator: <code className="text-cyan-300">teamsecure.project@gmail.com</code>
         </p>
       </div>
