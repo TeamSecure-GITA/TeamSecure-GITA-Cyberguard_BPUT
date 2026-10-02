@@ -4,6 +4,7 @@ import json
 import sqlite3
 import sys
 import types
+import zipfile
 
 import pytest
 import numpy as np
@@ -932,6 +933,34 @@ def test_websocket_pushes_new_incident_metadata_for_authenticated_user(tmp_path,
     assert "payload" not in event["incident"]
 
 
+def test_websocket_initializes_missing_incident_schema_before_query(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "events-without-schema.db")
+    initialize_database()
+    session = login(LoginRequest(username="lead", password="lead123"))
+    token = session["access_token"]
+    with main.get_db() as db:
+        db.execute("DROP TABLE incidents")
+
+    client = TestClient(main.app)
+    with client.websocket_connect(
+        "/api/v1/ws/events",
+        subprotocols=[token, "cyberguard.events.v1"],
+    ) as websocket:
+        assert websocket.receive_json() == {"type": "ready"}
+        incident_id = main.store_incident(
+            "url",
+            "malicious example",
+            {"risk_score": 75, "risk_level": "High"},
+        )
+        event = websocket.receive_json()
+
+    client.close()
+    assert event["type"] == "incident_created"
+    assert event["incident"]["id"] == incident_id
+
+
 def test_cyberguard_x_artifacts_are_available():
     initialize_database()
     lead = login(LoginRequest(username="lead", password="lead123"))["user"]
@@ -1643,6 +1672,197 @@ def test_bundled_yara_rules_detect_the_eicar_test_string():
     assert result["matches"][0]["rule"] == "EICAR_Antivirus_Test_File"
 
 
+def test_malware_scanner_detects_yara_signatures_inside_zip_without_extracting(monkeypatch):
+    class FakeMatch:
+        rule = "Archive_Test_Signature"
+        namespace = "default"
+        meta = {"risk_score": 86}
+
+    class FakeRules:
+        def match(self, data):
+            return [FakeMatch()] if b"nested test signature" in data else []
+
+    class FakeYara:
+        @staticmethod
+        def compile(filepath):
+            return FakeRules()
+
+    archive_bytes = io.BytesIO()
+    with zipfile.ZipFile(archive_bytes, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("folder/payload.bin", b"nested test signature")
+    monkeypatch.setattr(malware_scanner, "_load_yara", lambda: FakeYara())
+
+    result = malware_scanner.scan_artifact(archive_bytes.getvalue(), "bundle.zip")
+
+    assert result["status"] == "matches_found"
+    assert result["risk_score"] == 86
+    assert result["archive_scan"]["entries_scanned"] == 1
+    assert any(match.get("archive_path") == "bundle.zip!/payload.bin" for match in result["matches"])
+
+
+def test_malware_scanner_recurses_into_nested_zip_with_full_member_path(monkeypatch):
+    class FakeMatch:
+        rule = "Nested_Archive_Signature"
+        namespace = "default"
+        meta = {"risk_score": 89}
+
+    class FakeRules:
+        def match(self, data):
+            return [FakeMatch()] if b"nested archive payload" in data else []
+
+    class FakeYara:
+        @staticmethod
+        def compile(filepath):
+            return FakeRules()
+
+    inner_bytes = io.BytesIO()
+    with zipfile.ZipFile(inner_bytes, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("payload.bin", b"nested archive payload")
+    outer_bytes = io.BytesIO()
+    with zipfile.ZipFile(outer_bytes, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("inner.zip", inner_bytes.getvalue())
+    monkeypatch.setattr(malware_scanner, "_load_yara", lambda: FakeYara())
+
+    result = malware_scanner.scan_artifact(outer_bytes.getvalue(), "outer.zip")
+
+    assert result["status"] == "matches_found"
+    assert result["risk_score"] == 89
+    assert any(
+        match.get("archive_path") == "outer.zip!/inner.zip!/payload.bin"
+        for match in result["matches"]
+    )
+    assert result["archive_scan"]["entries_scanned"] == 2
+
+
+def test_malware_scanner_reports_nested_archive_depth_limit(monkeypatch):
+    class FakeRules:
+        def match(self, data):
+            return []
+
+    class FakeYara:
+        @staticmethod
+        def compile(filepath):
+            return FakeRules()
+
+    inner_bytes = io.BytesIO()
+    with zipfile.ZipFile(inner_bytes, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("payload.bin", b"payload")
+    outer_bytes = io.BytesIO()
+    with zipfile.ZipFile(outer_bytes, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("inner.zip", inner_bytes.getvalue())
+    monkeypatch.setattr(malware_scanner, "_load_yara", lambda: FakeYara())
+    monkeypatch.setattr(malware_scanner, "MAX_ARCHIVE_DEPTH", 0)
+
+    result = malware_scanner.scan_artifact(outer_bytes.getvalue(), "outer.zip")
+
+    assert result["status"] == "partial"
+    assert result["archive_scan"]["skipped_entries"] == [{
+        "filename": "outer.zip!/inner.zip",
+        "reason": "nesting_depth_limit",
+    }]
+
+
+def test_malware_scanner_reports_invalid_zip_named_file(monkeypatch):
+    class FakeRules:
+        def match(self, data):
+            return []
+
+    class FakeYara:
+        @staticmethod
+        def compile(filepath):
+            return FakeRules()
+
+    monkeypatch.setattr(malware_scanner, "_load_yara", lambda: FakeYara())
+
+    result = malware_scanner.scan_artifact(b"not a zip", "broken.zip")
+
+    assert result["status"] == "error"
+    assert result["archive_scan"]["skipped_entries"] == [{
+        "filename": "broken.zip",
+        "reason": "invalid_zip_archive",
+    }]
+    assert "not scanned" in result["reasons"][0]
+
+
+def test_malware_scanner_reports_archive_member_size_limit(monkeypatch):
+    class FakeRules:
+        def match(self, data):
+            return []
+
+    class FakeYara:
+        @staticmethod
+        def compile(filepath):
+            return FakeRules()
+
+    archive_bytes = io.BytesIO()
+    with zipfile.ZipFile(archive_bytes, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("large.bin", bytes(range(32)))
+    monkeypatch.setattr(malware_scanner, "_load_yara", lambda: FakeYara())
+    monkeypatch.setattr(malware_scanner, "MAX_ARCHIVE_MEMBER_BYTES", 8)
+
+    result = malware_scanner.scan_artifact(archive_bytes.getvalue(), "bundle.zip")
+
+    assert result["status"] == "partial"
+    assert result["archive_scan"]["skipped_entries"] == [{
+        "filename": "bundle.zip!/large.bin",
+        "reason": "member_size_limit",
+    }]
+    assert "not considered clean" in " ".join(result["reasons"])
+
+
+def test_malware_scanner_enforces_archive_compression_ratio_limit(monkeypatch):
+    class FakeRules:
+        def match(self, data):
+            return []
+
+    class FakeYara:
+        @staticmethod
+        def compile(filepath):
+            return FakeRules()
+
+    archive_bytes = io.BytesIO()
+    with zipfile.ZipFile(archive_bytes, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("compressed.txt", b"A" * 4096)
+    monkeypatch.setattr(malware_scanner, "_load_yara", lambda: FakeYara())
+    monkeypatch.setattr(malware_scanner, "MAX_ARCHIVE_COMPRESSION_RATIO", 2)
+
+    result = malware_scanner.scan_artifact(archive_bytes.getvalue(), "bundle.zip")
+
+    assert result["archive_scan"]["skipped_entries"] == [{
+        "filename": "bundle.zip!/compressed.txt",
+        "reason": "compression_ratio_limit",
+    }]
+    assert result["status"] == "partial"
+
+
+def test_malware_scanner_enforces_archive_entry_limit(monkeypatch):
+    class FakeRules:
+        def match(self, data):
+            return []
+
+    class FakeYara:
+        @staticmethod
+        def compile(filepath):
+            return FakeRules()
+
+    archive_bytes = io.BytesIO()
+    with zipfile.ZipFile(archive_bytes, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("first.bin", b"first")
+        archive.writestr("second.bin", b"second")
+    monkeypatch.setattr(malware_scanner, "_load_yara", lambda: FakeYara())
+    monkeypatch.setattr(malware_scanner, "MAX_ARCHIVE_ENTRIES", 1)
+
+    result = malware_scanner.scan_artifact(archive_bytes.getvalue(), "bundle.zip")
+
+    assert result["archive_scan"]["entries_scanned"] == 1
+    assert result["archive_scan"]["skipped_entries"] == [{
+        "filename": "bundle.zip!/second.bin",
+        "reason": "entry_count_limit",
+        "count": 1,
+    }]
+    assert result["status"] == "partial"
+
+
 def test_uploaded_malware_scan_updates_final_risk_and_explanation(monkeypatch, tmp_path):
     monkeypatch.setattr("main.DB_PATH", tmp_path / "malware-upload.sqlite")
     initialize_database()
@@ -1671,6 +1891,102 @@ def test_uploaded_malware_scan_updates_final_risk_and_explanation(monkeypatch, t
     assert result["assessment"]["malware_scan"]["status"] == "matches_found"
     assert result["assessment"]["risk_level"] == "Critical"
     assert result["assessment"]["xai_explanation"].startswith("Critical Risk:")
+
+
+def test_uploaded_malware_scan_exposes_nested_member_match_path(monkeypatch, tmp_path):
+    monkeypatch.setattr("main.DB_PATH", tmp_path / "malware-archive-upload.sqlite")
+    initialize_database()
+    monkeypatch.setattr("main.scan_artifact", lambda *_: {
+        "status": "matches_found",
+        "engine": "yara",
+        "sha256": "b" * 64,
+        "filename": "bundle.zip",
+        "matches": [{
+            "rule": "Nested_Test_Signature",
+            "namespace": "default",
+            "meta": {"risk_score": 82},
+            "archive_path": "bundle.zip!/payload.bin",
+        }],
+        "risk_score": 82,
+        "reasons": ["YARA rule matched in archive member bundle.zip!/payload.bin."],
+        "archive_scan": {
+            "status": "matches_found",
+            "entries_scanned": 1,
+            "skipped_entries": [],
+            "skipped_count": 0,
+        },
+    })
+    monkeypatch.setattr("main.persist_cyberguard_x", lambda *args, **kwargs: None)
+    monkeypatch.setattr("main.write_audit", lambda *args, **kwargs: None)
+    monkeypatch.setattr("main.create_notification", lambda *args, **kwargs: None)
+    monkeypatch.setattr("main.evaluate_threat_payload", lambda category, payload: {
+        "risk_score": 5,
+        "risk_level": "Safe",
+        "indicators": [],
+        "recommended_actions": [{"id": "warn_user", "label": "Warn"}],
+        "xai_explanation": "Safe Risk: file triage.",
+        "explanation_summary": "File triage.",
+    })
+
+    result = asyncio.run(analyze_file(
+        category="malware",
+        file=UploadFile(file=io.BytesIO(b"zip bytes"), filename="bundle.zip"),
+        metadata="{}",
+        user={"username": "analyst", "role": "analyst"},
+    ))
+
+    assert result["assessment"]["risk_score"] == 82
+    assert result["assessment"]["indicators"][0]["archive_path"] == "bundle.zip!/payload.bin"
+    assert "bundle.zip!/payload.bin" in result["assessment"]["xai_explanation"]
+
+
+def test_uploaded_malware_partial_archive_scan_is_visible_without_inventing_risk(monkeypatch, tmp_path):
+    monkeypatch.setattr("main.DB_PATH", tmp_path / "malware-partial-upload.sqlite")
+    initialize_database()
+    monkeypatch.setattr("main.analyze_media", lambda *args: {
+        "score": 0,
+        "indicators": [],
+        "reasons": [],
+        "method": "unsupported-file",
+    })
+    monkeypatch.setattr("main.scan_artifact", lambda *_: {
+        "status": "partial",
+        "engine": "yara",
+        "sha256": "c" * 64,
+        "filename": "bundle.zip",
+        "matches": [],
+        "risk_score": 0,
+        "reasons": ["Archive inspection skipped 1 member; that member is not considered clean."],
+        "archive_scan": {
+            "status": "partial",
+            "entries_scanned": 0,
+            "skipped_entries": [{"filename": "bundle.zip!/large.bin", "reason": "member_size_limit"}],
+            "skipped_count": 1,
+        },
+    })
+    monkeypatch.setattr("main.persist_cyberguard_x", lambda *args, **kwargs: None)
+    monkeypatch.setattr("main.write_audit", lambda *args, **kwargs: None)
+    monkeypatch.setattr("main.create_notification", lambda *args, **kwargs: None)
+    monkeypatch.setattr("main.evaluate_threat_payload", lambda category, payload: {
+        "risk_score": 5,
+        "risk_level": "Safe",
+        "indicators": [],
+        "recommended_actions": [{"id": "warn_user", "label": "Warn"}],
+        "xai_explanation": "Safe Risk: file triage.",
+        "explanation_summary": "File triage.",
+    })
+
+    result = asyncio.run(analyze_file(
+        category="malware",
+        file=UploadFile(file=io.BytesIO(b"zip bytes"), filename="bundle.zip"),
+        metadata="{}",
+        user={"username": "analyst", "role": "analyst"},
+    ))
+
+    assessment = result["assessment"]
+    assert assessment["risk_score"] == 5
+    assert any(item["name"] == "Incomplete Malware Scan Coverage" for item in assessment["indicators"])
+    assert "not considered clean" in assessment["xai_explanation"]
 
 
 def test_network_flow_and_api_rate_analytics_use_structured_fields():
@@ -1773,6 +2089,47 @@ def test_eml_attachment_metadata_and_text_are_inspected():
     assert result["attachments"][0]["status"] == "text_content_scanned"
     assert result["attachments"][1]["status"] == "active_content_review"
     assert any(indicator["name"] == "Risky Email Attachment Type" for indicator in result["indicators"])
+
+
+def test_eml_upload_scans_attachments_and_includes_yara_matches_in_assessment(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "eml-attachment-scan.db")
+    monkeypatch.setattr(main, "scan_artifact", lambda content, filename: {
+        "status": "matches_found",
+        "engine": "yara",
+        "sha256": "a" * 64,
+        "filename": filename,
+        "matches": [{
+            "rule": "Test_Malware",
+            "namespace": "cyberguard",
+            "meta": {"risk_score": 88},
+        }],
+        "risk_score": 88,
+        "reasons": ["YARA rule matched: Test_Malware."],
+    })
+    initialize_database()
+    message = (
+        b"From: sender@example.com\r\n"
+        b"Subject: Document\r\n"
+        b"MIME-Version: 1.0\r\n"
+        b"Content-Type: multipart/mixed; boundary=sample\r\n\r\n"
+        b"--sample\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nPlease review.\r\n"
+        b"--sample\r\nContent-Type: application/octet-stream\r\n"
+        b"Content-Disposition: attachment; filename=invoice.bin\r\n"
+        b"Content-Transfer-Encoding: base64\r\n\r\nTVqQ\r\n--sample--\r\n"
+    )
+
+    result = asyncio.run(main.analyze_file(
+        category="email",
+        file=UploadFile(file=io.BytesIO(message), filename="message.eml", headers={"content-type": "message/rfc822"}),
+        metadata="{}",
+        user={"username": "analyst", "role": "analyst"},
+    ))
+
+    assessment = result["assessment"]
+    assert assessment["risk_score"] == 88
+    assert assessment["email_attachments"][0]["malware_scan"]["status"] == "matches_found"
+    assert any(item["name"] == "Email Attachment YARA Match" for item in assessment["indicators"])
+    assert "Test_Malware" in assessment["xai_explanation"]
 
 
 def test_category_playbooks_are_dry_run_and_approval_gated():

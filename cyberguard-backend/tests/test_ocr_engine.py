@@ -59,3 +59,31 @@ def test_image_upload_scores_ocr_text_without_returning_raw_text(tmp_path, monke
     assert ocr_result["risk_score"] > 0
     assert any(indicator["name"].startswith("OCR:") for indicator in result["assessment"]["indicators"])
     assert "verify your password" not in str(result)
+
+
+def test_uploaded_login_screenshot_detects_visible_brand_domain_mismatch(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "login-screenshot.db")
+    monkeypatch.setattr(main, "extract_image_text", lambda content: {
+        "status": "text_detected",
+        "text": "Microsoft sign in. Enter your password at https://microsoft-login.example",
+        "character_count": 74,
+        "truncated": False,
+    })
+    monkeypatch.setattr(main, "analyze_media", lambda *args: {"score": 5, "indicators": [], "reasons": [], "method": "image-test"})
+    main.initialize_database()
+
+    result = asyncio.run(main.analyze_file(
+        category="image",
+        file=UploadFile(file=BytesIO(b"image bytes"), filename="login.png", headers={"content-type": "image/png"}),
+        metadata="{}",
+        user={"username": "analyst", "role": "analyst"},
+    ))
+
+    assessment = result["assessment"]
+    assert assessment["ocr_analysis"]["brand_domain_mismatches"] == [{
+        "brand": "microsoft",
+        "observed_domain": "microsoft-login.example",
+        "expected_domain": "microsoft.com",
+    }]
+    assert any(item["name"] == "OCR Login Brand-Domain Mismatch" for item in assessment["indicators"])
+    assert "Microsoft" not in str(assessment["ocr_analysis"])

@@ -46,6 +46,49 @@ def test_video_analysis_localizes_faces_and_scores_temporal_variance(monkeypatch
 
     assert len(result["frame_scores"]) == 3
     assert result["face_counts"] == [1, 0, 0]
+    assert result["sampled_frame_count"] == 3
     assert result["temporal_score_variance"] >= 20
     assert any(item["name"] == "Faces Detected in Sampled Frames" for item in result["indicators"])
     assert any(item["name"] == "Temporal Deepfake Score Variance" for item in result["indicators"])
+
+
+def test_video_analysis_samples_a_bounded_spread_across_long_clips(monkeypatch):
+    frame = np.full((64, 64, 3), 120, dtype=np.uint8)
+
+    class Capture:
+        frame_index = 0
+
+        def get(self, property_id):
+            return {
+                cv2.CAP_PROP_FRAME_COUNT: 61,
+                cv2.CAP_PROP_FRAME_WIDTH: 64,
+                cv2.CAP_PROP_FRAME_HEIGHT: 64,
+            }[property_id]
+
+        def set(self, property_id, value):
+            self.frame_index = int(value)
+
+        def read(self):
+            return True, frame.copy()
+
+        def release(self):
+            return None
+
+    class FaceDetector:
+        def empty(self):
+            return False
+
+        def detectMultiScale(self, grayscale, **kwargs):
+            return []
+
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _: Capture())
+    monkeypatch.setattr(cv2, "CascadeClassifier", lambda _: FaceDetector(), raising=False)
+    monkeypatch.setattr(deepfake_models, "analyze_pretrained", lambda *_: {"score": 10, "model": "test-model"})
+
+    result = media_engine.analyze_video(b"synthetic long video bytes")
+
+    assert result["sampled_frame_count"] == 30
+    assert result["sampling_limit"] == 30
+    assert len(result["frame_scores"]) == 30
+    assert result["frame_scores"][0]["frame_index"] == 0
+    assert result["frame_scores"][-1]["frame_index"] == 60

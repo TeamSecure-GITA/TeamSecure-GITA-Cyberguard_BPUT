@@ -4,6 +4,7 @@ import hashlib
 import html
 import ipaddress
 import json
+import math
 import os
 import re
 import secrets
@@ -61,7 +62,7 @@ from webauthn.helpers.structs import PublicKeyCredentialDescriptor, UserVerifica
 from database import connect_database
 from ephemeral_store import EphemeralStore
 
-from detection_engine import FALLBACK_TEXT_MODEL, TEXT_MODEL, adversarial_self_test, evaluate_threat_payload
+from detection_engine import FALLBACK_TEXT_MODEL, TEXT_MODEL, adversarial_self_test, analyze_screenshot_brand_mismatches, evaluate_threat_payload
 from behavioral_baseline import baseline_key, login_sample, parse_login_event, score_login_deviation, successful_login
 from geoip_enrichment import lookup_country as lookup_geoip_country
 from malware_scanner import scan_artifact
@@ -893,14 +894,39 @@ def admin_user(request: Request, user: dict[str, str] = Depends(current_user)) -
     return user
 
 
-def normalize_residency_metadata(metadata: Any) -> dict[str, str]:
+def normalize_residency_metadata(metadata: Any) -> dict[str, Any]:
     if not isinstance(metadata, dict):
         return {}
-    return {
+    normalized: dict[str, Any] = {
         key: value.strip()[:64]
         for key in ("country", "region")
         if isinstance((value := metadata.get(key)), str) and value.strip()
     }
+    source_location = metadata.get("source_location")
+    if source_location is not None:
+        if not isinstance(source_location, dict):
+            raise HTTPException(status_code=400, detail="Source location metadata must be an object.")
+        country = source_location.get("country")
+        latitude = source_location.get("lat")
+        longitude = source_location.get("lng")
+        if not isinstance(country, str) or not country.strip() or len(country.strip()) > 64:
+            raise HTTPException(status_code=400, detail="Source location must include a country label of at most 64 characters.")
+        if isinstance(latitude, bool) or isinstance(longitude, bool):
+            raise HTTPException(status_code=400, detail="Source location coordinates must be numeric.")
+        try:
+            latitude = float(latitude)
+            longitude = float(longitude)
+        except (TypeError, ValueError) as error:
+            raise HTTPException(status_code=400, detail="Source location coordinates must be numeric.") from error
+        if not math.isfinite(latitude) or not math.isfinite(longitude) or not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180):
+            raise HTTPException(status_code=400, detail="Source location coordinates are outside valid latitude/longitude ranges.")
+        normalized["source_location"] = {
+            "country": country.strip(),
+            "lat": latitude,
+            "lng": longitude,
+            "source": "reported_metadata",
+        }
+    return normalized
 
 
 def store_incident(category: str, payload: str, assessment: dict, filename: str | None = None, file_hash: str | None = None, metadata: dict | None = None):
@@ -1347,11 +1373,65 @@ def record_identity_trust(payload: IdentityTrustRequest, user: dict[str, str] = 
 
 @app.get("/api/v1/prevention/insider-risk")
 def prevention_insider_risk(user: dict[str, str] = Depends(current_user)):
+    now = datetime.now(timezone.utc)
     with get_db() as db:
         row = db.execute(
             "SELECT event_id, assessment_json, incident_id, created_at FROM insider_risk_events WHERE username = ? ORDER BY created_at DESC LIMIT 1",
             (user["username"],),
         ).fetchone()
+        audit_rows = db.execute(
+            "SELECT action, resource, details, created_at FROM audit_logs "
+            "WHERE username = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 500",
+            (user["username"], (now - timedelta(days=30)).isoformat()),
+        ).fetchall()
+    audit_activity = {
+        "downloads": 0,
+        "off_hours": False,
+        "privilege_change": False,
+        "sensitive_access": 0,
+    }
+    observed_audit_events = 0
+    for audit_row in audit_rows:
+        action = str(audit_row["action"] or "").lower()
+        resource = str(audit_row["resource"] or "").lower()
+        details = str(audit_row["details"] or "").lower()
+        if action == "insider_risk_assessed":
+            continue
+        try:
+            timestamp = datetime.fromisoformat(str(audit_row["created_at"]).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        timestamp = timestamp.astimezone(timezone.utc)
+        if timestamp > now:
+            continue
+        is_download = any(term in action for term in ("download", "export"))
+        is_privilege_change = any(term in action for term in ("role", "permission", "policy", "user_create", "user_update", "user_delete"))
+        is_sensitive_access = any(term in f"{action} {resource} {details}" for term in ("credential", "secret", "private_key", "sensitive", "bulk_export"))
+        if not (is_download or is_privilege_change or is_sensitive_access):
+            continue
+        observed_audit_events += 1
+        audit_activity["off_hours"] = audit_activity["off_hours"] or timestamp.hour < 6 or timestamp.hour >= 22
+        if is_download:
+            audit_activity["downloads"] += 1
+        if is_privilege_change:
+            audit_activity["privilege_change"] = True
+        if is_sensitive_access:
+            audit_activity["sensitive_access"] += 1
+
+    if observed_audit_events:
+        assessment = insider_threat_risk(audit_activity)
+        return {
+            **assessment,
+            "status": "review_required" if assessment["risk_score"] >= 60 else "observed",
+            "assessment_source": "application_audit_telemetry",
+            "event_count": observed_audit_events,
+            "observation_window_days": 30,
+            "event_id": None,
+            "incident_id": None,
+            "message": "Derived from this user's recorded CyberGuard audit events. Endpoint, file-system, and identity-provider telemetry are not connected.",
+        }
     if not row:
         return {
             "risk_score": None,
@@ -2108,7 +2188,7 @@ async def analyze_file(category: str = Form(...), file: UploadFile = File(...), 
             raise HTTPException(status_code=503, detail=str(error)) from error
     is_image = content_type.startswith("image/") or filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"))
     ocr_result = extract_image_text(content) if is_image else None
-    email_result = analyze_eml(content) if is_eml else None
+    email_result = analyze_eml(content, scan_artifact) if is_eml else None
     payload = email_result["payload"] if email_result else json.dumps(network_capture) if network_capture else (content.decode("utf-8", errors="replace") if is_text else f"Uploaded {file.content_type or 'media'} file: {filename}")
     assessment = evaluate_threat_payload(category, payload)
     if category.lower() in {"auth_logs", "ato"}:
@@ -2116,18 +2196,61 @@ async def analyze_file(category: str = Form(...), file: UploadFile = File(...), 
     if category.lower() == "malware":
         malware_scan = scan_artifact(content, filename)
         assessment["malware_scan"] = malware_scan
-        assessment["indicators"].extend({"name": match["rule"], "weight": match["meta"].get("risk_score", 70)} for match in malware_scan["matches"])
+        assessment["indicators"].extend(
+            {
+                "name": match["rule"],
+                "weight": match["meta"].get("risk_score", 70),
+                **({"archive_path": match["archive_path"]} if match.get("archive_path") else {}),
+            }
+            for match in malware_scan["matches"]
+        )
         assessment["risk_score"] = max(assessment["risk_score"], malware_scan["risk_score"])
-        if malware_scan["matches"]:
+        if malware_scan["reasons"]:
             assessment["xai_explanation"] += " " + " ".join(malware_scan["reasons"])
+        archive_scan = malware_scan.get("archive_scan") or {}
+        if malware_scan["status"] in {"unavailable", "error", "partial"} or archive_scan.get("status") in {"error", "partial"}:
+            assessment["indicators"].append({
+                "name": "Incomplete Malware Scan Coverage",
+                "weight": 0,
+                "status": malware_scan["status"],
+            })
     assessment["iocs"] = enrich_iocs(extract_iocs(payload))
     if email_result:
         assessment["risk_score"] = max(assessment["risk_score"], email_result["score"])
         assessment["indicators"].extend(email_result["indicators"])
         assessment["xai_explanation"] += " " + " ".join(email_result["reasons"])
+        for attachment in email_result["attachments"]:
+            malware_scan = attachment.get("malware_scan")
+            if not malware_scan:
+                continue
+            assessment["risk_score"] = max(assessment["risk_score"], malware_scan["risk_score"])
+            assessment["indicators"].extend(
+                {
+                    "name": "Email Attachment YARA Match",
+                    "weight": match["meta"].get("risk_score", 70),
+                    "rule": match["rule"],
+                    "filename": attachment["filename"],
+                    **({"archive_path": match["archive_path"]} if match.get("archive_path") else {}),
+                }
+                for match in malware_scan["matches"]
+            )
+            if malware_scan["reasons"]:
+                assessment["xai_explanation"] += " " + " ".join(
+                    f"Attachment {attachment['filename']}: {reason}"
+                    for reason in malware_scan["reasons"]
+                )
+            archive_scan = malware_scan.get("archive_scan") or {}
+            if malware_scan["status"] in {"unavailable", "error", "partial"} or archive_scan.get("status") in {"error", "partial"}:
+                assessment["indicators"].append({
+                    "name": "Incomplete Email Attachment Scan Coverage",
+                    "weight": 0,
+                    "filename": attachment["filename"],
+                    "status": malware_scan["status"],
+                })
         assessment["sender_authenticity"] = email_result["metadata"]
         assessment["sender_identity_verification"] = email_result["identity_verification"]
         assessment["email_html_inspection"] = email_result["html_inspection"]
+        assessment["email_attachments"] = email_result["attachments"]
     if network_capture:
         assessment["network_capture_summary"] = {
             "packet_count": network_capture["packet_count"],
@@ -2150,6 +2273,23 @@ async def analyze_file(category: str = Form(...), file: UploadFile = File(...), 
             assessment["explanation_summary"] += " OCR: " + ocr_assessment["explanation_summary"]
             assessment["ocr_analysis"]["risk_score"] = ocr_assessment["risk_score"]
             assessment["ocr_analysis"]["evidence"] = ocr_assessment["explanation_summary"]
+            brand_mismatches = analyze_screenshot_brand_mismatches(ocr_result["text"])
+            if brand_mismatches:
+                assessment["risk_score"] = min(99, assessment["risk_score"] + 35)
+                assessment["ocr_analysis"]["brand_domain_mismatches"] = brand_mismatches
+                for mismatch in brand_mismatches:
+                    evidence = (
+                        f"OCR detected a {mismatch['brand']} login claim with a visible URL on "
+                        f"{mismatch['observed_domain']}; the configured brand domain is "
+                        f"{mismatch['expected_domain']}."
+                    )
+                    assessment["indicators"].append({
+                        "name": "OCR Login Brand-Domain Mismatch",
+                        "weight": 35,
+                        **mismatch,
+                    })
+                    assessment["xai_explanation"] += " " + evidence
+                    assessment["explanation_summary"] += " " + evidence
         elif ocr_result.get("reason"):
             assessment["ocr_analysis"]["reason"] = ocr_result["reason"]
     if not is_text and not email_result and not network_capture:
@@ -2604,10 +2744,20 @@ def identity_risk(user: dict[str, str] = Depends(current_user)):
 
 @app.post("/api/v1/media/trust")
 async def media_trust(file: UploadFile = File(...), user: dict[str, str] = Depends(current_user)):
-    content = await file.read()
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded media cannot be empty.")
-    return analyze_trust_media(content, file.filename or "upload", file.content_type or "")
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"Uploaded file exceeds the {MAX_UPLOAD_BYTES // 1_000_000} MB limit.")
+    filename = file.filename or "upload"
+    content_type = (file.content_type or "").lower()
+    supported_suffixes = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".wav", ".flac", ".ogg", ".oga", ".aiff", ".aif", ".mp3", ".m4a", ".aac", ".mp4", ".avi", ".mov")
+    if not (content_type.startswith(("image/", "audio/", "video/")) or filename.lower().endswith(supported_suffixes)):
+        raise HTTPException(status_code=415, detail="Upload a supported image, audio, or video file.")
+    try:
+        return analyze_trust_media(content, filename, content_type)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=f"Media could not be inspected: {error}") from error
 
 
 @app.websocket("/api/v1/ws/events")
@@ -2616,6 +2766,7 @@ async def events_socket(websocket: WebSocket):
     offered_protocols = websocket.scope.get("subprotocols", [])
     token = next((value for value in offered_protocols if value != protocol), None)
     try:
+        initialize_database()
         current_user(f"Bearer {token}" if token else None)
     except HTTPException:
         await websocket.close(code=4401)

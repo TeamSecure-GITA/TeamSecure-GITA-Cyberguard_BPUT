@@ -157,24 +157,33 @@ def analyze_video(content: bytes) -> dict[str, Any]:
     with tempfile.NamedTemporaryFile(suffix=".video", delete=False) as temporary_file:
         temporary_file.write(content)
         temporary_path = temporary_file.name
-    capture = cv2.VideoCapture(temporary_path)
-    frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-    height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
     sampled_frames = []
-    if frame_count > 0:
-        for frame_index in {0, max(0, frame_count // 2), max(0, frame_count - 1)}:
-            capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
-            ok, frame = capture.read()
-            if ok:
-                encoded, buffer = cv2.imencode(".jpg", frame)
-                if encoded:
-                    sampled_frames.append((frame_index, frame, buffer.tobytes()))
-    capture.release()
-    os.unlink(temporary_path)
+    capture = None
+    try:
+        capture = cv2.VideoCapture(temporary_path)
+        frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        if frame_count > 0:
+            sample_count = min(frame_count, 30)
+            frame_indices = sorted({
+                round(index * (frame_count - 1) / max(sample_count - 1, 1))
+                for index in range(sample_count)
+            })
+            for frame_index in frame_indices:
+                capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+                ok, frame = capture.read()
+                if ok:
+                    encoded, buffer = cv2.imencode(".jpg", frame)
+                    if encoded:
+                        sampled_frames.append((frame_index, frame, buffer.tobytes()))
+    finally:
+        if capture is not None:
+            capture.release()
+        os.unlink(temporary_path)
     score = 20
     reasons = [f"Video container inspected at {width}x{height} with {frame_count} frames."]
-    indicators = [{"name": "Video Frame Sampling", "observed_frames": frame_count, "weight": 1}]
+    indicators = [{"name": "Video Frame Sampling", "observed_frames": frame_count, "sampled_frames": len(sampled_frames), "weight": 1}]
     if frame_count == 0 or width == 0 or height == 0:
         score += 35
         reasons.append("Video stream metadata could not be decoded reliably.")
@@ -230,6 +239,8 @@ def analyze_video(content: bytes) -> dict[str, Any]:
         "pretrained_model": frame_results[0] if frame_results else None,
         "frame_scores": frame_scores,
         "face_counts": face_counts,
+        "sampled_frame_count": len(sampled_frames),
+        "sampling_limit": 30,
         "temporal_score_variance": round(temporal_variance, 2) if temporal_variance is not None else None,
     }
 
@@ -250,11 +261,11 @@ def analyze_qr(content: bytes) -> dict[str, Any]:
 def analyze_media(content: bytes, content_type: str, filename: str, category: str) -> dict[str, Any]:
     suffix = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
     try:
-        if suffix in {"png", "jpg", "jpeg", "webp"}:
+        if suffix in {"png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff"}:
             qr_result = analyze_qr(content)
             if qr_result.get("decoded_payload"):
                 return qr_result
-        if content_type.startswith("image/") or suffix in {"png", "jpg", "jpeg", "webp"}:
+        if content_type.startswith("image/") or suffix in {"png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff"}:
             return analyze_image(content)
         if content_type.startswith("audio/") or suffix in AUDIO_SUFFIXES:
             return analyze_audio(content)
