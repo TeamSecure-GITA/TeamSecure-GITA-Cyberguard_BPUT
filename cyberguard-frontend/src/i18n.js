@@ -106,8 +106,9 @@ function translateDom(root, language, originals) {
     ['placeholder', 'title', 'aria-label'].forEach((attribute) => {
       const value = element.getAttribute(attribute);
       if (value) {
-        if (!element.dataset.originalLanguageText) element.dataset.originalLanguageText = value;
-        element.setAttribute(attribute, translateText(element.dataset.originalLanguageText, language));
+        const datasetKey = `originalLanguage${attribute.replace(/(?:^|-)([a-z])/g, (_, character) => character.toUpperCase())}`;
+        if (!element.dataset[datasetKey]) element.dataset[datasetKey] = value;
+        element.setAttribute(attribute, translateText(element.dataset[datasetKey], language));
       }
     });
   });
