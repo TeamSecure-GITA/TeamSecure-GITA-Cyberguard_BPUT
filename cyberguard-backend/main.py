@@ -708,22 +708,17 @@ DEFAULT_CORS_ORIGINS = (
     "http://127.0.0.1:8000,http://localhost:8000,"
     "https://teamsecure-gita-cyberguard.vercel.app"
 )
-configured_origins_env = os.getenv("CYBERGUARD_FRONTEND_ORIGINS", "")
-cors_origins_set = {orig.strip().rstrip("/") for orig in DEFAULT_CORS_ORIGINS.split(",") if orig.strip()}
-if configured_origins_env:
-    for orig in configured_origins_env.split(","):
-        cleaned = orig.strip().rstrip("/")
-        if cleaned:
-            cors_origins_set.add(cleaned)
-
+configured_origins = os.getenv("CYBERGUARD_FRONTEND_ORIGINS", DEFAULT_CORS_ORIGINS)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=sorted(list(cors_origins_set)),
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_origins=[
+        origin.strip()
+        for origin in configured_origins.split(",")
+        if origin.strip()
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"],
 )
 
 
