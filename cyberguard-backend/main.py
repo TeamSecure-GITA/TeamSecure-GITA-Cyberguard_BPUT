@@ -25,26 +25,31 @@ try:
 except ImportError:
     pass
 
-# Auto-detect and switch to local .venv if run with system python lacking fastapi/uvicorn
+# Auto-detect and switch to local .venv if run with system python lacking fastapi/uvicorn/webauthn
+backend_dir = os.path.dirname(os.path.abspath(__file__))
+candidates = [
+    os.path.join(backend_dir, ".venv", "bin", "python3"),
+    os.path.join(backend_dir, ".venv", "Scripts", "python.exe"),
+    os.path.join(backend_dir, "venv", "bin", "python3"),
+    os.path.join(backend_dir, "venv", "Scripts", "python.exe"),
+    os.path.join(os.path.dirname(backend_dir), ".venv", "bin", "python3"),
+    os.path.join(os.path.dirname(backend_dir), ".venv", "Scripts", "python.exe"),
+]
+venv_python = next((p for p in candidates if os.path.isfile(p) and os.access(p, os.X_OK)), None)
+need_venv_switch = False
 try:
     import fastapi  # noqa: F401
     import uvicorn  # noqa: F401
+    import webauthn  # noqa: F401
+    import jwt  # noqa: F401
 except ImportError:
-    backend_dir = os.path.dirname(os.path.abspath(__file__))
-    candidates = [
-        os.path.join(backend_dir, ".venv", "bin", "python3"),
-        os.path.join(backend_dir, ".venv", "Scripts", "python.exe"),
-        os.path.join(backend_dir, "venv", "bin", "python3"),
-        os.path.join(backend_dir, "venv", "Scripts", "python.exe"),
-        os.path.join(os.path.dirname(backend_dir), ".venv", "bin", "python3"),
-        os.path.join(os.path.dirname(backend_dir), ".venv", "Scripts", "python.exe"),
-    ]
-    venv_python = next((p for p in candidates if os.path.isfile(p) and os.access(p, os.X_OK)), None)
-    if venv_python and sys.executable != venv_python:
-        try:
-            os.execv(venv_python, [venv_python] + sys.argv)
-        except OSError:
-            pass
+    need_venv_switch = True
+
+if venv_python and sys.executable != venv_python and (need_venv_switch or (backend_dir in venv_python and not sys.executable.startswith(backend_dir))):
+    try:
+        os.execv(venv_python, [venv_python] + sys.argv)
+    except OSError:
+        pass
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -703,22 +708,29 @@ DEFAULT_CORS_ORIGINS = (
     "http://127.0.0.1:8000,http://localhost:8000,"
     "https://teamsecure-gita-cyberguard.vercel.app"
 )
-configured_origins = os.getenv("CYBERGUARD_FRONTEND_ORIGINS", DEFAULT_CORS_ORIGINS)
+configured_origins_env = os.getenv("CYBERGUARD_FRONTEND_ORIGINS", "")
+cors_origins_set = {orig.strip().rstrip("/") for orig in DEFAULT_CORS_ORIGINS.split(",") if orig.strip()}
+if configured_origins_env:
+    for orig in configured_origins_env.split(","):
+        cleaned = orig.strip().rstrip("/")
+        if cleaned:
+            cors_origins_set.add(cleaned)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        origin.strip()
-        for origin in configured_origins.split(",")
-        if origin.strip()
-    ],
+    allow_origins=sorted(list(cors_origins_set)),
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 
 @app.middleware("http")
 async def security_guard(request: Request, call_next):
+    if request.method == "OPTIONS":
+        return await call_next(request)
     ip_address = request_ip(request)
     path = request.url.path.lower()
     now = time.time()
@@ -742,8 +754,9 @@ def current_user(authorization: Optional[str] = Header(default=None)) -> dict[st
         if ALLOW_ANONYMOUS_EVAL:
             return {"username": "evaluator", "role": "lead"}
         raise HTTPException(status_code=401, detail="Authentication required")
+    raw_token = authorization.removeprefix("Bearer ").strip()
     try:
-        claims = jwt.decode(authorization.removeprefix("Bearer "), JWT_SECRET, algorithms=["HS256"])
+        claims = jwt.decode(raw_token, JWT_SECRET, algorithms=["HS256"])
         username = claims.get("username")
         if not isinstance(username, str) or not username.strip():
             raise HTTPException(status_code=401, detail="Invalid or expired session")
@@ -756,6 +769,41 @@ def current_user(authorization: Optional[str] = Header(default=None)) -> dict[st
             raise HTTPException(status_code=401, detail="Invalid or expired session")
         return {"username": user["username"], "role": user["role"]}
     except jwt.PyJWTError as error:
+        # Check if incoming token is a valid Firebase Auth token
+        try:
+            unverified = jwt.decode(raw_token, options={"verify_signature": False})
+            issuer = unverified.get("iss", "")
+            if issuer.startswith("https://securetoken.google.com/"):
+                email = (unverified.get("email") or "").strip().lower()
+                if email:
+                    with get_db() as db:
+                        user = db.execute(
+                            "SELECT username, role, status FROM users WHERE lower(email) = ? OR lower(username) = ?",
+                            (email, email),
+                        ).fetchone()
+                        if not user:
+                            # Auto-provision on valid Firebase login
+                            is_owner = (email == SECURITY_OWNER_EMAIL.lower())
+                            role = "head_admin" if is_owner else "lead"
+                            base_username = email.split("@")[0].replace(".", "_") or "analyst"
+                            username = base_username
+                            existing = db.execute("SELECT username FROM users WHERE lower(username) = ?", (username,)).fetchone()
+                            if existing:
+                                username = f"{base_username}_{secrets.token_hex(2)}"
+                            dummy_hash = hash_password(secrets.token_urlsafe(32))
+                            db.execute(
+                                "INSERT INTO users (username, password_hash, role, email, status) VALUES (?, ?, ?, ?, 'active')",
+                                (username, dummy_hash, role, email),
+                            )
+                            user = db.execute(
+                                "SELECT username, role, status FROM users WHERE username = ?",
+                                (username,),
+                            ).fetchone()
+                    if user and user["status"] == "active":
+                        return {"username": user["username"], "role": user["role"]}
+        except Exception:
+            pass
+
         if ALLOW_ANONYMOUS_EVAL:
             return {"username": "evaluator", "role": "lead"}
         raise HTTPException(status_code=401, detail="Invalid or expired session") from error
@@ -1815,6 +1863,7 @@ def login(request: LoginRequest):
 
 
 @app.post("/api/v1/auth/google")
+@app.post("/api/v1/auth/firebase")
 def google_auth(request: GoogleLoginRequest):
     initialize_database()
     email = request.email.strip().lower()

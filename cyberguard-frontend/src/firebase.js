@@ -1,7 +1,16 @@
 // Import the functions you need from the SDKs you need
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getAnalytics, isSupported } from "firebase/analytics";
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+  updateProfile,
+  signOut,
+} from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import axios from "axios";
 
@@ -28,16 +37,43 @@ export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 /**
- * Sign in using Google popup and bridge with CyberGuard session.
- * Connects to CyberGuard backend /api/v1/auth/google if available,
- * or constructs an authenticated client session safely.
+ * Format Firebase Auth errors into clear, actionable messages.
  */
-export const loginWithGoogle = async (apiBaseUrl) => {
-  const result = await signInWithPopup(auth, googleProvider);
-  const user = result.user;
-  const idToken = await user.getIdToken();
+export const formatFirebaseAuthError = (error) => {
+  if (!error) return 'An unexpected authentication error occurred.';
+  const code = error.code || '';
+  switch (code) {
+    case 'auth/invalid-credential':
+    case 'auth/user-not-found':
+    case 'auth/wrong-password':
+      return 'Invalid email or password. Please verify your credentials.';
+    case 'auth/email-already-in-use':
+      return 'An account with this email already exists. Please sign in instead.';
+    case 'auth/weak-password':
+      return 'Password should be at least 6 characters long.';
+    case 'auth/invalid-email':
+      return 'Please enter a valid official email address.';
+    case 'auth/popup-closed-by-user':
+      return 'Google sign-in was cancelled by closing the popup window.';
+    case 'auth/popup-blocked':
+      return 'Google sign-in popup was blocked by your browser. Please allow popups for this site.';
+    case 'auth/unauthorized-domain':
+      return 'This origin is not in the Firebase Authorized Domains list. Please add localhost in Firebase Console.';
+    case 'auth/too-many-requests':
+      return 'Access temporarily disabled due to many failed attempts. Try again later or reset password.';
+    default:
+      return error.message || 'Authentication failed. Please try again.';
+  }
+};
 
-  // Try authenticating with backend if URL is provided
+/**
+ * Bridge a Firebase User with the CyberGuard session format.
+ * Syncs with the FastAPI backend if reachable, or provides an authenticated resilient session.
+ */
+const bridgeFirebaseSession = async (user, apiBaseUrl) => {
+  const idToken = await user.getIdToken();
+  const isOwner = (user.email || '').toLowerCase() === 'teamsecure.project@gmail.com';
+
   if (apiBaseUrl) {
     try {
       const response = await axios.post(
@@ -54,12 +90,11 @@ export const loginWithGoogle = async (apiBaseUrl) => {
         return response.data;
       }
     } catch (err) {
-      console.warn("Backend Google auth synchronization notice:", err?.response?.data?.detail || err.message);
+      console.warn("Backend Firebase session sync notification:", err?.response?.data?.detail || err.message);
     }
   }
 
-  // Resilient fallback session for seamless UX across all devices
-  const isOwner = (user.email || '').toLowerCase() === 'teamsecure.project@gmail.com';
+  // Resilient fallback session for zero-downtime access
   return {
     access_token: idToken || `firebase-${user.uid}`,
     token_type: "bearer",
@@ -70,6 +105,44 @@ export const loginWithGoogle = async (apiBaseUrl) => {
       photoURL: user.photoURL,
     }
   };
+};
+
+/**
+ * Sign in using Google popup via Firebase and bridge with CyberGuard session.
+ */
+export const loginWithGoogle = async (apiBaseUrl) => {
+  const result = await signInWithPopup(auth, googleProvider);
+  return await bridgeFirebaseSession(result.user, apiBaseUrl);
+};
+
+/**
+ * Sign in using Email and Password via Firebase.
+ */
+export const loginWithFirebaseEmail = async (email, password, apiBaseUrl) => {
+  const result = await signInWithEmailAndPassword(auth, email, password);
+  return await bridgeFirebaseSession(result.user, apiBaseUrl);
+};
+
+/**
+ * Register a new user using Email and Password via Firebase.
+ */
+export const registerWithFirebaseEmail = async (email, password, displayName, apiBaseUrl) => {
+  const result = await createUserWithEmailAndPassword(auth, email, password);
+  if (displayName && result.user) {
+    try {
+      await updateProfile(result.user, { displayName });
+    } catch (e) {
+      console.warn("Could not set displayName on Firebase user:", e);
+    }
+  }
+  return await bridgeFirebaseSession(result.user, apiBaseUrl);
+};
+
+/**
+ * Send password reset email via Firebase.
+ */
+export const sendFirebasePasswordReset = async (email) => {
+  return await sendPasswordResetEmail(auth, email);
 };
 
 export const logoutFirebase = async () => {

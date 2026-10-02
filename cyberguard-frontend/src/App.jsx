@@ -38,10 +38,22 @@ import InsiderRiskPanel from './components/InsiderRiskPanel';
 import ContainmentQueue from './components/ContainmentQueue';
 import PolicyEnginePanel from './components/PolicyEnginePanel';
 import AccountRescueCenter from './components/AccountRescueCenter';
+import Login from './components/Login';
 import { LanguageProvider } from './i18n';
 
 export default function App() {
-  const [viewMode, setViewMode] = useState('portal'); // 'portal' or 'workspace'
+  const getInitialViewMode = () => {
+    if (typeof window !== 'undefined') {
+      const path = window.location.pathname.toLowerCase();
+      const hash = window.location.hash.toLowerCase();
+      const search = window.location.search.toLowerCase();
+      if (path === '/login' || hash === '#login' || search.includes('login') || search.includes('view=login')) {
+        return 'login';
+      }
+    }
+    return 'portal';
+  };
+  const [viewMode, setViewMode] = useState(getInitialViewMode); // 'portal', 'login', or 'workspace'
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedIncident, setSelectedIncident] = useState(null);
   const [language, setLanguage] = useState('EN');
@@ -223,6 +235,46 @@ export default function App() {
     return () => socket?.close();
   }, [session, apiBaseUrl]);
 
+  React.useEffect(() => {
+    const handleNavigation = () => {
+      const path = window.location.pathname.toLowerCase();
+      const hash = window.location.hash.toLowerCase();
+      const search = window.location.search.toLowerCase();
+      if (path === '/login' || hash === '#login' || search.includes('login') || search.includes('view=login')) {
+        setViewMode('login');
+      } else if (hash === '#portal' || (path === '/' && hash === '')) {
+        if (!session) setViewMode('portal');
+      }
+    };
+    window.addEventListener('popstate', handleNavigation);
+    window.addEventListener('hashchange', handleNavigation);
+    return () => {
+      window.removeEventListener('popstate', handleNavigation);
+      window.removeEventListener('hashchange', handleNavigation);
+    };
+  }, [session]);
+
+  // Dedicated Login View
+  if (viewMode === 'login') {
+    return (
+      <LanguageProvider language={language}>
+        <Login
+          onLogin={(approvedSession) => {
+            setSession(approvedSession);
+            setViewMode('workspace');
+            setActiveTab('dashboard');
+          }}
+          onReturnToPortal={() => {
+            if (window.location.hash === '#login') {
+              window.history.pushState(null, '', window.location.pathname);
+            }
+            setViewMode('portal');
+          }}
+        />
+      </LanguageProvider>
+    );
+  }
+
   // Primary Landing View: Animated CyberGyroscopic Threat Radar Portal
   if (viewMode === 'portal') {
     return (
@@ -232,6 +284,7 @@ export default function App() {
           currentSession={session}
           currentLang={language}
           onLanguageChange={setLanguage}
+          onOpenLoginPage={() => setViewMode('login')}
           onOpenWorkspace={() => {
             setViewMode('workspace');
             setActiveTab('dashboard');

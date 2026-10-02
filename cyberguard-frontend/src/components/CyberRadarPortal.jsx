@@ -3,6 +3,7 @@ import {
   Shield, 
   ArrowRight, 
   Lock, 
+  LogIn,
   AlertTriangle,
   ChevronRight,
 } from 'lucide-react';
@@ -39,6 +40,7 @@ const serializePasskey = (credential) => (typeof credential.toJSON === 'function
 
 export default function CyberRadarPortal({
   onOpenWorkspace,
+  onOpenLoginPage,
   onQuickLogin,
   onVerifyOtp,
   onVerifyPasskey,
@@ -126,7 +128,7 @@ export default function CyberRadarPortal({
       }
     } catch (err) {
       if (!err.response) {
-        setAuthError(`Backend unreachable at ${apiBaseUrl}. Ensure the backend service is deployed and active.`);
+        setAuthError(`Backend unreachable or CORS blocked at ${apiBaseUrl}. Ensure the backend is running ('python main.py'). You can also sign in directly using Google below.`);
       } else if (err.response.status === 401) {
         setAuthError(err.response.data?.detail || 'Invalid username or password. Check credentials.');
       } else if (err.response.status === 403) {
@@ -257,9 +259,22 @@ export default function CyberRadarPortal({
             <span className="font-semibold">[ CYBERGUARD WORKSPACE READY ]</span>
           </div>
 
+          {onOpenLoginPage && (
+            <button
+              type="button"
+              id="header-open-login-btn"
+              onClick={onOpenLoginPage}
+              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg border border-cyan-500/40 bg-cyan-950/30 text-xs font-mono text-cyan-300 hover:bg-cyan-500/20 hover:border-cyan-400 transition-all shrink-0 cursor-pointer"
+              title="Open Dedicated Login Page"
+            >
+              <LogIn size={12} className="text-cyan-400" />
+              <span>Login Page</span>
+            </button>
+          )}
+
           <button
             onClick={() => setShowAuthModal(true)}
-            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg border border-slate-700/80 bg-slate-800/40 text-xs font-mono text-slate-300 hover:text-cyan-300 hover:border-cyan-500/40 transition-all shrink-0"
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg border border-slate-700/80 bg-slate-800/40 text-xs font-mono text-slate-300 hover:text-cyan-300 hover:border-cyan-500/40 transition-all shrink-0 cursor-pointer"
             title="SOC Login"
           >
             <Lock size={12} className="text-cyan-400" />
@@ -575,9 +590,12 @@ export default function CyberRadarPortal({
                 {/* Google Authentication Option */}
                 <button
                   type="button"
+                  id="modal-google-login-btn"
                   onClick={handleGoogleSignIn}
                   disabled={authLoading || googleLoading}
-                  className="w-full py-2 sm:py-2.5 px-3 sm:px-4 rounded-xl bg-slate-900/90 hover:bg-slate-800/90 border border-slate-700/80 hover:border-cyan-500/50 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2.5 sm:gap-3 transition-all duration-200 shadow-sm disabled:opacity-50 active:scale-[0.99]"
+                  aria-label="Sign in with Google"
+                  title="Sign in with your Google account"
+                  className="w-full py-2 sm:py-2.5 px-3 sm:px-4 rounded-xl bg-slate-900/90 hover:bg-slate-800/90 border border-slate-700/80 hover:border-cyan-500/50 text-white text-xs sm:text-sm font-semibold flex items-center justify-center gap-2.5 sm:gap-3 transition-all duration-200 shadow-sm disabled:opacity-50 active:scale-[0.99] cursor-pointer"
                 >
                   <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
                     <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
@@ -585,7 +603,7 @@ export default function CyberRadarPortal({
                     <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
                     <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
                   </svg>
-                  <span>{googleLoading ? 'Signing in with Google...' : 'Continue with Google'}</span>
+                  <span>{googleLoading ? 'Connecting to Google...' : 'Sign in with Google (Firebase)'}</span>
                 </button>
 
                 <div className="relative flex items-center justify-center my-1.5">
@@ -626,18 +644,28 @@ export default function CyberRadarPortal({
                           <AlertTriangle size={14} className="text-rose-400 mt-0.5 shrink-0" />
                           <span className="leading-snug">{authError}</span>
                         </div>
-                        {authError.includes('Backend unreachable') && (
-                          <div className="pt-1 border-t border-rose-800/40 flex items-center justify-between text-[10px]">
-                            <span className="text-slate-400">Target: <code className="text-cyan-300">{apiBaseUrl}</code></span>
+                        {authError.includes('unreachable') || authError.includes('CORS') ? (
+                          <div className="pt-1.5 border-t border-rose-800/40 space-y-1.5 text-[10px]">
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-400">Target: <code className="text-cyan-300">{apiBaseUrl}</code></span>
+                              <button
+                                type="button"
+                                onClick={() => setShowServerConfig(!showServerConfig)}
+                                className="text-cyan-400 hover:text-cyan-300 underline font-sans"
+                              >
+                                {showServerConfig ? 'Hide Settings' : 'Change Backend'}
+                              </button>
+                            </div>
                             <button
                               type="button"
-                              onClick={() => setShowServerConfig(!showServerConfig)}
-                              className="text-cyan-400 hover:text-cyan-300 underline font-sans"
+                              onClick={handleGoogleSignIn}
+                              disabled={googleLoading}
+                              className="w-full py-1 rounded bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold text-center transition-colors cursor-pointer"
                             >
-                              {showServerConfig ? 'Hide Settings' : 'Change Backend'}
+                              Sign in with Google instead (Bypass offline backend) →
                             </button>
                           </div>
-                        )}
+                        ) : null}
                       </div>
                     )}
 
@@ -695,6 +723,22 @@ export default function CyberRadarPortal({
                         {authLoading ? 'Verifying...' : 'Authenticate'}
                       </button>
                     </div>
+
+                    {/* Helper to switch to dedicated login page */}
+                    {onOpenLoginPage && (
+                      <div className="text-center pt-1.5 border-t border-slate-800/60">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowAuthModal(false);
+                            onOpenLoginPage();
+                          }}
+                          className="text-[11px] text-slate-400 hover:text-cyan-300 font-mono underline"
+                        >
+                          Dedicated Login Page →
+                        </button>
+                      </div>
+                    )}
 
                     {/* Mobile helper to switch to request access */}
                     <div className="md:hidden text-center pt-1">

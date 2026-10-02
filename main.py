@@ -12,27 +12,34 @@ import os
 import sys
 
 # Auto-detect and switch to virtual environment if dependencies are not in current environment
+base_dir = os.path.dirname(os.path.abspath(__file__))
+candidates = [
+    os.path.join(base_dir, "cyberguard-backend", ".venv", "bin", "python3"),
+    os.path.join(base_dir, "cyberguard-backend", ".venv", "Scripts", "python.exe"),
+    os.path.join(base_dir, "cyberguard-backend", "venv", "bin", "python3"),
+    os.path.join(base_dir, "cyberguard-backend", "venv", "Scripts", "python.exe"),
+    os.path.join(base_dir, ".venv", "bin", "python3"),
+    os.path.join(base_dir, ".venv", "Scripts", "python.exe"),
+]
+venv_python = next((p for p in candidates if os.path.isfile(p) and os.access(p, os.X_OK)), None)
+
+need_switch = False
 try:
     import fastapi  # noqa: F401
-    import uvicorn
+    import uvicorn  # noqa: F401
+    import webauthn  # noqa: F401
+    import jwt  # noqa: F401
 except ImportError:
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    candidates = [
-        os.path.join(base_dir, "cyberguard-backend", ".venv", "bin", "python3"),
-        os.path.join(base_dir, "cyberguard-backend", ".venv", "Scripts", "python.exe"),
-        os.path.join(base_dir, "cyberguard-backend", "venv", "bin", "python3"),
-        os.path.join(base_dir, "cyberguard-backend", "venv", "Scripts", "python.exe"),
-        os.path.join(base_dir, ".venv", "bin", "python3"),
-        os.path.join(base_dir, ".venv", "Scripts", "python.exe"),
-    ]
-    venv_python = next((p for p in candidates if os.path.isfile(p) and os.access(p, os.X_OK)), None)
-    if venv_python and sys.executable != venv_python:
-        try:
-            os.execv(venv_python, [venv_python] + sys.argv)
-        except OSError:
-            pass
+    need_switch = True
 
-    print("[!] FastAPI/Uvicorn not found in current environment.", flush=True)
+if venv_python and sys.executable != venv_python and (need_switch or "cyberguard-backend" in venv_python):
+    try:
+        os.execv(venv_python, [venv_python] + sys.argv)
+    except OSError:
+        pass
+
+if need_switch:
+    print("[!] Required backend packages (fastapi, uvicorn, webauthn, pyjwt) not found in current environment.", flush=True)
     print("[!] Please run: cd cyberguard-backend && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt", flush=True)
     sys.exit(1)
 
