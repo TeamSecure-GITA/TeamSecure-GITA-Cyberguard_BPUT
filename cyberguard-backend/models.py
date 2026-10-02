@@ -40,6 +40,12 @@ class LoginRequest(BaseModel):
     username: str
     password: str
 
+class GoogleLoginRequest(BaseModel):
+    id_token: Optional[str] = None
+    email: str
+    name: Optional[str] = None
+    photo_url: Optional[str] = None
+
 class OtpVerificationRequest(BaseModel):
     challenge_id: str
     otp: str
