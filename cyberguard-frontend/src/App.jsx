@@ -227,6 +227,10 @@ export default function App() {
           )),
         );
 
+        const incidentsResponse = await axios.get(`${apiBaseUrl}/api/v1/incidents`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        setIncidents(incidentsResponse.data.incidents || []);
         setDemoSeeded(true);
         setRefreshKey((value) => value + 1);
       } catch {
