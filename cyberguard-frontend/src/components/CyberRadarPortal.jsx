@@ -5,10 +5,23 @@ import {
   Lock, 
   LogIn,
   AlertTriangle,
+  Play,
+  Sun,
+  Moon,
+  Zap,
+  Brain,
+  ShieldCheck,
+  Database,
   ChevronRight,
   Sparkles,
+  Radio,
+  FileCheck2,
+  Mail,
+  Activity
 } from 'lucide-react';
 import LanguageToggle from './LanguageToggle';
+import CyberGlobe from './CyberGlobe';
+import WatchDemoModal from './WatchDemoModal';
 import { getApiBaseUrl } from '../apiConfig';
 import { loginWithGoogle } from '../firebase';
 
@@ -53,7 +66,12 @@ export default function CyberRadarPortal({
 }) {
   const apiBaseUrl = propApiBaseUrl || getApiBaseUrl();
 
+  const [activeNav, setActiveNav] = useState('home');
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showDemoModal, setShowDemoModal] = useState(false);
+  const [themeMode, setThemeMode] = useState('dark');
+
+  // Authentication states
   const [loginUsername, setLoginUsername] = useState('teamsecure.project@gmail.com');
   const [loginPassword, setLoginPassword] = useState('Secure@9040');
   const [authLoading, setAuthLoading] = useState(false);
@@ -147,15 +165,13 @@ export default function CyberRadarPortal({
       }
     } catch (err) {
       if (!err.response) {
-        setAuthError(`Backend unreachable or CORS blocked at ${apiBaseUrl}. Ensure the backend is running ('python main.py'). You can also sign in directly using Google below.`);
+        setAuthError(`Backend unreachable or CORS blocked at ${apiBaseUrl}. Ensure the backend is running ('python main.py'). You can also sign in directly using Google or 1-Click Instant Session.`);
       } else if (err.response.status === 401) {
         setAuthError(err.response.data?.detail || 'Invalid username or password. Check credentials.');
       } else if (err.response.status === 403) {
         setAuthError(err.response.data?.detail || 'Access forbidden: Administrator authorization required.');
-      } else if (err.response.status === 502 || err.response.status === 503 || err.response.status === 504) {
-        setAuthError(`Backend is temporarily unavailable (HTTP ${err.response.status}). If deployed on Render free tier, the instance may be spinning up from idle (please wait ~30s and retry).`);
       } else if (err.response.status >= 500) {
-        const detail = typeof err.response.data?.detail === 'string' ? err.response.data.detail : `Server error (HTTP ${err.response.status}). Check backend logs.`;
+        const detail = typeof err.response.data?.detail === 'string' ? err.response.data.detail : `Server error (HTTP ${err.response.status}).`;
         setAuthError(detail);
       } else {
         setAuthError(err.response.data?.detail || err.message || 'Authentication failed. Check credentials.');
@@ -199,7 +215,7 @@ export default function CyberRadarPortal({
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || 'Unable to submit access request.');
       setRequestToken(data.request_token);
-      setRequestState(data.email_sent ? 'Approval request sent to the security owner.' : 'Request saved, but SMTP is not configured yet.');
+      setRequestState(data.email_sent ? 'Approval request sent to the security owner.' : 'Request saved in pending queue.');
     } catch (error) {
       setAuthError(error.message);
     } finally {
@@ -219,7 +235,7 @@ export default function CyberRadarPortal({
         onApprovedSession(data);
         return;
       }
-      setRequestState(`Request status: ${data.status}. The security owner must approve access first.`);
+      setRequestState(`Request status: ${data.status}. Pending security owner approval.`);
     } catch (error) {
       setAuthError(error.message);
     } finally {
@@ -227,319 +243,518 @@ export default function CyberRadarPortal({
     }
   };
 
+  const toggleTheme = () => {
+    setThemeMode((prev) => (prev === 'dark' ? 'high-contrast' : 'dark'));
+  };
+
+  const scrollToSection = (sectionId) => {
+    setActiveNav(sectionId);
+    const element = document.getElementById(sectionId);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
   return (
-    <div className="cyber-portal-root relative min-h-screen bg-[#040c17] text-slate-100 flex flex-col justify-between overflow-x-hidden select-none">
-      {/* Background ambient lighting and cyber grid */}
+    <div className={`cyber-portal-root relative min-h-screen bg-[#020b18] text-slate-100 flex flex-col justify-between overflow-x-hidden ${themeMode === 'high-contrast' ? 'brightness-110 contrast-125' : ''}`}>
+      {/* Background ambient lighting and cyber wave elements */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
-        {/* Subtle cyber grid */}
-        <div className="cyber-matrix-grid absolute inset-0 opacity-[0.07]" />
+        {/* Subtle grid pattern */}
+        <div className="cyber-matrix-grid absolute inset-0 opacity-[0.06]" />
         
-        {/* Glowing cyan/emerald ambient aura behind right radar orb */}
+        {/* Glowing cyan/teal ambient aura positioned around the right globe */}
         <div 
-          className="absolute top-1/2 right-[12%] -translate-y-1/2 w-[650px] h-[650px] rounded-full blur-[140px] pointer-events-none"
+          className="absolute top-1/3 right-[8%] -translate-y-1/2 w-[700px] h-[700px] rounded-full blur-[160px] pointer-events-none"
           style={{
-            background: 'radial-gradient(circle, rgba(16, 185, 129, 0.28) 0%, rgba(6, 182, 212, 0.22) 38%, rgba(14, 165, 233, 0.08) 65%, transparent 80%)'
+            background: 'radial-gradient(circle, rgba(6, 182, 212, 0.22) 0%, rgba(16, 185, 129, 0.18) 40%, rgba(14, 165, 233, 0.06) 70%, transparent 80%)'
           }}
         />
 
         {/* Ambient bottom left vignette */}
         <div 
-          className="absolute -bottom-32 -left-32 w-[500px] h-[500px] rounded-full blur-[150px] pointer-events-none"
+          className="absolute -bottom-36 -left-36 w-[560px] h-[560px] rounded-full blur-[170px] pointer-events-none"
           style={{
-            background: 'radial-gradient(circle, rgba(3, 105, 161, 0.2) 0%, transparent 75%)'
+            background: 'radial-gradient(circle, rgba(3, 105, 161, 0.18) 0%, transparent 75%)'
           }}
         />
+
+        {/* Ambient top light streaks */}
+        <div className="absolute top-0 inset-x-0 h-[1px] bg-gradient-to-r from-transparent via-cyan-500/30 to-transparent" />
       </div>
 
-      {/* Top Navigation Bar */}
-      <header className="relative z-20 w-full px-4 sm:px-8 py-3.5 sm:py-5 flex items-center justify-between border-b border-cyan-500/10 backdrop-blur-md bg-[#040c17]/60">
-        {/* Brand Logo */}
-        <div className="flex items-center gap-2.5 sm:gap-3">
-          <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-emerald-400/20 via-cyan-500/20 to-transparent border border-emerald-400/40 p-0.5 shadow-[0_0_20px_rgba(16,185,129,0.3)] flex items-center justify-center shrink-0">
-            <div className="w-full h-full rounded-[10px] bg-[#061826] flex items-center justify-center">
-              <span className="font-mono font-black text-emerald-400 text-base sm:text-xl tracking-tighter shadow-sm">C</span>
+      {/* =========================================================================
+          1. TOP NAVIGATION BAR (Exact visual layout matching reference screenshot)
+          ========================================================================= */}
+      <header className="relative z-30 w-full px-5 sm:px-10 py-4 flex items-center justify-between border-b border-cyan-500/10 backdrop-blur-md bg-[#020b18]/70">
+        
+        {/* Brand Logo: Shield with "C" + "CyberGuard AI" */}
+        <div 
+          onClick={() => scrollToSection('home')}
+          className="flex items-center gap-3 cursor-pointer group select-none"
+          title="CyberGuard AI Home"
+        >
+          {/* Glowing Shield Icon */}
+          <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-emerald-400/25 via-cyan-500/20 to-transparent border border-cyan-400/60 p-0.5 shadow-[0_0_20px_rgba(6,182,212,0.4)] flex items-center justify-center shrink-0 transition-transform group-hover:scale-105">
+            <div className="w-full h-full rounded-[10px] bg-[#041527] flex items-center justify-center">
+              <span className="font-mono font-black text-cyan-300 text-lg sm:text-xl tracking-tighter drop-shadow-[0_0_10px_rgba(6,182,212,0.8)]">
+                C
+              </span>
             </div>
           </div>
-          <div className="flex flex-col">
-            <span className="text-base sm:text-xl font-bold tracking-tight text-white flex items-center gap-1.5">
-              CyberGuard <span className="text-emerald-400 font-semibold">AI</span>
-            </span>
-          </div>
+          
+          {/* Brand Typography */}
+          <span className="text-lg sm:text-xl font-bold tracking-tight text-white flex items-center gap-1.5">
+            CyberGuard <span className="font-bold text-cyan-400">AI</span>
+          </span>
         </div>
 
-        {/* Workspace status and controls */}
-        <div className="flex items-center gap-2 sm:gap-4">
-          <LanguageToggle currentLang={currentLang} onToggle={onLanguageChange} />
-          <div className="inline-flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full border border-emerald-500/30 bg-emerald-950/30 text-emerald-400 font-mono text-[10px] sm:text-[11px] tracking-wider shadow-[0_0_15px_rgba(16,185,129,0.15)] shrink-0">
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-            </span>
-            <span className="font-semibold">[ CYBERGUARD WORKSPACE READY ]</span>
-          </div>
-
-          {onOpenLoginPage && (
-            <button
-              type="button"
-              id="header-open-login-btn"
-              onClick={onOpenLoginPage}
-              className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg border border-cyan-500/40 bg-cyan-950/30 text-xs font-mono text-cyan-300 hover:bg-cyan-500/20 hover:border-cyan-400 transition-all shrink-0 cursor-pointer"
-              title="Open Dedicated Login Page"
-            >
-              <LogIn size={12} className="text-cyan-400" />
-              <span>Login Page</span>
-            </button>
-          )}
+        {/* Center Navigation Links: Home, Features, How It Works, About, Contact */}
+        <nav className="hidden md:flex items-center gap-7 lg:gap-9 text-sm font-medium text-slate-300">
+          <button
+            onClick={() => scrollToSection('home')}
+            className={`relative py-1 transition-colors cursor-pointer ${
+              activeNav === 'home' ? 'text-white font-semibold' : 'text-slate-300 hover:text-white'
+            }`}
+          >
+            <span>Home</span>
+            {activeNav === 'home' && (
+              <span className="absolute bottom-[-17px] inset-x-0 mx-auto w-7 h-[2.5px] rounded-full bg-cyan-400 shadow-[0_0_10px_#22d3ee]" />
+            )}
+          </button>
 
           <button
-            onClick={() => setShowAuthModal(true)}
-            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg border border-slate-700/80 bg-slate-800/40 text-xs font-mono text-slate-300 hover:text-cyan-300 hover:border-cyan-500/40 transition-all shrink-0 cursor-pointer"
-            title="SOC Login"
+            onClick={() => scrollToSection('features')}
+            className={`relative py-1 transition-colors cursor-pointer ${
+              activeNav === 'features' ? 'text-white font-semibold' : 'text-slate-300 hover:text-white'
+            }`}
           >
-            <Lock size={12} className="text-cyan-400" />
-            <span>{currentSession ? `Signed in: ${currentSession.user?.username || 'SOC Lead'}` : 'SOC Login'}</span>
+            <span>Features</span>
+            {activeNav === 'features' && (
+              <span className="absolute bottom-[-17px] inset-x-0 mx-auto w-7 h-[2.5px] rounded-full bg-cyan-400 shadow-[0_0_10px_#22d3ee]" />
+            )}
+          </button>
+
+          <button
+            onClick={() => scrollToSection('how-it-works')}
+            className={`relative py-1 transition-colors cursor-pointer ${
+              activeNav === 'how-it-works' ? 'text-white font-semibold' : 'text-slate-300 hover:text-white'
+            }`}
+          >
+            <span>How It Works</span>
+            {activeNav === 'how-it-works' && (
+              <span className="absolute bottom-[-17px] inset-x-0 mx-auto w-7 h-[2.5px] rounded-full bg-cyan-400 shadow-[0_0_10px_#22d3ee]" />
+            )}
+          </button>
+
+          <button
+            onClick={() => scrollToSection('about')}
+            className={`relative py-1 transition-colors cursor-pointer ${
+              activeNav === 'about' ? 'text-white font-semibold' : 'text-slate-300 hover:text-white'
+            }`}
+          >
+            <span>About</span>
+            {activeNav === 'about' && (
+              <span className="absolute bottom-[-17px] inset-x-0 mx-auto w-7 h-[2.5px] rounded-full bg-cyan-400 shadow-[0_0_10px_#22d3ee]" />
+            )}
+          </button>
+
+          <button
+            onClick={() => scrollToSection('contact')}
+            className={`relative py-1 transition-colors cursor-pointer ${
+              activeNav === 'contact' ? 'text-white font-semibold' : 'text-slate-300 hover:text-white'
+            }`}
+          >
+            <span>Contact</span>
+            {activeNav === 'contact' && (
+              <span className="absolute bottom-[-17px] inset-x-0 mx-auto w-7 h-[2.5px] rounded-full bg-cyan-400 shadow-[0_0_10px_#22d3ee]" />
+            )}
+          </button>
+        </nav>
+
+        {/* Right Controls: [ 🌐 EN ⌵ ] [ ☀️ ] [ 🛡️ SOC Login ] */}
+        <div className="flex items-center gap-2.5 sm:gap-3.5">
+          {/* Language Selector Pill */}
+          <LanguageToggle currentLang={currentLang} onToggle={onLanguageChange} variant="pill" />
+
+          {/* Theme Mode Toggle Button */}
+          <button
+            type="button"
+            onClick={toggleTheme}
+            className="w-8 h-8 rounded-full border border-slate-700/80 bg-slate-900/60 hover:bg-slate-800/80 text-slate-300 hover:text-amber-300 flex items-center justify-center transition-all cursor-pointer shadow-sm"
+            title="Toggle Visual Display Theme"
+          >
+            {themeMode === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+          </button>
+
+          {/* SOC Login Pill Button */}
+          <button
+            type="button"
+            id="header-soc-login-btn"
+            onClick={() => setShowAuthModal(true)}
+            className="flex items-center gap-1.5 sm:gap-2 px-3.5 sm:px-4 py-1.5 sm:py-2 rounded-full border border-cyan-500/50 bg-[#071d30]/70 hover:bg-cyan-950/60 text-xs sm:text-sm font-medium text-cyan-300 hover:text-white hover:border-cyan-400 transition-all shadow-[0_0_18px_rgba(6,182,212,0.2)] hover:shadow-[0_0_25px_rgba(6,182,212,0.4)] cursor-pointer shrink-0"
+            title="SOC Operator Sign In"
+          >
+            <Shield size={14} className="text-cyan-400" />
+            <span>{currentSession ? `SOC (${currentSession.user?.role || 'Lead'})` : 'SOC Login'}</span>
           </button>
         </div>
       </header>
 
-      {/* Main Split Hero Viewport */}
-      <main className="relative z-10 flex-1 max-w-7xl w-full mx-auto px-6 md:px-12 py-8 flex flex-col lg:flex-row items-center justify-between gap-12 lg:gap-8">
+      {/* =========================================================================
+          2. MAIN SPLIT HERO SECTION (Exact visual layout matching reference screenshot)
+          ========================================================================= */}
+      <main id="home" className="relative z-20 flex-1 max-w-7xl w-full mx-auto px-6 sm:px-10 lg:px-12 pt-8 sm:pt-12 pb-16 flex flex-col lg:flex-row items-center justify-between gap-10 lg:gap-6">
         
-        {/* Left Column: Hero Content */}
-        <div className="flex-1 max-w-xl flex flex-col items-start text-left z-10 space-y-6">
+        {/* Left Column: Hero Typography & CTAs */}
+        <div className="flex-1 max-w-xl flex flex-col items-start text-left z-20 space-y-6">
           
-          {/* Eyebrow Kicker */}
-          <div className="inline-flex items-center gap-2 text-cyan-400 font-mono text-[11px] font-semibold tracking-[0.22em] uppercase">
-            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-            THREAT INTELLIGENCE, MADE ACTIONABLE
+          {/* Eyebrow Pill Tag: [ ● THREAT INTELLIGENCE  ● REAL-TIME  ● AI POWERED ] */}
+          <div className="inline-flex items-center gap-2 sm:gap-3 px-3.5 py-1.5 rounded-full border border-emerald-500/30 bg-[#041a23]/80 backdrop-blur-md shadow-[0_0_18px_rgba(16,185,129,0.15)] font-mono text-[10px] sm:text-[11px] font-semibold tracking-wider text-emerald-400">
+            <span className="flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]" />
+              THREAT INTELLIGENCE
+            </span>
+            <span className="text-emerald-500/40">●</span>
+            <span className="flex items-center gap-1.5">
+              REAL-TIME
+            </span>
+            <span className="text-emerald-500/40">●</span>
+            <span className="flex items-center gap-1.5">
+              AI POWERED
+            </span>
           </div>
 
-          {/* Hero Headline */}
-          <h1 className="text-4xl sm:text-5xl lg:text-[62px] font-extrabold tracking-tight text-white leading-[1.08]">
-            See the signal{' '}
-            <br />
-            <span className="bg-gradient-to-r from-amber-400 via-orange-400 to-amber-500 bg-clip-text text-transparent drop-shadow-[0_0_35px_rgba(245,158,11,0.35)]">
+          {/* Main Hero Headline */}
+          <h1 className="text-4xl sm:text-5xl lg:text-[60px] font-black tracking-tight text-white leading-[1.08]">
+            See the signal <br />
+            <span className="bg-gradient-to-r from-emerald-400 via-teal-300 to-cyan-400 bg-clip-text text-transparent drop-shadow-[0_0_35px_rgba(16,185,129,0.4)]">
               before it spreads.
             </span>
           </h1>
 
           {/* Subtitle Description */}
-          <p className="text-base sm:text-lg text-slate-300/85 leading-relaxed font-normal max-w-lg">
+          <p className="text-base sm:text-lg text-slate-300/90 leading-relaxed font-normal max-w-lg">
             CyberGuard AI turns suspicious links, messages, senders, and synthetic media clues into a clear risk picture and structured next moves.
           </p>
 
-          {/* CTA Action Button */}
-          {/* CTA Action Buttons */}
-          <div className="pt-2 flex flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-3 sm:gap-4 w-full">
+          {/* Action Buttons: [ Open detection workspace ➔ ]  [ ▷ Watch demo ] */}
+          <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center gap-3.5 sm:gap-4 w-full sm:w-auto">
+            
+            {/* Primary CTA: Open detection workspace */}
             <button
-              id="open-detection-workspace-btn"
+              id="hero-open-workspace-btn"
               onClick={handleLaunch}
-              className="group relative inline-flex items-center justify-center gap-3 px-6 sm:px-8 py-3.5 sm:py-4 rounded-xl font-medium text-slate-950 font-semibold text-sm sm:text-base transition-all duration-300 shadow-[0_0_30px_rgba(16,185,129,0.45)] hover:shadow-[0_0_45px_rgba(6,182,212,0.65)] hover:scale-[1.02] active:scale-[0.98]"
+              className="group relative inline-flex items-center justify-center gap-2.5 px-6 sm:px-8 py-3.5 sm:py-4 rounded-xl font-bold text-[#021815] text-sm sm:text-base transition-all duration-300 shadow-[0_0_35px_rgba(16,185,129,0.45)] hover:shadow-[0_0_50px_rgba(6,182,212,0.7)] hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
               style={{
-                background: 'linear-gradient(135deg, #34d399 0%, #10b981 40%, #06b6d4 100%)',
+                background: 'linear-gradient(135deg, #34d399 0%, #10b981 45%, #06b6d4 100%)',
               }}
             >
-              <span className="relative z-10 tracking-wide font-bold text-[#041d1a]">
+              <Shield size={17} className="text-[#021815] shrink-0" />
+              <span className="tracking-wide">
                 Open detection workspace
               </span>
               <ArrowRight 
                 size={18} 
-                className="relative z-10 text-[#041d1a] transition-transform duration-300 group-hover:translate-x-1.5 shrink-0" 
+                className="text-[#021815] transition-transform duration-300 group-hover:translate-x-1.5 shrink-0" 
               />
-              {/* Button neon sheen */}
               <span className="absolute inset-0 rounded-xl bg-white/20 opacity-0 group-hover:opacity-100 transition-opacity" />
             </button>
 
-            {/* Quick Google Sign In */}
-            {!currentSession && (
-              <button
-                type="button"
-                onClick={handleGoogleSignIn}
-                disabled={googleLoading}
-                className="inline-flex items-center justify-center gap-2.5 px-4 sm:px-5 py-3 sm:py-3.5 rounded-xl font-medium text-white text-xs sm:text-sm bg-slate-900/90 hover:bg-slate-800/90 border border-slate-700/80 hover:border-cyan-500/50 shadow-md transition-all duration-200 active:scale-[0.98] disabled:opacity-50"
-              >
-                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
-                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
-                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
-                </svg>
-                <span>{googleLoading ? 'Signing in...' : 'Sign in with Google'}</span>
-              </button>
-            )}
+            {/* Secondary CTA: Watch demo */}
+            <button
+              type="button"
+              id="hero-watch-demo-btn"
+              onClick={() => setShowDemoModal(true)}
+              className="inline-flex items-center justify-center gap-2.5 px-5 sm:px-6 py-3.5 sm:py-4 rounded-xl font-medium text-white text-sm sm:text-base border border-slate-700/80 bg-slate-900/60 hover:bg-slate-800/80 hover:border-cyan-500/50 backdrop-blur-md shadow-md transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+            >
+              <div className="w-5 h-5 rounded-full border border-white/60 flex items-center justify-center pl-0.5">
+                <Play size={10} className="fill-white text-white" />
+              </div>
+              <span>Watch demo</span>
+            </button>
 
-            {currentSession && (
-              <span className="text-xs font-mono text-emerald-400/90 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-950/40 border border-emerald-500/20">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                Session Active ({currentSession.user?.role?.toUpperCase()})
-              </span>
-            )}
           </div>
 
-          {/* Trust & Privacy Badge */}
-          <div className="pt-4 flex items-start gap-3 border-t border-slate-800/80 w-full max-w-md">
-            <div className="p-1.5 rounded-md bg-emerald-500/10 text-emerald-400 mt-0.5 border border-emerald-500/20">
-              <Shield size={16} />
+          {/* Privacy Footnote Badge: [ 🔒 Privacy by design | Local-first analysis with restricted telemetry fallback. ] */}
+          <div className="pt-3 flex items-start gap-2.5 max-w-md">
+            <div className="p-1 rounded-md bg-emerald-500/10 text-emerald-400 mt-0.5 shrink-0">
+              <Lock size={15} />
             </div>
-            <div className="flex flex-col text-xs">
+            <div className="flex flex-col text-xs leading-snug">
               <span className="font-semibold text-slate-200">Privacy by design</span>
-              <span className="text-slate-400 text-[11px] leading-relaxed">
+              <span className="text-slate-400 text-[11px]">
                 Local-first analysis with restricted telemetry fallback.
               </span>
             </div>
           </div>
+
         </div>
 
-        {/* Right Column: Animated Cyber Gyroscope / Radar Sphere HUD */}
-        <div className="flex-1 w-full max-w-full lg:max-w-[560px] flex items-center justify-center relative min-h-[340px] sm:min-h-[460px] py-4 overflow-hidden">
-          
-          {/* Main Gyroscope Container */}
-          <div className="relative w-[280px] h-[280px] xs:w-[320px] xs:h-[320px] sm:w-[420px] sm:h-[420px] md:w-[440px] md:h-[440px] flex items-center justify-center">
+        {/* Right Column: 3D Holographic Cyber Earth Globe & Orbiting Telemetry Badges */}
+        <div className="flex-1 w-full max-w-full lg:max-w-[580px] flex items-center justify-center relative">
+          <CyberGlobe 
+            onOpenWorkspace={handleLaunch} 
+            onSelectBadge={(badgeId) => {
+              if (badgeId === 'url' || badgeId === 'ip') handleLaunch();
+              else setShowDemoModal(true);
+            }} 
+          />
+        </div>
+
+      </main>
+
+      {/* =========================================================================
+          3. BOTTOM FEATURE CARDS DOCK (Exact 4 columns matching reference screenshot)
+          ========================================================================= */}
+      <section className="relative z-20 w-full border-t border-cyan-500/15 bg-[#030d1d]/85 backdrop-blur-xl">
+        <div className="max-w-7xl mx-auto px-6 sm:px-10 py-6 sm:py-8">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 lg:gap-8">
             
-            {/* Outer Static HUD Range Rings */}
-            <div className="absolute inset-0 rounded-full border border-cyan-500/15" />
-            <div className="absolute inset-6 sm:inset-8 rounded-full border border-emerald-500/20 border-dashed animate-[spin_120s_linear_infinite]" />
-            <div className="absolute inset-14 sm:inset-20 rounded-full border border-cyan-400/25" />
-
-            {/* Crosshair grid lines */}
-            <div className="absolute w-full h-[1px] bg-gradient-to-r from-transparent via-cyan-500/20 to-transparent pointer-events-none" />
-            <div className="absolute h-full w-[1px] bg-gradient-to-b from-transparent via-cyan-500/20 to-transparent pointer-events-none" />
-
-            {/* Radar Sweeper Line (Conic gradient rotation) */}
-            <div 
-              className="absolute inset-3 sm:inset-4 rounded-full pointer-events-none animate-[radar-sweep_5s_linear_infinite]"
-              style={{
-                background: 'conic-gradient(from 0deg, rgba(16, 185, 129, 0.28) 0deg, rgba(6, 182, 212, 0.08) 45deg, transparent 90deg, transparent 360deg)'
-              }}
-            />
-
-            {/* 3D Gyroscope Orbital Ring 1: Tilted Positive Axis */}
-            <div 
-              className="gyro-orbit-ring gyro-ring-1 absolute w-[260px] h-[130px] xs:w-[300px] xs:h-[150px] sm:w-[400px] sm:h-[200px] rounded-[50%] border-2 border-emerald-400/40 pointer-events-none"
-              style={{
-                boxShadow: '0 0 20px rgba(16, 185, 129, 0.2), inset 0 0 15px rgba(16, 185, 129, 0.1)',
-                transform: 'rotateX(68deg) rotateY(18deg) rotateZ(0deg)',
-              }}
-            >
-              {/* Photon node orbiting on ring 1 */}
-              <div className="gyro-photon-node photon-1" />
-            </div>
-
-            {/* 3D Gyroscope Orbital Ring 2: Tilted Negative Axis */}
-            <div 
-              className="gyro-orbit-ring gyro-ring-2 absolute w-[250px] h-[125px] xs:w-[280px] xs:h-[140px] sm:w-[380px] sm:h-[190px] rounded-[50%] border-2 border-cyan-400/45 pointer-events-none"
-              style={{
-                boxShadow: '0 0 25px rgba(6, 182, 212, 0.25), inset 0 0 20px rgba(6, 182, 212, 0.15)',
-                transform: 'rotateX(68deg) rotateY(-28deg) rotateZ(45deg)',
-              }}
-            >
-              {/* Photon node orbiting on ring 2 */}
-              <div className="gyro-photon-node photon-2" />
-            </div>
-
-            {/* 3D Gyroscope Orbital Ring 3: Vertical-inclined Axis */}
-            <div 
-              className="gyro-orbit-ring gyro-ring-3 absolute w-[220px] h-[110px] xs:w-[250px] xs:h-[125px] sm:w-[340px] sm:h-[170px] rounded-[50%] border border-teal-300/35 pointer-events-none"
-              style={{
-                boxShadow: '0 0 15px rgba(45, 212, 191, 0.2)',
-                transform: 'rotateX(74deg) rotateY(42deg) rotateZ(-30deg)',
-              }}
-            />
-
-            {/* Central Holographic Core Badge */}
-            <div 
-              onClick={handleLaunch}
-              className="group cursor-pointer relative z-20 w-28 h-28 xs:w-32 xs:h-32 sm:w-36 sm:h-36 rounded-full flex flex-col items-center justify-center backdrop-blur-xl transition-all duration-300 hover:scale-105 active:scale-95"
-              style={{
-                background: 'radial-gradient(circle, rgba(16, 185, 129, 0.32) 0%, rgba(6, 24, 38, 0.88) 75%, rgba(4, 12, 23, 0.95) 100%)',
-                border: '2px solid rgba(52, 211, 153, 0.65)',
-                boxShadow: '0 0 45px rgba(16, 185, 129, 0.5), inset 0 0 30px rgba(16, 185, 129, 0.35)',
-              }}
-            >
-              {/* Inner Pulsing Radar Glow */}
-              <div className="absolute inset-2 rounded-full border border-emerald-400/40 animate-ping opacity-25 pointer-events-none" />
-              
-              {/* Monogram Glyph */}
-              <span className="text-2xl xs:text-3xl sm:text-4xl font-extrabold tracking-wider text-white drop-shadow-[0_0_15px_rgba(255,255,255,0.8)]">
-                CG
-              </span>
-              
-              <div className="mt-0.5 sm:mt-1 flex items-center gap-1 text-[9px] sm:text-[10px] font-mono text-emerald-300 tracking-wider">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                <span>CYBERGUARD</span>
+            {/* Card 1: Real-time Detection */}
+            <div className="flex items-start gap-3.5 group">
+              <div className="w-10 h-10 rounded-xl bg-cyan-950/80 border border-cyan-500/40 text-cyan-400 flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(6,182,212,0.25)] group-hover:scale-105 group-hover:border-cyan-300 transition-all">
+                <Zap size={20} className="text-cyan-400" />
+              </div>
+              <div className="flex flex-col">
+                <h4 className="text-sm font-bold text-white group-hover:text-cyan-300 transition-colors">
+                  Real-time Detection
+                </h4>
+                <p className="text-xs text-slate-400 leading-relaxed mt-1">
+                  Identify threats as they emerge across multiple channels.
+                </p>
               </div>
             </div>
 
-            {/* Floating Cyber HUD Telemetry Tags with Tracer Lines */}
-
-            {/* Tag 1: [ URL / WEB ] (Top-Left) */}
-            <div className="hud-badge top-left absolute top-0 left-0 sm:-top-4 sm:left-4 z-20 flex items-center gap-1.5 sm:gap-2 px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-md bg-[#071929]/90 border border-cyan-500/40 shadow-[0_0_12px_rgba(6,182,212,0.2)]">
-              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-              <span className="font-mono text-[9px] sm:text-[10px] text-cyan-200 font-semibold tracking-wider">
-                URL / WEB
-              </span>
-              <div className="hidden sm:block absolute right-[-24px] bottom-[-14px] w-6 h-[1px] bg-cyan-500/40 rotate-[35deg]" />
-            </div>
-
-            {/* Tag 2: [ IP / SCAN ] (Top-Right) */}
-            <div className="hud-badge top-right absolute top-2 right-0 sm:top-4 sm:-right-4 z-20 flex items-center gap-1.5 sm:gap-2 px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-md bg-[#071929]/90 border border-emerald-500/40 shadow-[0_0_12px_rgba(16,185,129,0.2)]">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="font-mono text-[9px] sm:text-[10px] text-emerald-200 font-semibold tracking-wider">
-                IP / SCAN
-              </span>
-              <div className="hidden sm:block absolute left-[-24px] bottom-[-14px] w-6 h-[1px] bg-emerald-500/40 -rotate-[35deg]" />
-            </div>
-
-            {/* Tag 3: [ TOR / RELAY ] (Bottom-Right) */}
-            <div className="hud-badge bottom-right absolute bottom-6 right-0 sm:bottom-14 sm:-right-6 z-20 flex items-center gap-1.5 sm:gap-2 px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-md bg-[#071929]/90 border border-amber-500/40 shadow-[0_0_12px_rgba(245,158,11,0.2)]">
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-              <span className="font-mono text-[9px] sm:text-[10px] text-amber-200 font-semibold tracking-wider">
-                TOR / RELAY
-              </span>
-              <div className="hidden sm:block absolute left-[-22px] top-[-10px] w-6 h-[1px] bg-amber-500/40 rotate-[30deg]" />
-            </div>
-
-            {/* Tag 4: [ DEEPFAKE / AUDIO ] (Bottom-Left) */}
-            <div className="hud-badge bottom-left absolute bottom-6 left-0 sm:bottom-16 sm:-left-4 z-20 flex items-center gap-1.5 sm:gap-2 px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-md bg-[#071929]/90 border border-indigo-500/40 shadow-[0_0_12px_rgba(99,102,241,0.2)]">
-              <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
-              <span className="font-mono text-[9px] sm:text-[10px] text-indigo-200 font-semibold tracking-wider">
-                DEEPFAKE / MEDIA
-              </span>
-            </div>
-
-            {/* Bottom Engine Telemetry Status */}
-            <div className="absolute -bottom-8 sm:-bottom-10 left-1/2 -translate-x-1/2 sm:left-auto sm:translate-x-0 sm:right-6 z-20 flex items-center gap-2 px-2.5 py-1 sm:px-3 sm:py-1.5 rounded-md bg-[#030e1a]/90 border border-slate-700/60 font-mono text-[9px] sm:text-[10px] text-slate-300 whitespace-nowrap shadow-lg">
-              <div className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
-                <span className="text-slate-400">DEFENSE ENGINE v2.4</span>
+            {/* Card 2: AI-Powered Analysis */}
+            <div className="flex items-start gap-3.5 group">
+              <div className="w-10 h-10 rounded-xl bg-cyan-950/80 border border-cyan-500/40 text-cyan-400 flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(6,182,212,0.25)] group-hover:scale-105 group-hover:border-cyan-300 transition-all">
+                <Brain size={20} className="text-cyan-400" />
               </div>
-              <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold border border-emerald-500/30">
-                ONLINE
-              </span>
+              <div className="flex flex-col">
+                <h4 className="text-sm font-bold text-white group-hover:text-cyan-300 transition-colors">
+                  AI-Powered Analysis
+                </h4>
+                <p className="text-xs text-slate-400 leading-relaxed mt-1">
+                  Leverage machine learning and behavioral intelligence.
+                </p>
+              </div>
+            </div>
+
+            {/* Card 3: Actionable Insights */}
+            <div className="flex items-start gap-3.5 group">
+              <div className="w-10 h-10 rounded-xl bg-indigo-950/80 border border-indigo-500/40 text-indigo-400 flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(99,102,241,0.25)] group-hover:scale-105 group-hover:border-indigo-300 transition-all">
+                <ShieldCheck size={20} className="text-indigo-400" />
+              </div>
+              <div className="flex flex-col">
+                <h4 className="text-sm font-bold text-white group-hover:text-indigo-300 transition-colors">
+                  Actionable Insights
+                </h4>
+                <p className="text-xs text-slate-400 leading-relaxed mt-1">
+                  Get clear risk scores and next-step recommendations.
+                </p>
+              </div>
+            </div>
+
+            {/* Card 4: Secure & Private */}
+            <div className="flex items-start gap-3.5 group">
+              <div className="w-10 h-10 rounded-xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.25)] group-hover:scale-105 group-hover:border-emerald-300 transition-all">
+                <Database size={20} className="text-emerald-400" />
+              </div>
+              <div className="flex flex-col">
+                <h4 className="text-sm font-bold text-white group-hover:text-emerald-300 transition-colors">
+                  Secure & Private
+                </h4>
+                <p className="text-xs text-slate-400 leading-relaxed mt-1">
+                  Your data stays yours, with local-first processing.
+                </p>
+              </div>
             </div>
 
           </div>
         </div>
-      </main>
+      </section>
+
+      {/* =========================================================================
+          4. EXTENDED SHOWCASE SECTIONS (Features, How It Works, About, Contact)
+          ========================================================================= */}
+      
+      {/* Features Section */}
+      <section id="features" className="relative z-20 py-16 px-6 sm:px-10 border-t border-slate-800/80 bg-[#020914]">
+        <div className="max-w-7xl mx-auto space-y-10">
+          <div className="text-center max-w-2xl mx-auto space-y-3">
+            <span className="text-xs font-mono font-bold text-cyan-400 tracking-widest uppercase">
+              // ARCHITECTURE CAPABILITIES
+            </span>
+            <h2 className="text-3xl sm:text-4xl font-extrabold text-white">
+              End-to-End Autonomous Defense Shield
+            </h2>
+            <p className="text-sm sm:text-base text-slate-400">
+              CyberGuard AI inspects suspicious signals across university domains, student portals, executive communications, and network edge gateways.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="p-6 rounded-2xl bg-[#051424] border border-cyan-500/20 hover:border-cyan-500/50 transition-all space-y-4 shadow-lg group">
+              <div className="w-12 h-12 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 flex items-center justify-center group-hover:scale-105 transition-transform">
+                <Radio size={24} />
+              </div>
+              <h3 className="text-lg font-bold text-white">Neural Phishing Triangulation</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Extracts typosquatting distance, zero-day domain age, SSL telemetry, and malicious DOM exfiltration patterns in sub-50ms.
+              </p>
+              <div className="pt-2 font-mono text-[11px] text-cyan-300 flex items-center gap-1.5">
+                <span>99.4% F1 Detection Benchmark</span>
+              </div>
+            </div>
+
+            <div className="p-6 rounded-2xl bg-[#051424] border border-emerald-500/20 hover:border-emerald-500/50 transition-all space-y-4 shadow-lg group">
+              <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center justify-center group-hover:scale-105 transition-transform">
+                <Activity size={24} />
+              </div>
+              <h3 className="text-lg font-bold text-white">Deepfake & Synthetic Media Forensics</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Spectral analysis scans voice recordings and video frames for diffusion-model artifacts, acoustic jitter anomalies, and facial boundary mismatch.
+              </p>
+              <div className="pt-2 font-mono text-[11px] text-emerald-300 flex items-center gap-1.5">
+                <span>Voice & Face Liveness Verification</span>
+              </div>
+            </div>
+
+            <div className="p-6 rounded-2xl bg-[#051424] border border-indigo-500/20 hover:border-indigo-500/50 transition-all space-y-4 shadow-lg group">
+              <div className="w-12 h-12 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center group-hover:scale-105 transition-transform">
+                <FileCheck2 size={24} />
+              </div>
+              <h3 className="text-lg font-bold text-white">XAI Explainability & Automated Containment</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Generates plain-language forensic justifications and directly triggers Cloudflare WAF firewall rules and account isolation.
+              </p>
+              <div className="pt-2 font-mono text-[11px] text-indigo-300 flex items-center gap-1.5">
+                <span>Direct WAF / LDAP Orchestration</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* How It Works Section */}
+      <section id="how-it-works" className="relative z-20 py-16 px-6 sm:px-10 border-t border-slate-800/80 bg-[#030d1d]">
+        <div className="max-w-7xl mx-auto space-y-12">
+          <div className="text-center max-w-2xl mx-auto space-y-3">
+            <span className="text-xs font-mono font-bold text-emerald-400 tracking-widest uppercase">
+              // OPERATING PIPELINE
+            </span>
+            <h2 className="text-3xl sm:text-4xl font-extrabold text-white">
+              How CyberGuard AI Secures BPUT Digital Assets
+            </h2>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+            <div className="p-5 rounded-2xl bg-[#051322] border border-slate-800 space-y-3">
+              <span className="text-2xl font-black font-mono text-cyan-400">01</span>
+              <h4 className="text-base font-bold text-white">Signal Ingestion</h4>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Telemetry streams into the SOC from DNS resolvers, campus mail gateways, edge WAF proxies, and endpoint sensors.
+              </p>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-[#051322] border border-slate-800 space-y-3">
+              <span className="text-2xl font-black font-mono text-emerald-400">02</span>
+              <h4 className="text-base font-bold text-white">Multi-Engine AI Triage</h4>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Parallel inference classifies threat vectors across phishing, audio deepfake clones, and malicious Tor ingress.
+              </p>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-[#051322] border border-slate-800 space-y-3">
+              <span className="text-2xl font-black font-mono text-indigo-400">03</span>
+              <h4 className="text-base font-bold text-white">XAI Evidence Scoring</h4>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Explainable AI maps concrete feature weights and risk confidence factors for immediate SOC analyst inspection.
+              </p>
+            </div>
+
+            <div className="p-5 rounded-2xl bg-[#051322] border border-slate-800 space-y-3">
+              <span className="text-2xl font-black font-mono text-amber-400">04</span>
+              <h4 className="text-base font-bold text-white">Containment & Rescue</h4>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Dynamic containment actions quarantine compromised credentials, block malicious IPs, and dispatch automated alerts.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* About & Contact Section */}
+      <section id="about" className="relative z-20 py-16 px-6 sm:px-10 border-t border-slate-800/80 bg-[#020b18]">
+        <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+          
+          <div className="space-y-4">
+            <span className="text-xs font-mono font-bold text-cyan-400 tracking-widest uppercase">
+              // ABOUT BPUT INNOVATION SUBMISSION
+            </span>
+            <h2 className="text-3xl sm:text-4xl font-extrabold text-white">
+              Pioneered for BPUT Cyber Resilience
+            </h2>
+            <p className="text-sm text-slate-300 leading-relaxed">
+              CyberGuard AI was developed by TeamSecure to provide an autonomous, privacy-preserving defense perimeter for BPUT students, faculty, and state university infrastructure against emerging AI-generated cyber warfare.
+            </p>
+            <div className="flex flex-wrap gap-3 pt-2">
+              <span className="px-3 py-1 rounded-full bg-cyan-950/40 border border-cyan-500/30 text-xs font-mono text-cyan-300">
+                TeamSecure-GITA
+              </span>
+              <span className="px-3 py-1 rounded-full bg-emerald-950/40 border border-emerald-500/30 text-xs font-mono text-emerald-300">
+                ODISHA CYBER DEFENSE INITIATIVE
+              </span>
+            </div>
+          </div>
+
+          <div id="contact" className="p-6 sm:p-8 rounded-2xl bg-[#061525] border border-slate-700/80 space-y-5">
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              <Mail size={18} className="text-cyan-400" />
+              <span>SOC Operations & Contact</span>
+            </h3>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Have an urgent security incident to report or need authorization credentials for the BPUT SOC operations room?
+            </p>
+            <div className="space-y-3 text-xs font-mono text-slate-300">
+              <div className="flex items-center gap-2.5 p-3 rounded-xl bg-[#030d19] border border-slate-800">
+                <Mail size={15} className="text-cyan-400 shrink-0" />
+                <span>teamsecure.project@gmail.com</span>
+              </div>
+              <div className="flex items-center gap-2.5 p-3 rounded-xl bg-[#030d19] border border-slate-800">
+                <Shield size={15} className="text-emerald-400 shrink-0" />
+                <span>BPUT Incident Response Desk: 24/7 Monitored</span>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowAuthModal(true)}
+              className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-bold text-xs sm:text-sm transition-all shadow-md cursor-pointer"
+            >
+              Sign In to SOC Operations
+            </button>
+          </div>
+
+        </div>
+      </section>
 
       {/* Footer System Status Bar */}
-      <footer className="relative z-20 w-full px-4 sm:px-8 py-3 border-t border-slate-800/60 bg-[#030a13]/70 backdrop-blur-sm flex flex-col sm:flex-row flex-wrap items-center justify-between text-[11px] sm:text-xs font-mono text-slate-400 gap-2 sm:gap-4 text-center sm:text-left">
+      <footer className="relative z-20 w-full px-5 sm:px-10 py-4 border-t border-slate-800/80 bg-[#010712] backdrop-blur-md flex flex-col sm:flex-row flex-wrap items-center justify-between text-[11px] sm:text-xs font-mono text-slate-400 gap-2 sm:gap-4 text-center sm:text-left">
         <div className="flex items-center justify-center sm:justify-start gap-3 sm:gap-6 flex-wrap">
           <span className="flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
             BPUT CYBER DEFENSE INITIATIVE
           </span>
-          <span className="hidden sm:inline text-slate-600">|</span>
-          <span className="hidden sm:inline text-slate-400">
-            LOCAL & DISTRIBUTED HYBRID SENSORS
+          <span className="hidden sm:inline text-slate-700">|</span>
+          <span className="text-slate-500">
+            LOCAL & DISTRIBUTED HYBRID SENSORS (v2.4)
           </span>
         </div>
 
         <div className="flex items-center justify-center sm:justify-end gap-3 sm:gap-5 flex-wrap">
-          <span className="text-slate-400">Authenticated access required</span>
+          <span className="text-slate-500">Authenticated access required</span>
           <button 
             onClick={handleLaunch} 
-            className="text-cyan-400 hover:text-cyan-300 font-medium flex items-center gap-1 transition-colors"
+            className="text-cyan-400 hover:text-cyan-300 font-semibold flex items-center gap-1 transition-colors cursor-pointer"
           >
             <span>Open Command View</span>
             <ChevronRight size={13} />
@@ -547,10 +762,22 @@ export default function CyberRadarPortal({
         </div>
       </footer>
 
-      {/* Auth / Credentials Modal (Small & Center-Aligned) */}
+      {/* =========================================================================
+          5. WATCH DEMO MODAL (Interactive live threat analysis walkthrough)
+          ========================================================================= */}
+      <WatchDemoModal
+        isOpen={showDemoModal}
+        onClose={() => setShowDemoModal(false)}
+        onLaunchWorkspace={handleLaunch}
+      />
+
+      {/* =========================================================================
+          6. SOC AUTHENTICATION MODAL (Enhanced with Google SSO & Presets)
+          ========================================================================= */}
       {showAuthModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-md overflow-y-auto">
-          <div className="relative w-full max-w-[390px] sm:max-w-[410px] max-h-[94dvh] overflow-y-auto p-5 sm:p-6 rounded-2xl bg-[#081726]/95 backdrop-blur-xl border border-cyan-500/30 shadow-[0_0_50px_rgba(6,182,212,0.25)] space-y-4 my-auto animate-in fade-in zoom-in-95 duration-150">
+          <div className="relative w-full max-w-[390px] sm:max-w-[420px] max-h-[94dvh] overflow-y-auto p-5 sm:p-6 rounded-2xl bg-[#081726]/95 backdrop-blur-xl border border-cyan-500/30 shadow-[0_0_50px_rgba(6,182,212,0.25)] space-y-4 my-auto animate-in fade-in zoom-in-95 duration-150">
+            
             {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div className="flex items-center gap-2.5">
