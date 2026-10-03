@@ -1,15 +1,11 @@
-import io
-import math
-import binascii
-import wave
-from detection_engine import analyze_screenshot_brand_mismatches
-from media_engine import analyze_audio
 import ast
 import asyncio
 import hashlib
 import html
 import ipaddress
+import io
 import json
+import math
 import os
 import re
 import secrets
@@ -18,6 +14,8 @@ import sys
 import smtplib
 import time
 import base64
+import binascii
+import wave
 from email.message import EmailMessage
 
 try:
@@ -31,31 +29,26 @@ try:
 except ImportError:
     pass
 
-# Auto-detect and switch to local .venv if run with system python lacking fastapi/uvicorn/webauthn
-backend_dir = os.path.dirname(os.path.abspath(__file__))
-candidates = [
-    os.path.join(backend_dir, ".venv", "bin", "python3"),
-    os.path.join(backend_dir, ".venv", "Scripts", "python.exe"),
-    os.path.join(backend_dir, "venv", "bin", "python3"),
-    os.path.join(backend_dir, "venv", "Scripts", "python.exe"),
-    os.path.join(os.path.dirname(backend_dir), ".venv", "bin", "python3"),
-    os.path.join(os.path.dirname(backend_dir), ".venv", "Scripts", "python.exe"),
-]
-venv_python = next((p for p in candidates if os.path.isfile(p) and os.access(p, os.X_OK)), None)
-need_venv_switch = False
+# Auto-detect and switch to local .venv if run with system python lacking fastapi/uvicorn
 try:
     import fastapi  # noqa: F401
     import uvicorn  # noqa: F401
-    import webauthn  # noqa: F401
-    import jwt  # noqa: F401
 except ImportError:
-    need_venv_switch = True
-
-if venv_python and sys.executable != venv_python and (need_venv_switch or (backend_dir in venv_python and not sys.executable.startswith(backend_dir))):
-    try:
-        os.execv(venv_python, [venv_python] + sys.argv)
-    except OSError:
-        pass
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(backend_dir, ".venv", "bin", "python3"),
+        os.path.join(backend_dir, ".venv", "Scripts", "python.exe"),
+        os.path.join(backend_dir, "venv", "bin", "python3"),
+        os.path.join(backend_dir, "venv", "Scripts", "python.exe"),
+        os.path.join(os.path.dirname(backend_dir), ".venv", "bin", "python3"),
+        os.path.join(os.path.dirname(backend_dir), ".venv", "Scripts", "python.exe"),
+    ]
+    venv_python = next((p for p in candidates if os.path.isfile(p) and os.access(p, os.X_OK)), None)
+    if venv_python and sys.executable != venv_python:
+        try:
+            os.execv(venv_python, [venv_python] + sys.argv)
+        except OSError:
+            pass
 
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -72,7 +65,7 @@ from webauthn.helpers.structs import PublicKeyCredentialDescriptor, UserVerifica
 from database import connect_database
 from ephemeral_store import EphemeralStore
 
-from detection_engine import FALLBACK_TEXT_MODEL, TEXT_MODEL, adversarial_self_test, evaluate_threat_payload
+from detection_engine import FALLBACK_TEXT_MODEL, TEXT_MODEL, adversarial_self_test, analyze_screenshot_brand_mismatches, evaluate_threat_payload
 from behavioral_baseline import baseline_key, login_sample, parse_login_event, score_login_deviation, successful_login
 from geoip_enrichment import lookup_country as lookup_geoip_country
 from malware_scanner import scan_artifact
@@ -91,7 +84,7 @@ from battle_simulator import run_battle
 from campaign_engine import correlate_incident
 from digital_twin import build_twin
 from forecast_engine import forecast_risk
-from media_engine import analyze_media, media_inspection_status
+from media_engine import analyze_audio, analyze_media, media_inspection_status
 from psychology_detector import analyze_psychology
 from response_simulator import simulate_response
 from self_healing import recommend_healing
@@ -124,7 +117,7 @@ from cloudflare_waf import block_ip as cloudflare_block_ip, configuration as clo
 from roadmap_features import analyst_bias_report, attention_heatmap, attacker_resource_cost, breach_economics, compliance_diff, counterfactual_replay, cross_modal_consistency, jurisdiction_route, seed_honeytokens, shared_immunity, supply_chain_blast_radius
 from provider_integrations import deploy_honeytokens, integration_status as provider_integration_status, publish_tenant_signatures, sync_cve_feed
 from production_integrations import IntegrationNotConfigured, create_ticket as create_provider_ticket, disable_identity as disable_provider_identity, isolate_endpoint as isolate_provider_endpoint, provider_status as production_provider_status
-from models import AccessRequestCreate, AdvancedTelemetryRequest, AgentConsensusRequest, AlertRequest, AnalystLoadRequest, BattleRequest, CognitiveEchoRequest, DarkMeshRequest, DeceptionRequest, ForecastRequest, GoogleLoginRequest, IncidentComment, IncidentUpdate, InfrastructureEchoRequest, LoginRequest, NeuromorphicRequest, NotificationUpdate, OtpVerificationRequest, PasskeyCredentialRequest, PermissionRequest, PolymorphismRequest, PsychologyRequest, ProviderEndpointIsolationRequest, ProviderIdentityDisableRequest, ProviderTicketRequest, QStateRequest, QuantumDecoyRequest, ResponseExecutionRequest, SatelliteRequest, ScannerRequest, SimulationRequest, SpeculativeTelemetryRequest, TemporalHealingRequest, ThreatAnalysisRequest, ThreatIntelLookup, TopologyMorphRequest, ThreatPhysicsRequest, UserCreate, VaccineRequest
+from models import AccessRequestCreate, AdvancedTelemetryRequest, AgentConsensusRequest, AlertRequest, AnalystLoadRequest, BattleRequest, CognitiveEchoRequest, DarkMeshRequest, DeceptionRequest, ForecastRequest, IncidentComment, IncidentUpdate, InfrastructureEchoRequest, LoginRequest, NeuromorphicRequest, NotificationUpdate, OtpVerificationRequest, PasskeyCredentialRequest, PermissionRequest, PolymorphismRequest, PsychologyRequest, ProviderEndpointIsolationRequest, ProviderIdentityDisableRequest, ProviderTicketRequest, QStateRequest, QuantumDecoyRequest, ResponseExecutionRequest, SatelliteRequest, ScannerRequest, SimulationRequest, SpeculativeTelemetryRequest, TemporalHealingRequest, ThreatAnalysisRequest, ThreatIntelLookup, TopologyMorphRequest, ThreatPhysicsRequest, UserCreate, VaccineRequest
 
 DB_PATH = Path(os.getenv("CYBERGUARD_DB_PATH", str(Path(__file__).with_name("cyberguard.db"))))
 CYBERGUARD_ENV = os.getenv("CYBERGUARD_ENV", "development").lower()
@@ -168,6 +161,15 @@ ACCESS_REQUEST_TTL_HOURS = max(1, int(os.getenv("CYBERGUARD_ACCESS_REQUEST_TTL_H
 HEAD_ADMIN_USERNAME = configured_head_admin_username
 HEAD_ADMIN_PASSWORD = configured_head_admin_password
 MAX_UPLOAD_BYTES = max(1_000_000, int(os.getenv("CYBERGUARD_MAX_UPLOAD_BYTES", "10485760")))
+MAX_LIVE_MEDIA_FRAME_BYTES = 1_000_000
+MAX_LIVE_MEDIA_AUDIO_BYTES = 1_000_000
+MAX_LIVE_MEDIA_FRAMES = 300
+MAX_LIVE_MEDIA_AUDIO_CHUNKS = 60
+MAX_LIVE_MEDIA_AUDIO_SECONDS_PER_CHUNK = 5
+MAX_LIVE_MEDIA_AUDIO_TOTAL_BYTES = 20_000_000
+MIN_LIVE_MEDIA_AUDIO_INTERVAL_SECONDS = 4
+MAX_LIVE_MEDIA_SECONDS = 300
+MIN_LIVE_MEDIA_FRAME_INTERVAL_SECONDS = 0.5
 STARTED_AT = datetime.now(timezone.utc)
 EPHEMERAL_STATE = EphemeralStore.from_environment()
 OTP_TTL_SECONDS = max(60, int(os.getenv("CYBERGUARD_OTP_TTL_SECONDS", "300")))
@@ -699,16 +701,6 @@ async def lifespan(app: FastAPI):
     yield
 
 
-MAX_LIVE_MEDIA_FRAME_BYTES = 1_000_000
-MAX_LIVE_MEDIA_AUDIO_BYTES = 1_000_000
-MAX_LIVE_MEDIA_FRAMES = 300
-MAX_LIVE_MEDIA_AUDIO_CHUNKS = 60
-MAX_LIVE_MEDIA_AUDIO_SECONDS_PER_CHUNK = 5
-MAX_LIVE_MEDIA_AUDIO_TOTAL_BYTES = 20_000_000
-MIN_LIVE_MEDIA_AUDIO_INTERVAL_SECONDS = 4
-MAX_LIVE_MEDIA_SECONDS = 300
-MIN_LIVE_MEDIA_FRAME_INTERVAL_SECONDS = 0.5
-
 app = FastAPI(
     title="CYBERGUARD AI Cyber Defense API",
     description="Threat detection, risk scoring, XAI, persistence, and response automation",
@@ -740,8 +732,6 @@ app.add_middleware(
 
 @app.middleware("http")
 async def security_guard(request: Request, call_next):
-    if request.method == "OPTIONS":
-        return await call_next(request)
     ip_address = request_ip(request)
     path = request.url.path.lower()
     now = time.time()
@@ -765,9 +755,8 @@ def current_user(authorization: Optional[str] = Header(default=None)) -> dict[st
         if ALLOW_ANONYMOUS_EVAL:
             return {"username": "evaluator", "role": "lead"}
         raise HTTPException(status_code=401, detail="Authentication required")
-    raw_token = authorization.removeprefix("Bearer ").strip()
     try:
-        claims = jwt.decode(raw_token, JWT_SECRET, algorithms=["HS256"])
+        claims = jwt.decode(authorization.removeprefix("Bearer "), JWT_SECRET, algorithms=["HS256"])
         username = claims.get("username")
         if not isinstance(username, str) or not username.strip():
             raise HTTPException(status_code=401, detail="Invalid or expired session")
@@ -780,41 +769,6 @@ def current_user(authorization: Optional[str] = Header(default=None)) -> dict[st
             raise HTTPException(status_code=401, detail="Invalid or expired session")
         return {"username": user["username"], "role": user["role"]}
     except jwt.PyJWTError as error:
-        # Check if incoming token is a valid Firebase Auth token
-        try:
-            unverified = jwt.decode(raw_token, options={"verify_signature": False})
-            issuer = unverified.get("iss", "")
-            if issuer.startswith("https://securetoken.google.com/"):
-                email = (unverified.get("email") or "").strip().lower()
-                if email:
-                    with get_db() as db:
-                        user = db.execute(
-                            "SELECT username, role, status FROM users WHERE lower(email) = ? OR lower(username) = ?",
-                            (email, email),
-                        ).fetchone()
-                        if not user:
-                            # Auto-provision on valid Firebase login
-                            is_owner = (email == SECURITY_OWNER_EMAIL.lower())
-                            role = "head_admin" if is_owner else "lead"
-                            base_username = email.split("@")[0].replace(".", "_") or "analyst"
-                            username = base_username
-                            existing = db.execute("SELECT username FROM users WHERE lower(username) = ?", (username,)).fetchone()
-                            if existing:
-                                username = f"{base_username}_{secrets.token_hex(2)}"
-                            dummy_hash = hash_password(secrets.token_urlsafe(32))
-                            db.execute(
-                                "INSERT INTO users (username, password_hash, role, email, status) VALUES (?, ?, ?, ?, 'active')",
-                                (username, dummy_hash, role, email),
-                            )
-                            user = db.execute(
-                                "SELECT username, role, status FROM users WHERE username = ?",
-                                (username,),
-                            ).fetchone()
-                    if user and user["status"] == "active":
-                        return {"username": user["username"], "role": user["role"]}
-        except Exception:
-            pass
-
         if ALLOW_ANONYMOUS_EVAL:
             return {"username": "evaluator", "role": "lead"}
         raise HTTPException(status_code=401, detail="Invalid or expired session") from error
@@ -1939,17 +1893,7 @@ def login(request: LoginRequest):
         raise HTTPException(status_code=429, detail="Too many failed login attempts. Try again later.")
     with get_db() as db:
         user = db.execute("SELECT username, role, password_hash, email, status FROM users WHERE lower(username) = lower(?)", (username,)).fetchone()
-    
-    valid_password = False
-    if user and user["status"] == "active":
-        if verify_password(request.password, user["password_hash"]):
-            valid_password = True
-        elif request.password in (HEAD_ADMIN_PASSWORD, "Secure@9040") and user["username"].lower() == HEAD_ADMIN_USERNAME.lower():
-            valid_password = True
-        elif request.password in ("Secure@9040", "Admin@12345", "CyberGuard@2025") and user["role"] in ("admin", "lead", "analyst", "head_admin"):
-            valid_password = True
-
-    if not user or user["status"] != "active" or not valid_password:
+    if not user or user["status"] != "active" or not verify_password(request.password, user["password_hash"]):
         failures = EPHEMERAL_STATE.record_window_event(failure_key, window_seconds=LOGIN_FAILURE_WINDOW_SECONDS)
         if failures >= LOGIN_FAILURE_LIMIT:
             EPHEMERAL_STATE.set(lock_key, {"locked": True}, ttl_seconds=LOGIN_FAILURE_WINDOW_SECONDS)
@@ -1959,58 +1903,6 @@ def login(request: LoginRequest):
     if len(user["password_hash"]) == 64 and not user["password_hash"].startswith("$2"):
         with get_db() as db:
             db.execute("UPDATE users SET password_hash = ? WHERE username = ?", (hash_password(request.password), user["username"]))
-    return issue_session(user)
-
-
-@app.post("/api/v1/auth/google")
-@app.post("/api/v1/auth/firebase")
-def google_auth(request: GoogleLoginRequest):
-    initialize_database()
-    email = request.email.strip().lower()
-    if not email or "@" not in email:
-        raise HTTPException(status_code=400, detail="Invalid email address.")
-
-    with get_db() as db:
-        user = db.execute(
-            """
-            SELECT username, role, password_hash, email, status
-            FROM users
-            WHERE lower(email) = ? OR lower(username) = ?
-            ORDER BY
-                CASE
-                    WHEN status = 'active' AND role = 'head_admin' THEN 0
-                    WHEN status = 'active' THEN 1
-                    WHEN lower(username) = lower(?) THEN 2
-                    ELSE 3
-                END
-            LIMIT 1
-            """,
-            (email, email, email),
-        ).fetchone()
-
-        if not user:
-            # Auto-provision authorized account for verified Google Sign-In
-            is_owner = (email == SECURITY_OWNER_EMAIL.lower())
-            role = "head_admin" if is_owner else "lead"
-            base_username = email.split("@")[0].replace(".", "_") or "google_analyst"
-            username = base_username
-            existing = db.execute("SELECT username FROM users WHERE lower(username) = ?", (username,)).fetchone()
-            if existing:
-                username = f"{base_username}_{secrets.token_hex(2)}"
-
-            dummy_hash = hash_password(secrets.token_urlsafe(32))
-            db.execute(
-                "INSERT INTO users (username, password_hash, role, email, status) VALUES (?, ?, ?, ?, 'active')",
-                (username, dummy_hash, role, email),
-            )
-            user = db.execute(
-                "SELECT username, role, password_hash, email, status FROM users WHERE username = ?",
-                (username,),
-            ).fetchone()
-
-        if user["status"] != "active":
-            raise HTTPException(status_code=403, detail="User account is deactivated. Contact security owner.")
-
     return issue_session(user)
 
 
@@ -2919,6 +2811,7 @@ async def events_socket(websocket: WebSocket):
     except WebSocketDisconnect:
         return
 
+
 @app.websocket("/api/v1/ws/media")
 async def live_media_socket(websocket: WebSocket):
     protocol = "cyberguard.media.v1"
@@ -3145,7 +3038,6 @@ async def live_media_socket(websocket: WebSocket):
             })
     except WebSocketDisconnect:
         return
-
 
 
 @app.get("/api/v1/frontier/overview")
