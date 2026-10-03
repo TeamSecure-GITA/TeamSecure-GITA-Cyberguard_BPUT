@@ -425,7 +425,10 @@ export default function CyberRadarPortal({
           </div>
 
           {/* Main Hero Headline */}
-          <h1 className="text-4xl sm:text-5xl lg:text-[60px] font-black tracking-tight text-white leading-[1.08]">
+          <h1
+            aria-label="See the signal before it spreads."
+            className="text-4xl sm:text-5xl lg:text-[60px] font-black tracking-tight text-white leading-[1.08]"
+          >
             See the signal <br />
             <span className="bg-gradient-to-r from-emerald-400 via-teal-300 to-cyan-400 bg-clip-text text-transparent drop-shadow-[0_0_35px_rgba(16,185,129,0.4)]">
               before it spreads.
