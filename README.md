@@ -33,6 +33,8 @@ Use Python 3.12 and Node.js compatible with the frontend's Vite version.
 python -m uvicorn main:app --reload --port 8001
    ```
 
+   Alternatively, start it from the repository root with `npm run backend`.
+
 4. In a second terminal, install and build the frontend:
 
    ```powershell

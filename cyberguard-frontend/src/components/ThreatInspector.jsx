@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Mail, Video, Link, FileText, UserX, AlertTriangle, Upload, Search, Loader2, PlayCircle, Globe, Trash2 } from 'lucide-react';
 import axios from 'axios';
 import { getApiBaseUrl } from '../apiConfig';
+import LiveMediaSession from './LiveMediaSession';
 
 export default function ThreatInspector({ accessToken }) {
   const [activeSubTab, setActiveSubTab] = useState('email');
@@ -325,6 +326,7 @@ export default function ThreatInspector({ accessToken }) {
           <option value="">Not specified</option><option value="IN">India</option><option value="US">United States</option><option value="EU">European Union</option><option value="GB">United Kingdom</option>
         </select>
       </label>
+      {activeSubTab === 'video' && <LiveMediaSession apiBaseUrl={apiBaseUrl} accessToken={accessToken} />}
       <form onSubmit={handleAnalyze} className="inspector-form space-y-4">
         {fileAnalysisTabs.includes(activeSubTab) || (activeSubTab === 'network' && selectedFile) ? (
           <div className={`dropzone border-2 border-dashed rounded-xl p-8 text-center ${dragActive ? 'dropzone-active' : ''}`} onDragOver={(event) => { event.preventDefault(); setDragActive(true); }} onDragLeave={() => setDragActive(false)} onDrop={(event) => { event.preventDefault(); acceptFile(event.dataTransfer.files?.[0]); }}>
@@ -431,12 +433,32 @@ export default function ThreatInspector({ accessToken }) {
               {analysisResult.ocr_analysis.status === 'text_detected' ? (
                 <p className="mt-1 text-[11px] text-sky-200/80">{analysisResult.ocr_analysis.character_count} characters analyzed · text risk {analysisResult.ocr_analysis.risk_score}/100 · raw text is not retained in this result.</p>
               ) : analysisResult.ocr_analysis.reason ? <p className="mt-1 text-[11px] text-sky-200/80">{analysisResult.ocr_analysis.reason}</p> : null}
+              {(analysisResult.ocr_analysis.brand_domain_mismatches || []).map((mismatch) => (
+                <p key={`${mismatch.brand}-${mismatch.observed_domain}`} className="mt-2 text-[11px] text-rose-200">
+                  {mismatch.brand} login claim · observed {mismatch.observed_domain} · expected {mismatch.expected_domain}
+                </p>
+              ))}
             </div>
           )}
           {analysisResult.network_capture_summary && (
             <div className="rounded-lg border border-cyan-800/60 bg-cyan-950/20 p-3 text-xs text-cyan-100">
               <strong>Network capture · {analysisResult.network_capture_summary.packet_count} packets</strong>
               <p className="mt-1 text-[11px] text-cyan-200/80">Reconstructed {analysisResult.network_capture_summary.flow_count} TCP/UDP flows for network risk analysis.</p>
+            </div>
+          )}
+          {analysisResult.video_audio_analysis && (
+            <div className="rounded-lg border border-violet-800/60 bg-violet-950/20 p-3 text-xs text-violet-100">
+              <strong>Video audio analysis · {analysisResult.video_audio_analysis.status.replaceAll('_', ' ')}</strong>
+              {analysisResult.video_audio_analysis.status === 'analyzed' ? (
+                <p className="mt-1 text-[11px] text-violet-200/80">
+                  First {analysisResult.video_audio_analysis.max_seconds} seconds · {analysisResult.video_audio_analysis.method} · risk score {analysisResult.video_audio_analysis.score}/99 (not calibrated).
+                </p>
+              ) : (
+                <p className="mt-1 text-[11px] text-violet-200/80">{analysisResult.video_audio_analysis.reason}</p>
+              )}
+              {analysisResult.audio_video_synchronization && (
+                <p className="mt-1 text-[10px] text-violet-200/60">{analysisResult.audio_video_synchronization.reason}</p>
+              )}
             </div>
           )}
           {analysisResult.known_contact_comparison && (
@@ -493,6 +515,30 @@ export default function ThreatInspector({ accessToken }) {
           </div>
           {analysisResult.qr_payload && <div className="text-xs text-amber-200 bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">Decoded QR destination: <strong>{analysisResult.qr_payload}</strong></div>}
           {analysisResult.sender_authenticity && <div className="text-xs text-slate-300 bg-slate-800/40 border border-slate-700 rounded-lg p-3">Sender authenticity: From {analysisResult.sender_authenticity.from || 'unknown'} · Reply-To {analysisResult.sender_authenticity.reply_to || 'none'} · Return-Path {analysisResult.sender_authenticity.return_path || 'none'}</div>}
+          {(analysisResult.email_attachments || []).length > 0 && (
+            <div className="rounded-lg border border-amber-800/60 bg-amber-950/20 p-3 text-xs text-amber-100">
+              <strong>Email attachment inspection</strong>
+              <div className="mt-2 space-y-2">
+                {analysisResult.email_attachments.map((attachment) => (
+                  <div key={`${attachment.filename}-${attachment.sha256}`} className="border-t border-amber-900/50 pt-2">
+                    <div className="flex flex-wrap justify-between gap-2">
+                      <span>{attachment.filename} · {attachment.size_bytes} bytes</span>
+                      <span>{attachment.malware_scan?.status || 'signature scan unavailable'}</span>
+                    </div>
+                    <p className="mt-1 text-[10px] text-amber-200/70">
+                      {attachment.malware_scan?.reasons?.join(' ') || 'No malware scan result was returned.'}
+                    </p>
+                    {attachment.malware_scan?.archive_scan && (
+                      <p className="mt-1 text-[10px] text-amber-200/70">
+                        ZIP contents: {attachment.malware_scan.archive_scan.status} · {attachment.malware_scan.archive_scan.entries_scanned} entries scanned · {attachment.malware_scan.archive_scan.skipped_count ?? attachment.malware_scan.archive_scan.skipped_entries.length} skipped
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <p className="mt-2 text-[10px] text-amber-200/70">A YARA no-match result is not proof that an attachment is benign.</p>
+            </div>
+          )}
           {analysisResult.sender_identity_verification && <div className="text-xs text-slate-200 bg-slate-800/40 border border-slate-700 rounded-lg p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <strong>Sender identity: {analysisResult.sender_identity_verification.status.replaceAll('_', ' ')}</strong>
@@ -508,8 +554,9 @@ export default function ThreatInspector({ accessToken }) {
           {analysisResult.malware_scan && <div className="border-t border-slate-800 pt-3 space-y-1 text-xs">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1"><strong className="text-slate-200">YARA file scan</strong><span className={analysisResult.malware_scan.matches?.length ? 'text-rose-300' : 'text-amber-300'}>{analysisResult.malware_scan.status.replaceAll('_', ' ')}</span><span className="text-slate-500">{analysisResult.malware_scan.engine}</span></div>
             <div className="break-all font-mono text-[10px] text-slate-500">SHA-256 {analysisResult.malware_scan.sha256}</div>
-            {(analysisResult.malware_scan.matches || []).map((match) => <div key={match.rule} className="text-rose-200">{match.rule} · risk {match.meta?.risk_score ?? '--'}</div>)}
+            {(analysisResult.malware_scan.matches || []).map((match, index) => <div key={`${match.rule}-${match.archive_path || index}`} className="text-rose-200">{match.rule} · risk {match.meta?.risk_score ?? '--'}{match.archive_path ? ` · ${match.archive_path}` : ''}</div>)}
             {(analysisResult.malware_scan.reasons || []).map((reason) => <p key={reason} className="text-slate-400">{reason}</p>)}
+            {analysisResult.malware_scan.archive_scan && <p className="text-slate-400">ZIP contents: {analysisResult.malware_scan.archive_scan.status} · {analysisResult.malware_scan.archive_scan.entries_scanned} entries scanned · {analysisResult.malware_scan.archive_scan.skipped_count ?? analysisResult.malware_scan.archive_scan.skipped_entries.length} skipped</p>}
           </div>}
           {analysisResult.website_inspection && <div className="border-t border-slate-800 pt-3 space-y-1 text-xs">
             <strong className="text-slate-200">Website identity and domain checks</strong>

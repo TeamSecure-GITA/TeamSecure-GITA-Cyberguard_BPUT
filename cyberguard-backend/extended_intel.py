@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections import Counter
 from typing import Any
 from urllib.parse import urlparse
+
+from threat_intel import extract_iocs
 
 
 def _risk_for_value(value: str) -> tuple[int, str]:
@@ -106,42 +107,105 @@ def scan_payload(payload: str) -> dict[str, Any]:
 
 
 def build_global_threat_map(incidents: list[dict[str, Any]]) -> dict[str, Any]:
-    categories = Counter(item.get("category", "unknown") for item in incidents)
+    grouped: dict[tuple[str, str, float, float], int] = {}
+    for incident in incidents:
+        metadata = incident.get("metadata") or {}
+        location = metadata.get("source_location") if isinstance(metadata, dict) else None
+        if not isinstance(location, dict):
+            continue
+        country = str(location.get("country") or "").strip()
+        try:
+            latitude = float(location["lat"])
+            longitude = float(location["lng"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not country or not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180):
+            continue
+        category = str(incident.get("category") or "unknown")
+        key = (country, category, latitude, longitude)
+        grouped[key] = grouped.get(key, 0) + 1
+
     locations = [
-        {"country": "India", "code": "IN", "lat": 20.5937, "lng": 78.9629, "category": "phishing", "count": categories.get("url", 0) + categories.get("email", 0)},
-        {"country": "United States", "code": "US", "lat": 37.0902, "lng": -95.7129, "category": "malware", "count": categories.get("malware", 0)},
-        {"country": "Germany", "code": "DE", "lat": 51.1657, "lng": 10.4515, "category": "credential attack", "count": categories.get("ato", 0)},
-        {"country": "Singapore", "code": "SG", "lat": 1.3521, "lng": 103.8198, "category": "botnet", "count": categories.get("network", 0)},
+        {
+            "country": country,
+            "code": country,
+            "lat": latitude,
+            "lng": longitude,
+            "category": category,
+            "count": count,
+            "source": "reported_metadata",
+        }
+        for (country, category, latitude, longitude), count in grouped.items()
     ]
-    for location in locations:
-        if location["count"] == 0:
-            location["count"] = max(1, len(incidents) // max(1, len(locations)))
-    return {"locations": locations, "total_events": len(incidents), "updated_at": "live-local"}
+    return {
+        "locations": sorted(locations, key=lambda item: item["count"], reverse=True),
+        "total_events": len(incidents),
+        "geolocated_events": sum(grouped.values()),
+        "status": "observed" if grouped else "insufficient_data",
+    }
 
 
 def build_identity_heatmap(incidents: list[dict[str, Any]]) -> dict[str, Any]:
-    base = {"Admin": 96, "Faculty": 68, "Student": 35, "Guest": 18}
-    if incidents:
-        average = round(sum(item.get("risk_score", 0) for item in incidents) / len(incidents))
-        base["Faculty"] = max(base["Faculty"], average)
-    return {"identities": [{"label": label, "risk": risk, "incidents": max(0, risk // 18)} for label, risk in base.items()]}
+    identities: dict[str, dict[str, Any]] = {}
+    for incident in incidents:
+        risk = max(0, min(99, int(incident.get("risk_score", 0) or 0)))
+        for ioc in extract_iocs(str(incident.get("payload", ""))):
+            if ioc.get("type") != "email":
+                continue
+            address = str(ioc.get("value", "")).strip().lower()
+            local, separator, domain = address.partition("@")
+            if not separator or not local or not domain:
+                continue
+            identity = identities.setdefault(address, {
+                "label": f"{local[0]}***@{domain}",
+                "risk_total": 0,
+                "incidents": 0,
+                "max_risk": 0,
+            })
+            identity["risk_total"] += risk
+            identity["incidents"] += 1
+            identity["max_risk"] = max(identity["max_risk"], risk)
+
+    results = [
+        {
+            "label": identity["label"],
+            "risk": round(identity["risk_total"] / identity["incidents"]),
+            "incidents": identity["incidents"],
+            "max_risk": identity["max_risk"],
+        }
+        for identity in identities.values()
+    ]
+    results.sort(key=lambda item: (item["risk"], item["incidents"]), reverse=True)
+    return {
+        "identities": results,
+        "status": "observed" if results else "insufficient_data",
+        "basis": "average risk score of incidents containing the observed email address",
+    }
 
 
 def analyze_trust_media(content: bytes, filename: str, content_type: str) -> dict[str, Any]:
     digest = hashlib.sha256(content).hexdigest()
-    entropy_hint = int(digest[:2], 16) % 21
-    is_audio = content_type.startswith("audio/") or filename.lower().endswith((".wav", ".mp3", ".m4a"))
-    voice = 63 + entropy_hint % 25 if is_audio else 92 - entropy_hint % 15
-    face = 88 - entropy_hint % 18 if not is_audio else 0
-    lip_sync = 58 + entropy_hint % 24 if not is_audio else 0
-    trust = round((voice + (face or voice) + (lip_sync or voice)) / 3)
+    from media_engine import analyze_media
+
+    result = analyze_media(content, content_type, filename, "deepfake")
+    if result["method"] in {"media-fallback", "metadata-fallback"}:
+        raise ValueError("; ".join(result.get("reasons", ["Media could not be inspected."])))
+    risk_score = max(0, min(99, int(result.get("score", 0))))
+    is_audio = content_type.startswith("audio/") or filename.lower().endswith((".wav", ".flac", ".ogg", ".oga", ".aiff", ".aif", ".mp3", ".m4a", ".aac"))
+    is_image = content_type.startswith("image/") or filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"))
+    media_type = "audio" if is_audio else "image" if is_image else "video"
     return {
         "filename": filename,
-        "media_type": "audio" if is_audio else "video",
-        "voice_authenticity": voice,
-        "face_authenticity": face,
-        "lip_sync_match": lip_sync,
-        "trust_score": trust,
-        "method": "local media signal analysis",
+        "media_type": media_type,
+        "risk_score": risk_score,
+        "trust_score": 100 - risk_score,
+        "voice_authenticity": None,
+        "face_authenticity": None,
+        "lip_sync_match": None,
+        "method": result["method"],
+        "calibration": "uncalibrated detector score; not a probability or verified authenticity measure",
+        "reasons": result.get("reasons", []),
+        "indicators": result.get("indicators", []),
+        "model": result.get("pretrained_model"),
         "fingerprint": digest[:16].upper(),
     }

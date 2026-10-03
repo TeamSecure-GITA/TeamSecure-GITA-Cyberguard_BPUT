@@ -96,7 +96,7 @@ try {
   await passwordField.fill('wrong-password');
   expectingInvalidLogin = true;
   await page.getByRole('button', { name: 'Authenticate' }).click();
-  await page.getByText('Invalid username or password').waitFor();
+  await page.getByText(/Invalid username or password\.?/).waitFor();
   expectingInvalidLogin = false;
 
   await page.close();

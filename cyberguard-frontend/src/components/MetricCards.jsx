@@ -1,15 +1,23 @@
 import React from 'react';
-import { ShieldAlert, Mail, Video, UserX, AlertTriangle, Activity } from 'lucide-react';
+import { ShieldAlert, Mail, Video, UserX, AlertTriangle, Activity, Fingerprint } from 'lucide-react';
 
 export default function MetricCards({ metrics }) {
   const cards = [
     {
-      title: 'Total Threats',
+      title: 'Total Events',
       value: metrics ? metrics.totalEvents : '--',
-      change: metrics ? 'All scored telemetry' : 'Waiting for API',
+      change: metrics ? 'All analyzed telemetry' : 'Waiting for API',
       icon: Activity,
       color: 'text-blue-400',
       borderColor: 'border-blue-500/30',
+    },
+    {
+      title: 'Threats Detected',
+      value: metrics ? metrics.threatsDetected : '--',
+      change: 'Medium, high & critical events',
+      icon: ShieldAlert,
+      color: 'text-rose-400',
+      borderColor: 'border-rose-500/30',
     },
     {
       title: 'Phishing',
@@ -26,6 +34,14 @@ export default function MetricCards({ metrics }) {
       icon: Video,
       color: 'text-purple-400',
       borderColor: 'border-purple-500/30',
+    },
+    {
+      title: 'Impersonation',
+      value: metrics ? metrics.impersonationCount : '--',
+      change: 'Identity impersonation assessments',
+      icon: Fingerprint,
+      color: 'text-fuchsia-400',
+      borderColor: 'border-fuchsia-500/30',
     },
     {
       title: 'ATO',
@@ -54,7 +70,7 @@ export default function MetricCards({ metrics }) {
   ];
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
       {cards.map((card, idx) => {
         const Icon = card.icon;
         return (

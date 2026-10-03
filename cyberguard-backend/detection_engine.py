@@ -241,6 +241,38 @@ def analyze_url_intelligence(payload: str) -> tuple[int, List[str], List[dict]]:
         indicators.append({"name": "URL Extraction", "weight": 1, "observed_urls": 0})
     return min(score, 99), reasons, indicators
 
+
+def analyze_screenshot_brand_mismatches(text: str) -> list[dict[str, str]]:
+    url_pattern = r"(?:(?:https?://|www\.)[^\s<>\"'`]+|(?:[a-z0-9](?:[a-z0-9-]{0,62}\.)+[a-z]{2,63})(?:/[^\s<>\"'`]*)?)"
+    urls = re.findall(url_pattern, text, re.IGNORECASE)
+    visible_text = re.sub(url_pattern, " ", text, flags=re.IGNORECASE)
+    if not re.search(r"\b(?:sign[\s-]?in|log[\s-]?in|password|passcode|user\s*name|email address|verify your account|account verification)\b", visible_text, re.IGNORECASE):
+        return []
+
+    domains = set()
+    for raw_url in urls:
+        candidate = raw_url.rstrip(".,;:!?)]}")
+        parsed = urlparse(candidate if "://" in candidate else f"https://{candidate}")
+        hostname = (parsed.hostname or "").lower().rstrip(".")
+        if hostname:
+            extracted = tldextract.extract(hostname)
+            domains.add((hostname, f"{extracted.domain}.{extracted.suffix}" if extracted.suffix else hostname))
+
+    mismatches = []
+    for brand, trusted_domain in BRAND_DOMAINS.items():
+        if not re.search(rf"\b{re.escape(brand)}\b", visible_text, re.IGNORECASE):
+            continue
+        for hostname, registered_domain in domains:
+            if registered_domain != trusted_domain and not registered_domain.endswith(f".{trusted_domain}"):
+                mismatches.append({
+                    "brand": brand,
+                    "observed_domain": hostname,
+                    "expected_domain": trusted_domain,
+                })
+
+    return mismatches
+
+
 def analyze_account_takeover(payload: str) -> tuple[int, List[str], List[dict]]:
     score = 20
     reasons = []
@@ -816,7 +848,7 @@ def evaluate_threat_payload(category: str, payload: str) -> dict:
         score, reasons, indicators = analyze_impersonation(payload)
         detection_method = "identity-impersonation"
         mitre_techniques = ["T1036", "T1566.001"]
-    elif category == "deepfake":
+    elif category in {"deepfake", "image", "audio", "video"}:
         score, reasons, indicators = analyze_deepfake(payload)
         detection_method = "synthetic-media-triage"
         mitre_techniques = ["T1036", "T1585"]
@@ -868,16 +900,31 @@ def evaluate_threat_payload(category: str, payload: str) -> dict:
     for indicator in indicators:
         indicator.setdefault("weight", max(1, round(score / max(len(indicators), 1))))
     
-    # Intelligent Playbook Mappings
-    actions = []
-    if level in ["Critical", "High"]:
-        actions.append({"id": "block_domain", "label": "Block Suspicious Domain / IP"})
-        actions.append({"id": "quarantine", "label": "Quarantine Email / Flag Media"})
-        actions.append({"id": "revoke_session", "label": "Revoke Active Session & Enforce MFA"})
-        actions.append({"id": "notify_soc", "label": "Notify Administrator / SOC"})
-        actions.append({"id": "escalate", "label": "Escalate for Investigation"})
-    else:
-        actions.append({"id": "warn_user", "label": "Display Safety Banner"})
+    actions = [{"id": "warn_user", "label": "Warn the user and verify through an official channel"}]
+    if level in {"Critical", "High"}:
+        actions = []
+        if category == "url":
+            actions.append({"id": "block_domain", "label": "Block the suspicious URL or domain"})
+        elif category in {"email", "phishing"}:
+            actions.extend([
+                {"id": "quarantine", "label": "Quarantine the suspicious message"},
+                {"id": "block_domain", "label": "Block malicious sender links and domains"},
+            ])
+        elif category in {"sms", "social"}:
+            actions.append({"id": "warn_user", "label": "Warn recipients and report the suspicious message"})
+        elif category == "deepfake":
+            actions.append({"id": "quarantine", "label": "Hold media for manual authenticity review"})
+        elif category == "impersonation":
+            actions.append({"id": "quarantine", "label": "Preserve impersonation evidence for review"})
+        elif category in {"ato", "auth_logs"}:
+            actions.append({"id": "revoke_session", "label": "Revoke suspicious sessions and require re-authentication"})
+        elif category == "malware":
+            actions.append({"id": "quarantine", "label": "Quarantine the suspicious artifact"})
+        elif category in {"network", "api_logs", "system_logs", "exfiltration", "anomaly"}:
+            actions.append({"id": "escalate", "label": "Contain and investigate the technical activity"})
+        actions.append({"id": "notify_soc", "label": "Notify the administrator / SOC"})
+        if not any(action["id"] == "escalate" for action in actions):
+            actions.append({"id": "escalate", "label": "Escalate for investigation"})
         
     return {
         "risk_score": score,
