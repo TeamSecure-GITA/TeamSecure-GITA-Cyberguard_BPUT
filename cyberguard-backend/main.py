@@ -661,7 +661,7 @@ def initialize_database():
                 ("admin", "CYBERGUARD_DEMO_ADMIN_PASSWORD", "admin", SECURITY_OWNER_EMAIL, HEAD_ADMIN_USERNAME),
             )
             for username, password_key, role, email, parent in demo_accounts:
-                password = os.getenv(password_key, "") or "Secure@9040"
+                password = os.getenv(password_key, "")
                 if password:
                     configured_demo_accounts.append((username, password))
                     users.append((username, hash_password(password), role, email, parent, "active"))

@@ -202,7 +202,7 @@ export default function App() {
     });
     const timer = window.setInterval(() => setRefreshKey((value) => value + 1), 10000);
     return () => window.clearInterval(timer);
-  }, [session, apiBaseUrl, refreshKey]);
+  }, [session, apiBaseUrl, refreshKey, health, metrics]);
 
   React.useEffect(() => {
     if (!session) return;
