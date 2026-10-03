@@ -111,33 +111,14 @@ export default function App() {
   }, []);
 
   const handleQuickLogin = async (username, password) => {
-    try {
-      const response = await axios.post(`${apiBaseUrl}/api/v1/auth/login`, { username, password });
-      if (!response.data.requires_otp) {
-        authFailureHandled.current = false;
-        setSession(response.data);
-        setViewMode('workspace');
-        setActiveTab('dashboard');
-      }
-      return response.data;
-    } catch {
-      const isOwner = (username || '').toLowerCase().includes('teamsecure');
-      const fallbackSession = {
-        access_token: `cyberguard-active-session-${Date.now()}`,
-        token_type: 'bearer',
-        is_demo: true,
-        user: {
-          username: username || 'teamsecure.project@gmail.com',
-          role: isOwner ? 'head_admin' : 'lead',
-          email: username && username.includes('@') ? username : 'teamsecure.project@gmail.com',
-        },
-      };
+    const response = await axios.post(`${apiBaseUrl}/api/v1/auth/login`, { username, password });
+    if (!response.data.requires_otp) {
       authFailureHandled.current = false;
-      setSession(fallbackSession);
+      setSession(response.data);
       setViewMode('workspace');
       setActiveTab('dashboard');
-      return fallbackSession;
     }
+    return response.data;
   };
 
   const handleVerifyOtp = async (challengeId, otp) => {
