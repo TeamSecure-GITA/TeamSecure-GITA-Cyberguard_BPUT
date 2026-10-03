@@ -1,5 +1,5 @@
 import React from 'react';
-import { Activity, AlertTriangle, TrendingDown, TrendingUp } from 'lucide-react';
+import { Activity, AlertTriangle, TrendingDown, TrendingUp, Minus } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 export default function RiskForecastGraph({ forecast }) {
@@ -12,7 +12,12 @@ export default function RiskForecastGraph({ forecast }) {
     );
   }
 
-  const isEscalating = forecast.trend === 'escalating';
+  const trendIcon = forecast.trend === 'escalating'
+    ? <TrendingUp size={14} />
+    : forecast.trend === 'declining'
+      ? <TrendingDown size={14} />
+      : <Minus size={14} />;
+  const trendColor = forecast.trend === 'escalating' ? 'text-red-400' : forecast.trend === 'declining' ? 'text-emerald-400' : 'text-slate-300';
   const points = forecast.forecast;
   const latestRisk = points[points.length - 1]?.risk || 0;
 
@@ -37,15 +42,9 @@ export default function RiskForecastGraph({ forecast }) {
         <div className="p-3 bg-slate-900/60 rounded-xl border border-slate-800">
           <span className="text-[10px] text-slate-400 uppercase font-semibold">Trend</span>
           <div className="flex items-center gap-1 mt-0.5">
-            {isEscalating ? (
-              <span className="flex items-center gap-1 text-xs font-bold text-red-400">
-                <TrendingUp size={14} /> Escalating
-              </span>
-            ) : (
-              <span className="flex items-center gap-1 text-xs font-bold text-emerald-400">
-                <TrendingDown size={14} /> Stable
-              </span>
-            )}
+            <span className={`flex items-center gap-1 text-xs font-bold capitalize ${trendColor}`}>
+              {trendIcon} {forecast.trend || 'stable'}
+            </span>
           </div>
         </div>
       </div>
@@ -91,6 +90,9 @@ export default function RiskForecastGraph({ forecast }) {
           </span>
         ))}
       </div>
+      <p className="text-[10px] text-slate-500">
+        {forecast.method || 'Uncalibrated projection'} · {forecast.sample_count ?? 0} incident samples. Not a calibrated prediction.
+      </p>
     </div>
   );
 }

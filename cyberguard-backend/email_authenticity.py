@@ -5,6 +5,7 @@ from html.parser import HTMLParser
 import hashlib
 import os
 import re
+from collections.abc import Callable
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
@@ -181,7 +182,10 @@ def verify_sender_identity(from_header: str, reply_to_header: str, return_path_h
     }
 
 
-def analyze_eml(content: bytes) -> dict[str, Any]:
+def analyze_eml(
+    content: bytes,
+    attachment_scanner: Callable[[bytes, str], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     message = BytesParser(policy=policy.default).parsebytes(content)
     headers = {name.lower(): str(value) for name, value in message.items()}
     from_address = parseaddr(headers.get("from", ""))[1].lower()
@@ -262,6 +266,8 @@ def analyze_eml(content: bytes) -> dict[str, Any]:
             attachment["status"] = "text_content_scanned"
         elif len(data) > MAX_ATTACHMENT_TEXT_BYTES:
             attachment["status"] = "size_limited"
+        if attachment_scanner is not None:
+            attachment["malware_scan"] = attachment_scanner(data, filename)
         attachments.append(attachment)
     payload = "\n".join([headers.get("subject", ""), headers.get("from", ""), body_text, *attachment_text])[:20000]
     return {"payload": payload, "score": min(score, 99), "reasons": reasons or ["Sender authentication headers are internally consistent."], "indicators": indicators, "metadata": {"from": from_address, "reply_to": reply_to, "return_path": return_path, "authentication_results": authentication}, "identity_verification": identity_verification, "html_inspection": html_inspection, "attachments": attachments}

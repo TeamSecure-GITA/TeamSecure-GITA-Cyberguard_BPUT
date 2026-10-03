@@ -1,3 +1,9 @@
+import io
+import math
+import binascii
+import wave
+from detection_engine import analyze_screenshot_brand_mismatches
+from media_engine import analyze_audio
 import ast
 import asyncio
 import hashlib
@@ -693,6 +699,16 @@ async def lifespan(app: FastAPI):
     yield
 
 
+MAX_LIVE_MEDIA_FRAME_BYTES = 1_000_000
+MAX_LIVE_MEDIA_AUDIO_BYTES = 1_000_000
+MAX_LIVE_MEDIA_FRAMES = 300
+MAX_LIVE_MEDIA_AUDIO_CHUNKS = 60
+MAX_LIVE_MEDIA_AUDIO_SECONDS_PER_CHUNK = 5
+MAX_LIVE_MEDIA_AUDIO_TOTAL_BYTES = 20_000_000
+MIN_LIVE_MEDIA_AUDIO_INTERVAL_SECONDS = 4
+MAX_LIVE_MEDIA_SECONDS = 300
+MIN_LIVE_MEDIA_FRAME_INTERVAL_SECONDS = 0.5
+
 app = FastAPI(
     title="CYBERGUARD AI Cyber Defense API",
     description="Threat detection, risk scoring, XAI, persistence, and response automation",
@@ -936,14 +952,39 @@ def admin_user(request: Request, user: dict[str, str] = Depends(current_user)) -
     return user
 
 
-def normalize_residency_metadata(metadata: Any) -> dict[str, str]:
+def normalize_residency_metadata(metadata: Any) -> dict[str, Any]:
     if not isinstance(metadata, dict):
         return {}
-    return {
+    normalized: dict[str, Any] = {
         key: value.strip()[:64]
         for key in ("country", "region")
         if isinstance((value := metadata.get(key)), str) and value.strip()
     }
+    source_location = metadata.get("source_location")
+    if source_location is not None:
+        if not isinstance(source_location, dict):
+            raise HTTPException(status_code=400, detail="Source location metadata must be an object.")
+        country = source_location.get("country")
+        latitude = source_location.get("lat")
+        longitude = source_location.get("lng")
+        if not isinstance(country, str) or not country.strip() or len(country.strip()) > 64:
+            raise HTTPException(status_code=400, detail="Source location must include a country label of at most 64 characters.")
+        if isinstance(latitude, bool) or isinstance(longitude, bool):
+            raise HTTPException(status_code=400, detail="Source location coordinates must be numeric.")
+        try:
+            latitude = float(latitude)
+            longitude = float(longitude)
+        except (TypeError, ValueError) as error:
+            raise HTTPException(status_code=400, detail="Source location coordinates must be numeric.") from error
+        if not math.isfinite(latitude) or not math.isfinite(longitude) or not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180):
+            raise HTTPException(status_code=400, detail="Source location coordinates are outside valid latitude/longitude ranges.")
+        normalized["source_location"] = {
+            "country": country.strip(),
+            "lat": latitude,
+            "lng": longitude,
+            "source": "reported_metadata",
+        }
+    return normalized
 
 
 def store_incident(category: str, payload: str, assessment: dict, filename: str | None = None, file_hash: str | None = None, metadata: dict | None = None):
@@ -1390,11 +1431,65 @@ def record_identity_trust(payload: IdentityTrustRequest, user: dict[str, str] = 
 
 @app.get("/api/v1/prevention/insider-risk")
 def prevention_insider_risk(user: dict[str, str] = Depends(current_user)):
+    now = datetime.now(timezone.utc)
     with get_db() as db:
         row = db.execute(
             "SELECT event_id, assessment_json, incident_id, created_at FROM insider_risk_events WHERE username = ? ORDER BY created_at DESC LIMIT 1",
             (user["username"],),
         ).fetchone()
+        audit_rows = db.execute(
+            "SELECT action, resource, details, created_at FROM audit_logs "
+            "WHERE username = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 500",
+            (user["username"], (now - timedelta(days=30)).isoformat()),
+        ).fetchall()
+    audit_activity = {
+        "downloads": 0,
+        "off_hours": False,
+        "privilege_change": False,
+        "sensitive_access": 0,
+    }
+    observed_audit_events = 0
+    for audit_row in audit_rows:
+        action = str(audit_row["action"] or "").lower()
+        resource = str(audit_row["resource"] or "").lower()
+        details = str(audit_row["details"] or "").lower()
+        if action == "insider_risk_assessed":
+            continue
+        try:
+            timestamp = datetime.fromisoformat(str(audit_row["created_at"]).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        timestamp = timestamp.astimezone(timezone.utc)
+        if timestamp > now:
+            continue
+        is_download = any(term in action for term in ("download", "export"))
+        is_privilege_change = any(term in action for term in ("role", "permission", "policy", "user_create", "user_update", "user_delete"))
+        is_sensitive_access = any(term in f"{action} {resource} {details}" for term in ("credential", "secret", "private_key", "sensitive", "bulk_export"))
+        if not (is_download or is_privilege_change or is_sensitive_access):
+            continue
+        observed_audit_events += 1
+        audit_activity["off_hours"] = audit_activity["off_hours"] or timestamp.hour < 6 or timestamp.hour >= 22
+        if is_download:
+            audit_activity["downloads"] += 1
+        if is_privilege_change:
+            audit_activity["privilege_change"] = True
+        if is_sensitive_access:
+            audit_activity["sensitive_access"] += 1
+
+    if observed_audit_events:
+        assessment = insider_threat_risk(audit_activity)
+        return {
+            **assessment,
+            "status": "review_required" if assessment["risk_score"] >= 60 else "observed",
+            "assessment_source": "application_audit_telemetry",
+            "event_count": observed_audit_events,
+            "observation_window_days": 30,
+            "event_id": None,
+            "incident_id": None,
+            "message": "Derived from this user's recorded CyberGuard audit events. Endpoint, file-system, and identity-provider telemetry are not connected.",
+        }
     if not row:
         return {
             "risk_score": None,
@@ -2213,7 +2308,7 @@ async def analyze_file(category: str = Form(...), file: UploadFile = File(...), 
             raise HTTPException(status_code=503, detail=str(error)) from error
     is_image = content_type.startswith("image/") or filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"))
     ocr_result = extract_image_text(content) if is_image else None
-    email_result = analyze_eml(content) if is_eml else None
+    email_result = analyze_eml(content, scan_artifact) if is_eml else None
     payload = email_result["payload"] if email_result else json.dumps(network_capture) if network_capture else (content.decode("utf-8", errors="replace") if is_text else f"Uploaded {file.content_type or 'media'} file: {filename}")
     assessment = evaluate_threat_payload(category, payload)
     if category.lower() in {"auth_logs", "ato"}:
@@ -2221,18 +2316,61 @@ async def analyze_file(category: str = Form(...), file: UploadFile = File(...), 
     if category.lower() == "malware":
         malware_scan = scan_artifact(content, filename)
         assessment["malware_scan"] = malware_scan
-        assessment["indicators"].extend({"name": match["rule"], "weight": match["meta"].get("risk_score", 70)} for match in malware_scan["matches"])
+        assessment["indicators"].extend(
+            {
+                "name": match["rule"],
+                "weight": match["meta"].get("risk_score", 70),
+                **({"archive_path": match["archive_path"]} if match.get("archive_path") else {}),
+            }
+            for match in malware_scan["matches"]
+        )
         assessment["risk_score"] = max(assessment["risk_score"], malware_scan["risk_score"])
-        if malware_scan["matches"]:
+        if malware_scan["reasons"]:
             assessment["xai_explanation"] += " " + " ".join(malware_scan["reasons"])
+        archive_scan = malware_scan.get("archive_scan") or {}
+        if malware_scan["status"] in {"unavailable", "error", "partial"} or archive_scan.get("status") in {"error", "partial"}:
+            assessment["indicators"].append({
+                "name": "Incomplete Malware Scan Coverage",
+                "weight": 0,
+                "status": malware_scan["status"],
+            })
     assessment["iocs"] = enrich_iocs(extract_iocs(payload))
     if email_result:
         assessment["risk_score"] = max(assessment["risk_score"], email_result["score"])
         assessment["indicators"].extend(email_result["indicators"])
         assessment["xai_explanation"] += " " + " ".join(email_result["reasons"])
+        for attachment in email_result["attachments"]:
+            malware_scan = attachment.get("malware_scan")
+            if not malware_scan:
+                continue
+            assessment["risk_score"] = max(assessment["risk_score"], malware_scan["risk_score"])
+            assessment["indicators"].extend(
+                {
+                    "name": "Email Attachment YARA Match",
+                    "weight": match["meta"].get("risk_score", 70),
+                    "rule": match["rule"],
+                    "filename": attachment["filename"],
+                    **({"archive_path": match["archive_path"]} if match.get("archive_path") else {}),
+                }
+                for match in malware_scan["matches"]
+            )
+            if malware_scan["reasons"]:
+                assessment["xai_explanation"] += " " + " ".join(
+                    f"Attachment {attachment['filename']}: {reason}"
+                    for reason in malware_scan["reasons"]
+                )
+            archive_scan = malware_scan.get("archive_scan") or {}
+            if malware_scan["status"] in {"unavailable", "error", "partial"} or archive_scan.get("status") in {"error", "partial"}:
+                assessment["indicators"].append({
+                    "name": "Incomplete Email Attachment Scan Coverage",
+                    "weight": 0,
+                    "filename": attachment["filename"],
+                    "status": malware_scan["status"],
+                })
         assessment["sender_authenticity"] = email_result["metadata"]
         assessment["sender_identity_verification"] = email_result["identity_verification"]
         assessment["email_html_inspection"] = email_result["html_inspection"]
+        assessment["email_attachments"] = email_result["attachments"]
     if network_capture:
         assessment["network_capture_summary"] = {
             "packet_count": network_capture["packet_count"],
@@ -2255,6 +2393,23 @@ async def analyze_file(category: str = Form(...), file: UploadFile = File(...), 
             assessment["explanation_summary"] += " OCR: " + ocr_assessment["explanation_summary"]
             assessment["ocr_analysis"]["risk_score"] = ocr_assessment["risk_score"]
             assessment["ocr_analysis"]["evidence"] = ocr_assessment["explanation_summary"]
+            brand_mismatches = analyze_screenshot_brand_mismatches(ocr_result["text"])
+            if brand_mismatches:
+                assessment["risk_score"] = min(99, assessment["risk_score"] + 35)
+                assessment["ocr_analysis"]["brand_domain_mismatches"] = brand_mismatches
+                for mismatch in brand_mismatches:
+                    evidence = (
+                        f"OCR detected a {mismatch['brand']} login claim with a visible URL on "
+                        f"{mismatch['observed_domain']}; the configured brand domain is "
+                        f"{mismatch['expected_domain']}."
+                    )
+                    assessment["indicators"].append({
+                        "name": "OCR Login Brand-Domain Mismatch",
+                        "weight": 35,
+                        **mismatch,
+                    })
+                    assessment["xai_explanation"] += " " + evidence
+                    assessment["explanation_summary"] += " " + evidence
         elif ocr_result.get("reason"):
             assessment["ocr_analysis"]["reason"] = ocr_result["reason"]
     if not is_text and not email_result and not network_capture:
@@ -2263,6 +2418,10 @@ async def analyze_file(category: str = Form(...), file: UploadFile = File(...), 
         assessment["indicators"].extend(media_result["indicators"])
         assessment["xai_explanation"] += " " + " ".join(media_result["reasons"])
         assessment["media_method"] = media_result["method"]
+        if media_result.get("audio_analysis") is not None:
+            assessment["video_audio_analysis"] = media_result["audio_analysis"]
+        if media_result.get("audio_video_synchronization") is not None:
+            assessment["audio_video_synchronization"] = media_result["audio_video_synchronization"]
         if media_result.get("decoded_payload"):
             qr_assessment = evaluate_threat_payload("url", media_result["decoded_payload"])
             assessment["qr_payload"] = media_result["decoded_payload"]
@@ -2709,10 +2868,20 @@ def identity_risk(user: dict[str, str] = Depends(current_user)):
 
 @app.post("/api/v1/media/trust")
 async def media_trust(file: UploadFile = File(...), user: dict[str, str] = Depends(current_user)):
-    content = await file.read()
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded media cannot be empty.")
-    return analyze_trust_media(content, file.filename or "upload", file.content_type or "")
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"Uploaded file exceeds the {MAX_UPLOAD_BYTES // 1_000_000} MB limit.")
+    filename = file.filename or "upload"
+    content_type = (file.content_type or "").lower()
+    supported_suffixes = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".wav", ".flac", ".ogg", ".oga", ".aiff", ".aif", ".mp3", ".m4a", ".aac", ".mp4", ".avi", ".mov")
+    if not (content_type.startswith(("image/", "audio/", "video/")) or filename.lower().endswith(supported_suffixes)):
+        raise HTTPException(status_code=415, detail="Upload a supported image, audio, or video file.")
+    try:
+        return analyze_trust_media(content, filename, content_type)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=f"Media could not be inspected: {error}") from error
 
 
 @app.websocket("/api/v1/ws/events")
@@ -2721,6 +2890,7 @@ async def events_socket(websocket: WebSocket):
     offered_protocols = websocket.scope.get("subprotocols", [])
     token = next((value for value in offered_protocols if value != protocol), None)
     try:
+        initialize_database()
         current_user(f"Bearer {token}" if token else None)
     except HTTPException:
         await websocket.close(code=4401)
@@ -2748,6 +2918,234 @@ async def events_socket(websocket: WebSocket):
                 next_heartbeat = time.monotonic() + 20
     except WebSocketDisconnect:
         return
+
+@app.websocket("/api/v1/ws/media")
+async def live_media_socket(websocket: WebSocket):
+    protocol = "cyberguard.media.v1"
+    offered_protocols = websocket.scope.get("subprotocols", [])
+    token = next((value for value in offered_protocols if value != protocol), None)
+    try:
+        initialize_database()
+        user = current_user(f"Bearer {token}" if token else None)
+    except HTTPException:
+        await websocket.close(code=4401)
+        return
+
+    await websocket.accept(subprotocol=protocol if protocol in offered_protocols else None)
+    started_at = time.monotonic()
+    last_frame_at = 0.0
+    frames_analyzed = 0
+    highest_risk = 0
+    audio_chunks_analyzed = 0
+    audio_bytes_analyzed = 0
+    highest_audio_risk = 0
+    last_audio_at = 0.0
+    await websocket.send_json({
+        "type": "ready",
+        "max_frame_bytes": MAX_LIVE_MEDIA_FRAME_BYTES,
+        "max_frames": MAX_LIVE_MEDIA_FRAMES,
+        "max_audio_bytes_per_chunk": MAX_LIVE_MEDIA_AUDIO_BYTES,
+        "max_audio_chunks": MAX_LIVE_MEDIA_AUDIO_CHUNKS,
+        "max_audio_seconds_per_chunk": MAX_LIVE_MEDIA_AUDIO_SECONDS_PER_CHUNK,
+        "minimum_audio_interval_seconds": MIN_LIVE_MEDIA_AUDIO_INTERVAL_SECONDS,
+        "max_session_seconds": MAX_LIVE_MEDIA_SECONDS,
+        "minimum_frame_interval_seconds": MIN_LIVE_MEDIA_FRAME_INTERVAL_SECONDS,
+        "storage": "ephemeral",
+    })
+    try:
+        while True:
+            elapsed = time.monotonic() - started_at
+            if elapsed >= MAX_LIVE_MEDIA_SECONDS or frames_analyzed >= MAX_LIVE_MEDIA_FRAMES:
+                await websocket.send_json({
+                    "type": "session_limit",
+                    "frames_analyzed": frames_analyzed,
+                    "highest_risk": highest_risk,
+                    "audio_chunks_analyzed": audio_chunks_analyzed,
+                    "highest_audio_risk": highest_audio_risk,
+                    "reason": "Live media session limit reached.",
+                })
+                await websocket.close(code=1000)
+                return
+
+            try:
+                message_text = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=max(1.0, MAX_LIVE_MEDIA_SECONDS - elapsed),
+                )
+            except asyncio.TimeoutError:
+                await websocket.send_json({
+                    "type": "session_timeout",
+                    "frames_analyzed": frames_analyzed,
+                    "highest_risk": highest_risk,
+                    "audio_chunks_analyzed": audio_chunks_analyzed,
+                    "highest_audio_risk": highest_audio_risk,
+                    "reason": "Live media session reached its time limit.",
+                })
+                await websocket.close(code=1000)
+                return
+            max_encoded_bytes = max(MAX_LIVE_MEDIA_FRAME_BYTES, MAX_LIVE_MEDIA_AUDIO_BYTES) * 4 // 3 + 4096
+            if len(message_text) > max_encoded_bytes:
+                await websocket.send_json({"type": "media_error", "error": "WebSocket message exceeds the media size limit."})
+                continue
+            try:
+                message = json.loads(message_text)
+            except json.JSONDecodeError:
+                await websocket.send_json({"type": "frame_error", "error": "Message must be valid JSON."})
+                continue
+            if not isinstance(message, dict):
+                await websocket.send_json({"type": "frame_error", "error": "Message must be a JSON object."})
+                continue
+            if message.get("type") == "stop":
+                await websocket.send_json({
+                    "type": "session_complete",
+                    "frames_analyzed": frames_analyzed,
+                    "highest_risk": highest_risk,
+                    "audio_chunks_analyzed": audio_chunks_analyzed,
+                    "highest_audio_risk": highest_audio_risk,
+                    "storage": "ephemeral",
+                })
+                await websocket.close(code=1000)
+                return
+            if message.get("type") == "audio":
+                now = time.monotonic()
+                if last_audio_at and now - last_audio_at < MIN_LIVE_MEDIA_AUDIO_INTERVAL_SECONDS:
+                    await websocket.send_json({"type": "audio_error", "error": "Audio chunk rate limit exceeded."})
+                    continue
+                last_audio_at = now
+                encoded_audio = message.get("audio")
+                if not isinstance(encoded_audio, str) or not encoded_audio:
+                    await websocket.send_json({"type": "audio_error", "error": "A base64-encoded PCM WAV audio chunk is required."})
+                    continue
+                if audio_chunks_analyzed >= MAX_LIVE_MEDIA_AUDIO_CHUNKS:
+                    await websocket.send_json({"type": "audio_error", "error": "The live audio chunk limit has been reached."})
+                    continue
+                try:
+                    audio = base64.b64decode(encoded_audio, validate=True)
+                except (binascii.Error, ValueError):
+                    await websocket.send_json({"type": "audio_error", "error": "Audio chunk must be valid base64."})
+                    continue
+                if not audio or len(audio) > MAX_LIVE_MEDIA_AUDIO_BYTES:
+                    await websocket.send_json({
+                        "type": "audio_error",
+                        "error": f"Audio chunks must be between 1 byte and {MAX_LIVE_MEDIA_AUDIO_BYTES} bytes.",
+                    })
+                    continue
+                if audio_bytes_analyzed + len(audio) > MAX_LIVE_MEDIA_AUDIO_TOTAL_BYTES:
+                    await websocket.send_json({"type": "audio_error", "error": "The live audio byte limit has been reached."})
+                    continue
+                try:
+                    with wave.open(io.BytesIO(audio), "rb") as audio_file:
+                        channels = audio_file.getnchannels()
+                        sample_width = audio_file.getsampwidth()
+                        sample_rate = audio_file.getframerate()
+                        frame_count = audio_file.getnframes()
+                        duration = frame_count / sample_rate if sample_rate else 0
+                        if (
+                            channels != 1
+                            or sample_width != 2
+                            or sample_rate < 8_000
+                            or sample_rate > 48_000
+                            or duration <= 0
+                            or duration > MAX_LIVE_MEDIA_AUDIO_SECONDS_PER_CHUNK
+                            or audio_file.getcomptype() != "NONE"
+                        ):
+                            raise ValueError("unsupported audio parameters")
+                        frames = audio_file.readframes(frame_count)
+                        if len(frames) != frame_count * channels * sample_width:
+                            raise ValueError("truncated audio data")
+                except (wave.Error, EOFError, OSError, ValueError):
+                    await websocket.send_json({
+                        "type": "audio_error",
+                        "error": "Audio must be a valid mono PCM16 WAV chunk no longer than five seconds.",
+                    })
+                    continue
+                try:
+                    assessment = await asyncio.to_thread(analyze_audio, audio)
+                except (OSError, RuntimeError, ValueError, EOFError, wave.Error, ImportError) as error:
+                    await websocket.send_json({
+                        "type": "audio_error",
+                        "error": f"Audio analysis failed ({error.__class__.__name__}); this segment was not scored.",
+                    })
+                    continue
+                audio_chunks_analyzed += 1
+                audio_bytes_analyzed += len(audio)
+                audio_risk = max(0, min(99, int(assessment.get("score", 50))))
+                highest_audio_risk = max(highest_audio_risk, audio_risk)
+                await websocket.send_json({
+                    "type": "audio_result",
+                    "chunk_number": audio_chunks_analyzed,
+                    "risk_score": audio_risk,
+                    "method": assessment.get("method", "audio-analysis"),
+                    "indicators": assessment.get("indicators", [])[:20],
+                    "reasons": assessment.get("reasons", [])[:10],
+                    "duration_seconds": round(duration, 2),
+                    "calibration": "Uncalibrated audio triage; not a probability, voice identity, or audio/video synchronization result.",
+                })
+                continue
+            if message.get("type") != "frame":
+                await websocket.send_json({"type": "media_error", "error": "Expected a frame, audio, or stop message."})
+                continue
+
+            now = time.monotonic()
+            if last_frame_at and now - last_frame_at < MIN_LIVE_MEDIA_FRAME_INTERVAL_SECONDS:
+                await websocket.send_json({"type": "frame_error", "error": "Frame rate limit exceeded; wait before sending another frame."})
+                continue
+            last_frame_at = now
+            encoded_frame = message.get("image")
+            if not isinstance(encoded_frame, str) or not encoded_frame:
+                await websocket.send_json({"type": "frame_error", "error": "A base64-encoded image is required."})
+                continue
+            try:
+                frame = base64.b64decode(encoded_frame, validate=True)
+            except (binascii.Error, ValueError):
+                await websocket.send_json({"type": "frame_error", "error": "Frame image must be valid base64."})
+                continue
+            if not frame or len(frame) > MAX_LIVE_MEDIA_FRAME_BYTES:
+                await websocket.send_json({
+                    "type": "frame_error",
+                    "error": f"Frame must be between 1 byte and {MAX_LIVE_MEDIA_FRAME_BYTES} bytes.",
+                })
+                continue
+            try:
+                from PIL import Image, UnidentifiedImageError
+
+                with Image.open(io.BytesIO(frame)) as image:
+                    image.verify()
+                    width, height = image.size
+                    image_format = image.format
+            except (OSError, ValueError, SyntaxError, UnidentifiedImageError, Image.DecompressionBombError):
+                await websocket.send_json({"type": "frame_error", "error": "Frame is not a decodable image."})
+                continue
+            if image_format not in {"JPEG", "PNG", "WEBP"} or width > 1920 or height > 1080 or width * height > 2_073_600:
+                await websocket.send_json({
+                    "type": "frame_error",
+                    "error": "Frames must be JPEG, PNG, or WebP and no larger than 1920x1080 (2 megapixels).",
+                })
+                continue
+
+            analysis = await asyncio.to_thread(
+                analyze_media,
+                frame,
+                f"image/{image_format.lower()}",
+                f"live-frame-{frames_analyzed + 1}.{image_format.lower()}",
+                "deepfake",
+            )
+            frames_analyzed += 1
+            risk_score = max(0, min(99, int(analysis.get("score", 50))))
+            highest_risk = max(highest_risk, risk_score)
+            await websocket.send_json({
+                "type": "frame_result",
+                "frame_number": frames_analyzed,
+                "risk_score": risk_score,
+                "method": analysis.get("method", "media-analysis"),
+                "indicators": analysis.get("indicators", [])[:20],
+                "reasons": analysis.get("reasons", [])[:10],
+                "elapsed_seconds": round(time.monotonic() - started_at, 2),
+                "calibration": "Uncalibrated per-frame triage; not a probability or identity verification.",
+            })
+    except WebSocketDisconnect:
+        return
+
 
 
 @app.get("/api/v1/frontier/overview")

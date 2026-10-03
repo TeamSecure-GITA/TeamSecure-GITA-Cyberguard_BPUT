@@ -9,18 +9,8 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 
-// Mock timeline data for security events over a 24-hour window
-const timelineData = [
-  { time: '00:00', Safe: 420, Low: 30, Medium: 15, High: 8, Critical: 2 },
-  { time: '04:00', Safe: 380, Low: 25, Medium: 10, High: 5, Critical: 1 },
-  { time: '08:00', Safe: 650, Low: 80, Medium: 45, High: 22, Critical: 7 },
-  { time: '12:00', Safe: 920, Low: 110, Medium: 65, High: 35, Critical: 14 },
-  { time: '16:00', Safe: 850, Low: 95, Medium: 50, High: 28, Critical: 9 },
-  { time: '20:00', Safe: 540, Low: 60, Medium: 30, High: 12, Critical: 4 },
-];
-
 export default function ThreatChart({ timeline = [] }) {
-  const chartData = timeline.length ? timeline : timelineData;
+  const chartData = timeline;
   return (
     <div className="bg-cardBg border border-slate-700/60 rounded-xl p-5 shadow-lg mb-6">
       <div className="flex items-center justify-between mb-4">
@@ -40,7 +30,11 @@ export default function ThreatChart({ timeline = [] }) {
       </div>
 
       <div className="h-72 w-full">
-        <ResponsiveContainer width="100%" height="100%">
+        {chartData.length === 0 ? (
+          <div className="h-full flex items-center justify-center rounded-lg border border-dashed border-slate-700 text-sm text-slate-400">
+            No incident timeline data is available yet.
+          </div>
+        ) : <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
             <defs>
               <linearGradient id="colorCritical" x1="0" y1="0" x2="0" y2="1">
@@ -64,7 +58,7 @@ export default function ThreatChart({ timeline = [] }) {
             <Area type="monotone" dataKey="Low" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.1} />
             <Area type="monotone" dataKey="Safe" stroke="#10b981" fill="#10b981" fillOpacity={0.05} />
           </AreaChart>
-        </ResponsiveContainer>
+        </ResponsiveContainer>}
       </div>
     </div>
   );
