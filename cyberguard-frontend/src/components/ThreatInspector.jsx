@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Mail, Video, Link, FileText, UserX, AlertTriangle, Upload, Search, Loader2, PlayCircle, Globe, Trash2 } from 'lucide-react';
 import axios from 'axios';
 import { getApiBaseUrl } from '../apiConfig';
+import LiveMediaSession from './LiveMediaSession';
 
 export default function ThreatInspector({ accessToken }) {
   const [activeSubTab, setActiveSubTab] = useState('email');
@@ -325,6 +326,7 @@ export default function ThreatInspector({ accessToken }) {
           <option value="">Not specified</option><option value="IN">India</option><option value="US">United States</option><option value="EU">European Union</option><option value="GB">United Kingdom</option>
         </select>
       </label>
+      {activeSubTab === 'video' && <LiveMediaSession apiBaseUrl={apiBaseUrl} accessToken={accessToken} />}
       <form onSubmit={handleAnalyze} className="inspector-form space-y-4">
         {fileAnalysisTabs.includes(activeSubTab) || (activeSubTab === 'network' && selectedFile) ? (
           <div className={`dropzone border-2 border-dashed rounded-xl p-8 text-center ${dragActive ? 'dropzone-active' : ''}`} onDragOver={(event) => { event.preventDefault(); setDragActive(true); }} onDragLeave={() => setDragActive(false)} onDrop={(event) => { event.preventDefault(); acceptFile(event.dataTransfer.files?.[0]); }}>
@@ -442,6 +444,21 @@ export default function ThreatInspector({ accessToken }) {
             <div className="rounded-lg border border-cyan-800/60 bg-cyan-950/20 p-3 text-xs text-cyan-100">
               <strong>Network capture · {analysisResult.network_capture_summary.packet_count} packets</strong>
               <p className="mt-1 text-[11px] text-cyan-200/80">Reconstructed {analysisResult.network_capture_summary.flow_count} TCP/UDP flows for network risk analysis.</p>
+            </div>
+          )}
+          {analysisResult.video_audio_analysis && (
+            <div className="rounded-lg border border-violet-800/60 bg-violet-950/20 p-3 text-xs text-violet-100">
+              <strong>Video audio analysis · {analysisResult.video_audio_analysis.status.replaceAll('_', ' ')}</strong>
+              {analysisResult.video_audio_analysis.status === 'analyzed' ? (
+                <p className="mt-1 text-[11px] text-violet-200/80">
+                  First {analysisResult.video_audio_analysis.max_seconds} seconds · {analysisResult.video_audio_analysis.method} · risk score {analysisResult.video_audio_analysis.score}/99 (not calibrated).
+                </p>
+              ) : (
+                <p className="mt-1 text-[11px] text-violet-200/80">{analysisResult.video_audio_analysis.reason}</p>
+              )}
+              {analysisResult.audio_video_synchronization && (
+                <p className="mt-1 text-[10px] text-violet-200/60">{analysisResult.audio_video_synchronization.reason}</p>
+              )}
             </div>
           )}
           {analysisResult.known_contact_comparison && (

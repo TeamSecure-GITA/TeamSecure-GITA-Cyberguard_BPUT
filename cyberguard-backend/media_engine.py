@@ -2,12 +2,18 @@ import io
 from importlib.util import find_spec
 import math
 import os
+import shutil
 import statistics
+import subprocess
 import tempfile
 import wave
 from typing import Any
 
 AUDIO_SUFFIXES = {"wav", "flac", "ogg", "oga", "aiff", "aif", "mp3", "m4a", "aac"}
+VIDEO_AUDIO_MAX_SECONDS = 10
+VIDEO_AUDIO_TIMEOUT_SECONDS = 20
+VIDEO_FRAME_MAX_EDGE = 960
+VIDEO_FRAME_MAX_PIXELS = 12_000_000
 
 try:
     import numpy as np
@@ -29,8 +35,9 @@ def media_inspection_status() -> dict[str, Any]:
         "available": available,
         "loaded": False,
         "mode": "on-demand-heuristic" if available else "limited-fallback",
-        "algorithm": "Isolation Forest over image/audio features plus sampled video frames" if available else "metadata and rule fallback",
+        "algorithm": "Isolation Forest over image/audio features plus sampled frames and optional video audio" if available else "metadata and rule fallback",
         "dependencies": dependencies,
+        "optional_dependencies": {"ffmpeg": shutil.which("ffmpeg") is not None},
     }
 
 
@@ -150,6 +157,76 @@ def analyze_audio(content: bytes) -> dict[str, Any]:
     return {"score": min(score, 99), "reasons": reasons, "indicators": indicators, "method": "pretrained-audio-detector" if pretrained else "audio-anomaly-model", "pretrained_model": pretrained}
 
 
+def _analyze_video_audio(video_path: str) -> dict[str, Any]:
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return {
+            "status": "unavailable",
+            "reason": "FFmpeg is not installed; the video's audio track was not analyzed.",
+            "max_seconds": VIDEO_AUDIO_MAX_SECONDS,
+        }
+
+    try:
+        result = subprocess.run(
+            [
+                ffmpeg,
+                "-hide_banner",
+                "-loglevel", "error",
+                "-nostdin",
+                "-i", video_path,
+                "-map", "0:a:0",
+                "-vn",
+                "-t", str(VIDEO_AUDIO_MAX_SECONDS),
+                "-ac", "1",
+                "-ar", "16000",
+                "-c:a", "pcm_s16le",
+                "-f", "wav",
+                "pipe:1",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=VIDEO_AUDIO_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "timeout",
+            "reason": f"Audio extraction exceeded the {VIDEO_AUDIO_TIMEOUT_SECONDS}-second time limit.",
+            "max_seconds": VIDEO_AUDIO_MAX_SECONDS,
+        }
+    except OSError as error:
+        return {
+            "status": "failed",
+            "reason": f"FFmpeg could not be started ({error.__class__.__name__}); the audio track was not analyzed.",
+            "max_seconds": VIDEO_AUDIO_MAX_SECONDS,
+        }
+
+    if result.returncode != 0 or not result.stdout:
+        return {
+            "status": "failed",
+            "reason": "FFmpeg could not decode an audio track; the video may have no audio or an unsupported audio stream.",
+            "max_seconds": VIDEO_AUDIO_MAX_SECONDS,
+        }
+
+    try:
+        assessment = analyze_audio(result.stdout)
+    except (OSError, RuntimeError, ValueError, EOFError, wave.Error, ImportError) as error:
+        return {
+            "status": "failed",
+            "reason": f"Extracted audio could not be analyzed ({error.__class__.__name__}).",
+            "max_seconds": VIDEO_AUDIO_MAX_SECONDS,
+        }
+    return {
+        "status": "analyzed",
+        "score": assessment["score"],
+        "method": assessment["method"],
+        "reasons": assessment["reasons"],
+        "indicators": assessment["indicators"],
+        "pretrained_model": assessment.get("pretrained_model"),
+        "max_seconds": VIDEO_AUDIO_MAX_SECONDS,
+    }
+
+
 def analyze_video(content: bytes) -> dict[str, Any]:
     import cv2
     from deepfake_models import analyze_pretrained
@@ -158,13 +235,32 @@ def analyze_video(content: bytes) -> dict[str, Any]:
         temporary_file.write(content)
         temporary_path = temporary_file.name
     sampled_frames = []
+    frame_sampling_status = "analyzed"
+    frame_sampling_reason = None
     capture = None
+    video_audio = {
+        "status": "unavailable",
+        "reason": "Video audio was not analyzed.",
+        "max_seconds": VIDEO_AUDIO_MAX_SECONDS,
+    }
     try:
         capture = cv2.VideoCapture(temporary_path)
         frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-        if frame_count > 0:
+        if width <= 0 or height <= 0:
+            frame_sampling_status = "unavailable"
+            frame_sampling_reason = "Video frame dimensions could not be decoded reliably."
+        elif width * height > VIDEO_FRAME_MAX_PIXELS:
+            frame_sampling_status = "skipped"
+            frame_sampling_reason = (
+                f"Frame sampling was skipped because {width}x{height} exceeds the "
+                f"{VIDEO_FRAME_MAX_PIXELS:,}-pixel per-frame limit."
+            )
+        elif frame_count <= 0:
+            frame_sampling_status = "unavailable"
+            frame_sampling_reason = "Video frame count could not be decoded reliably."
+        else:
             sample_count = min(frame_count, 30)
             frame_indices = sorted({
                 round(index * (frame_count - 1) / max(sample_count - 1, 1))
@@ -174,19 +270,47 @@ def analyze_video(content: bytes) -> dict[str, Any]:
                 capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
                 ok, frame = capture.read()
                 if ok:
+                    frame_height, frame_width = frame.shape[:2]
+                    if frame_width * frame_height > VIDEO_FRAME_MAX_PIXELS:
+                        frame_sampling_status = "skipped"
+                        frame_sampling_reason = (
+                            f"Frame sampling stopped because a decoded frame exceeded "
+                            f"the {VIDEO_FRAME_MAX_PIXELS:,}-pixel per-frame limit."
+                        )
+                        sampled_frames.clear()
+                        break
+                    scale = min(1.0, VIDEO_FRAME_MAX_EDGE / max(frame_width, frame_height))
+                    if scale < 1.0:
+                        frame = cv2.resize(
+                            frame,
+                            (max(1, round(frame_width * scale)), max(1, round(frame_height * scale))),
+                            interpolation=cv2.INTER_AREA,
+                        )
                     encoded, buffer = cv2.imencode(".jpg", frame)
                     if encoded:
                         sampled_frames.append((frame_index, frame, buffer.tobytes()))
+        capture.release()
+        capture = None
+        video_audio = _analyze_video_audio(temporary_path)
     finally:
         if capture is not None:
             capture.release()
         os.unlink(temporary_path)
     score = 20
     reasons = [f"Video container inspected at {width}x{height} with {frame_count} frames."]
-    indicators = [{"name": "Video Frame Sampling", "observed_frames": frame_count, "sampled_frames": len(sampled_frames), "weight": 1}]
+    indicators = [{
+        "name": "Video Frame Sampling",
+        "observed_frames": frame_count,
+        "sampled_frames": len(sampled_frames),
+        "status": frame_sampling_status,
+        "weight": 1,
+    }]
     if frame_count == 0 or width == 0 or height == 0:
         score += 35
         reasons.append("Video stream metadata could not be decoded reliably.")
+    elif frame_sampling_reason:
+        score += 20
+        reasons.append(frame_sampling_reason)
     try:
         face_detector = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
         if face_detector.empty():
@@ -231,6 +355,26 @@ def analyze_video(content: bytes) -> dict[str, Any]:
         reasons.append(f"Deepfake scores vary across sampled frames (standard deviation {temporal_variance:.1f}); review the full clip for temporal inconsistency.")
         indicators.append({"name": "Temporal Deepfake Score Variance", "value": round(temporal_variance, 2), "weight": variance_weight, "frames": len(frame_results)})
 
+    if video_audio["status"] == "analyzed":
+        score = max(score, video_audio["score"])
+        reasons.append(
+            f"Audio from the first {VIDEO_AUDIO_MAX_SECONDS} seconds was analyzed with "
+            f"{video_audio['method']} (risk score {video_audio['score']}/99; not a calibrated probability)."
+        )
+        indicators.append({
+            "name": "Video Audio Deepfake Detector",
+            "model_output": video_audio["score"],
+            "weight": max(1, video_audio["score"]),
+            "method": video_audio["method"],
+        })
+    else:
+        reasons.append(video_audio["reason"])
+        indicators.append({
+            "name": "Video Audio Analysis",
+            "status": video_audio["status"],
+            "weight": 0,
+        })
+
     return {
         "score": min(score, 99),
         "reasons": reasons,
@@ -242,6 +386,11 @@ def analyze_video(content: bytes) -> dict[str, Any]:
         "sampled_frame_count": len(sampled_frames),
         "sampling_limit": 30,
         "temporal_score_variance": round(temporal_variance, 2) if temporal_variance is not None else None,
+        "audio_analysis": video_audio,
+        "audio_video_synchronization": {
+            "status": "not_analyzed",
+            "reason": "Audio and video authenticity scores are inspected independently; lip-sync and temporal synchronization are not measured.",
+        },
     }
 
 

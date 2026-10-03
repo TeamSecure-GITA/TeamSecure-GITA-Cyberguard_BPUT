@@ -1,10 +1,12 @@
 import asyncio
+import base64
 import io
 import json
 import sqlite3
 import sys
 import types
 import zipfile
+import wave
 
 import pytest
 import numpy as np
@@ -959,6 +961,174 @@ def test_websocket_initializes_missing_incident_schema_before_query(tmp_path, mo
     client.close()
     assert event["type"] == "incident_created"
     assert event["incident"]["id"] == incident_id
+
+
+def test_live_media_websocket_analyzes_bounded_camera_frames_without_persisting_images(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from PIL import Image
+
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "live-media.db")
+    initialize_database()
+    session = login(LoginRequest(username="lead", password="lead123"))
+    token = session["access_token"]
+    frame_buffer = io.BytesIO()
+    Image.new("RGB", (32, 24), "navy").save(frame_buffer, format="JPEG")
+    encoded_frame = base64.b64encode(frame_buffer.getvalue()).decode("ascii")
+    analyzed = []
+
+    def fake_analyze_media(content, content_type, filename, category):
+        analyzed.append((content_type, filename, category, len(content)))
+        return {
+            "score": 67,
+            "method": "test-image-detector",
+            "indicators": [{"name": "test frame signal"}],
+            "reasons": ["test frame review"],
+        }
+
+    monkeypatch.setattr(main, "analyze_media", fake_analyze_media)
+    client = TestClient(main.app)
+    with client.websocket_connect(
+        "/api/v1/ws/media",
+        subprotocols=[token, "cyberguard.media.v1"],
+    ) as websocket:
+        ready = websocket.receive_json()
+        assert ready["type"] == "ready"
+        assert ready["storage"] == "ephemeral"
+        websocket.send_json({"type": "frame", "image": encoded_frame})
+        frame_result = websocket.receive_json()
+        assert frame_result["type"] == "frame_result"
+        assert frame_result["risk_score"] == 67
+        assert frame_result["frame_number"] == 1
+        assert "not a probability" in frame_result["calibration"]
+        websocket.send_json({"type": "stop"})
+        completed = websocket.receive_json()
+
+    client.close()
+    assert completed["type"] == "session_complete"
+    assert completed["frames_analyzed"] == 1
+    assert analyzed == [("image/jpeg", "live-frame-1.jpeg", "deepfake", len(frame_buffer.getvalue()))]
+    with main.get_db() as db:
+        assert db.execute("SELECT COUNT(*) FROM incidents").fetchone()[0] == 0
+
+
+def test_live_media_websocket_rejects_invalid_frame_data_and_requires_authentication(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from PIL import Image
+    from starlette.websockets import WebSocketDisconnect
+
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "live-media-validation.db")
+    monkeypatch.setattr(main, "MIN_LIVE_MEDIA_FRAME_INTERVAL_SECONDS", 0)
+    initialize_database()
+    session = login(LoginRequest(username="lead", password="lead123"))
+    token = session["access_token"]
+    client = TestClient(main.app)
+    with client.websocket_connect(
+        "/api/v1/ws/media",
+        subprotocols=[token, "cyberguard.media.v1"],
+    ) as websocket:
+        assert websocket.receive_json()["type"] == "ready"
+        websocket.send_json({"type": "frame", "image": "not base64!"})
+        rejected = websocket.receive_json()
+        assert rejected["type"] == "frame_error"
+        assert "valid base64" in rejected["error"]
+        oversized_dimensions = io.BytesIO()
+        Image.new("RGB", (1921, 1), "white").save(oversized_dimensions, format="JPEG")
+        websocket.send_json({
+            "type": "frame",
+            "image": base64.b64encode(oversized_dimensions.getvalue()).decode("ascii"),
+        })
+        dimension_rejection = websocket.receive_json()
+        assert dimension_rejection["type"] == "frame_error"
+        assert "1920x1080" in dimension_rejection["error"]
+        websocket.send_json({"type": "stop"})
+        assert websocket.receive_json()["type"] == "session_complete"
+
+    with pytest.raises(WebSocketDisconnect) as disconnect:
+        with client.websocket_connect("/api/v1/ws/media"):
+            pass
+    client.close()
+    assert disconnect.value.code == 4401
+
+
+def test_live_media_websocket_analyzes_opt_in_bounded_pcm_audio(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "live-media-audio.db")
+    monkeypatch.setattr(main, "MIN_LIVE_MEDIA_AUDIO_INTERVAL_SECONDS", 0)
+    initialize_database()
+    session = login(LoginRequest(username="lead", password="lead123"))
+    token = session["access_token"]
+    audio_buffer = io.BytesIO()
+    with wave.open(audio_buffer, "wb") as audio_file:
+        audio_file.setnchannels(1)
+        audio_file.setsampwidth(2)
+        audio_file.setframerate(16_000)
+        audio_file.writeframes(b"\x00\x00" * 16_000)
+    audio_content = audio_buffer.getvalue()
+    analyzed = []
+    monkeypatch.setattr(main, "analyze_audio", lambda content: (
+        analyzed.append(content) or {
+            "score": 73,
+            "method": "test-audio-detector",
+            "indicators": [{"name": "test voice signal"}],
+            "reasons": ["test audio review"],
+        }
+    ))
+    client = TestClient(main.app)
+    with client.websocket_connect(
+        "/api/v1/ws/media",
+        subprotocols=[token, "cyberguard.media.v1"],
+    ) as websocket:
+        ready = websocket.receive_json()
+        assert ready["max_audio_seconds_per_chunk"] == 5
+        websocket.send_json({"type": "audio", "audio": base64.b64encode(audio_content).decode("ascii")})
+        audio_result = websocket.receive_json()
+        assert audio_result["type"] == "audio_result"
+        assert audio_result["risk_score"] == 73
+        assert audio_result["duration_seconds"] == 1.0
+        assert "not a probability" in audio_result["calibration"]
+        websocket.send_json({"type": "stop"})
+        completed = websocket.receive_json()
+
+    client.close()
+    assert completed["type"] == "session_complete"
+    assert completed["audio_chunks_analyzed"] == 1
+    assert completed["highest_audio_risk"] == 73
+    assert analyzed == [audio_content]
+    with main.get_db() as db:
+        assert db.execute("SELECT COUNT(*) FROM incidents").fetchone()[0] == 0
+
+
+def test_live_media_websocket_rejects_invalid_and_oversized_audio(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "live-media-invalid-audio.db")
+    monkeypatch.setattr(main, "MIN_LIVE_MEDIA_AUDIO_INTERVAL_SECONDS", 0)
+    monkeypatch.setattr(main, "MAX_LIVE_MEDIA_AUDIO_BYTES", 32)
+    initialize_database()
+    session = login(LoginRequest(username="lead", password="lead123"))
+    token = session["access_token"]
+    client = TestClient(main.app)
+    with client.websocket_connect(
+        "/api/v1/ws/media",
+        subprotocols=[token, "cyberguard.media.v1"],
+    ) as websocket:
+        assert websocket.receive_json()["type"] == "ready"
+        websocket.send_json({"type": "audio", "audio": "not base64!"})
+        invalid = websocket.receive_json()
+        assert invalid["type"] == "audio_error"
+        assert "valid base64" in invalid["error"]
+        websocket.send_json({"type": "audio", "audio": base64.b64encode(b"x" * 33).decode("ascii")})
+        oversized = websocket.receive_json()
+        assert oversized["type"] == "audio_error"
+        assert "bytes" in oversized["error"]
+        websocket.send_json({"type": "audio", "audio": base64.b64encode(b"not a wav").decode("ascii")})
+        invalid_wav = websocket.receive_json()
+        assert invalid_wav["type"] == "audio_error"
+        assert "WAV" in invalid_wav["error"]
+        websocket.send_json({"type": "stop"})
+        assert websocket.receive_json()["type"] == "session_complete"
+    client.close()
 
 
 def test_cyberguard_x_artifacts_are_available():

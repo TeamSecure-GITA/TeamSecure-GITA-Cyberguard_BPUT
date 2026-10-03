@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import html
 import ipaddress
+import io
 import json
 import math
 import os
@@ -13,6 +14,8 @@ import sys
 import smtplib
 import time
 import base64
+import binascii
+import wave
 from email.message import EmailMessage
 
 try:
@@ -81,7 +84,7 @@ from battle_simulator import run_battle
 from campaign_engine import correlate_incident
 from digital_twin import build_twin
 from forecast_engine import forecast_risk
-from media_engine import analyze_media, media_inspection_status
+from media_engine import analyze_audio, analyze_media, media_inspection_status
 from psychology_detector import analyze_psychology
 from response_simulator import simulate_response
 from self_healing import recommend_healing
@@ -158,6 +161,15 @@ ACCESS_REQUEST_TTL_HOURS = max(1, int(os.getenv("CYBERGUARD_ACCESS_REQUEST_TTL_H
 HEAD_ADMIN_USERNAME = configured_head_admin_username
 HEAD_ADMIN_PASSWORD = configured_head_admin_password
 MAX_UPLOAD_BYTES = max(1_000_000, int(os.getenv("CYBERGUARD_MAX_UPLOAD_BYTES", "10485760")))
+MAX_LIVE_MEDIA_FRAME_BYTES = 1_000_000
+MAX_LIVE_MEDIA_AUDIO_BYTES = 1_000_000
+MAX_LIVE_MEDIA_FRAMES = 300
+MAX_LIVE_MEDIA_AUDIO_CHUNKS = 60
+MAX_LIVE_MEDIA_AUDIO_SECONDS_PER_CHUNK = 5
+MAX_LIVE_MEDIA_AUDIO_TOTAL_BYTES = 20_000_000
+MIN_LIVE_MEDIA_AUDIO_INTERVAL_SECONDS = 4
+MAX_LIVE_MEDIA_SECONDS = 300
+MIN_LIVE_MEDIA_FRAME_INTERVAL_SECONDS = 0.5
 STARTED_AT = datetime.now(timezone.utc)
 EPHEMERAL_STATE = EphemeralStore.from_environment()
 OTP_TTL_SECONDS = max(60, int(os.getenv("CYBERGUARD_OTP_TTL_SECONDS", "300")))
@@ -2298,6 +2310,10 @@ async def analyze_file(category: str = Form(...), file: UploadFile = File(...), 
         assessment["indicators"].extend(media_result["indicators"])
         assessment["xai_explanation"] += " " + " ".join(media_result["reasons"])
         assessment["media_method"] = media_result["method"]
+        if media_result.get("audio_analysis") is not None:
+            assessment["video_audio_analysis"] = media_result["audio_analysis"]
+        if media_result.get("audio_video_synchronization") is not None:
+            assessment["audio_video_synchronization"] = media_result["audio_video_synchronization"]
         if media_result.get("decoded_payload"):
             qr_assessment = evaluate_threat_payload("url", media_result["decoded_payload"])
             assessment["qr_payload"] = media_result["decoded_payload"]
@@ -2792,6 +2808,234 @@ async def events_socket(websocket: WebSocket):
             if time.monotonic() >= next_heartbeat:
                 await websocket.send_json({"type": "heartbeat", "status": "connected"})
                 next_heartbeat = time.monotonic() + 20
+    except WebSocketDisconnect:
+        return
+
+
+@app.websocket("/api/v1/ws/media")
+async def live_media_socket(websocket: WebSocket):
+    protocol = "cyberguard.media.v1"
+    offered_protocols = websocket.scope.get("subprotocols", [])
+    token = next((value for value in offered_protocols if value != protocol), None)
+    try:
+        initialize_database()
+        user = current_user(f"Bearer {token}" if token else None)
+    except HTTPException:
+        await websocket.close(code=4401)
+        return
+
+    await websocket.accept(subprotocol=protocol if protocol in offered_protocols else None)
+    started_at = time.monotonic()
+    last_frame_at = 0.0
+    frames_analyzed = 0
+    highest_risk = 0
+    audio_chunks_analyzed = 0
+    audio_bytes_analyzed = 0
+    highest_audio_risk = 0
+    last_audio_at = 0.0
+    await websocket.send_json({
+        "type": "ready",
+        "max_frame_bytes": MAX_LIVE_MEDIA_FRAME_BYTES,
+        "max_frames": MAX_LIVE_MEDIA_FRAMES,
+        "max_audio_bytes_per_chunk": MAX_LIVE_MEDIA_AUDIO_BYTES,
+        "max_audio_chunks": MAX_LIVE_MEDIA_AUDIO_CHUNKS,
+        "max_audio_seconds_per_chunk": MAX_LIVE_MEDIA_AUDIO_SECONDS_PER_CHUNK,
+        "minimum_audio_interval_seconds": MIN_LIVE_MEDIA_AUDIO_INTERVAL_SECONDS,
+        "max_session_seconds": MAX_LIVE_MEDIA_SECONDS,
+        "minimum_frame_interval_seconds": MIN_LIVE_MEDIA_FRAME_INTERVAL_SECONDS,
+        "storage": "ephemeral",
+    })
+    try:
+        while True:
+            elapsed = time.monotonic() - started_at
+            if elapsed >= MAX_LIVE_MEDIA_SECONDS or frames_analyzed >= MAX_LIVE_MEDIA_FRAMES:
+                await websocket.send_json({
+                    "type": "session_limit",
+                    "frames_analyzed": frames_analyzed,
+                    "highest_risk": highest_risk,
+                    "audio_chunks_analyzed": audio_chunks_analyzed,
+                    "highest_audio_risk": highest_audio_risk,
+                    "reason": "Live media session limit reached.",
+                })
+                await websocket.close(code=1000)
+                return
+
+            try:
+                message_text = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=max(1.0, MAX_LIVE_MEDIA_SECONDS - elapsed),
+                )
+            except asyncio.TimeoutError:
+                await websocket.send_json({
+                    "type": "session_timeout",
+                    "frames_analyzed": frames_analyzed,
+                    "highest_risk": highest_risk,
+                    "audio_chunks_analyzed": audio_chunks_analyzed,
+                    "highest_audio_risk": highest_audio_risk,
+                    "reason": "Live media session reached its time limit.",
+                })
+                await websocket.close(code=1000)
+                return
+            max_encoded_bytes = max(MAX_LIVE_MEDIA_FRAME_BYTES, MAX_LIVE_MEDIA_AUDIO_BYTES) * 4 // 3 + 4096
+            if len(message_text) > max_encoded_bytes:
+                await websocket.send_json({"type": "media_error", "error": "WebSocket message exceeds the media size limit."})
+                continue
+            try:
+                message = json.loads(message_text)
+            except json.JSONDecodeError:
+                await websocket.send_json({"type": "frame_error", "error": "Message must be valid JSON."})
+                continue
+            if not isinstance(message, dict):
+                await websocket.send_json({"type": "frame_error", "error": "Message must be a JSON object."})
+                continue
+            if message.get("type") == "stop":
+                await websocket.send_json({
+                    "type": "session_complete",
+                    "frames_analyzed": frames_analyzed,
+                    "highest_risk": highest_risk,
+                    "audio_chunks_analyzed": audio_chunks_analyzed,
+                    "highest_audio_risk": highest_audio_risk,
+                    "storage": "ephemeral",
+                })
+                await websocket.close(code=1000)
+                return
+            if message.get("type") == "audio":
+                now = time.monotonic()
+                if last_audio_at and now - last_audio_at < MIN_LIVE_MEDIA_AUDIO_INTERVAL_SECONDS:
+                    await websocket.send_json({"type": "audio_error", "error": "Audio chunk rate limit exceeded."})
+                    continue
+                last_audio_at = now
+                encoded_audio = message.get("audio")
+                if not isinstance(encoded_audio, str) or not encoded_audio:
+                    await websocket.send_json({"type": "audio_error", "error": "A base64-encoded PCM WAV audio chunk is required."})
+                    continue
+                if audio_chunks_analyzed >= MAX_LIVE_MEDIA_AUDIO_CHUNKS:
+                    await websocket.send_json({"type": "audio_error", "error": "The live audio chunk limit has been reached."})
+                    continue
+                try:
+                    audio = base64.b64decode(encoded_audio, validate=True)
+                except (binascii.Error, ValueError):
+                    await websocket.send_json({"type": "audio_error", "error": "Audio chunk must be valid base64."})
+                    continue
+                if not audio or len(audio) > MAX_LIVE_MEDIA_AUDIO_BYTES:
+                    await websocket.send_json({
+                        "type": "audio_error",
+                        "error": f"Audio chunks must be between 1 byte and {MAX_LIVE_MEDIA_AUDIO_BYTES} bytes.",
+                    })
+                    continue
+                if audio_bytes_analyzed + len(audio) > MAX_LIVE_MEDIA_AUDIO_TOTAL_BYTES:
+                    await websocket.send_json({"type": "audio_error", "error": "The live audio byte limit has been reached."})
+                    continue
+                try:
+                    with wave.open(io.BytesIO(audio), "rb") as audio_file:
+                        channels = audio_file.getnchannels()
+                        sample_width = audio_file.getsampwidth()
+                        sample_rate = audio_file.getframerate()
+                        frame_count = audio_file.getnframes()
+                        duration = frame_count / sample_rate if sample_rate else 0
+                        if (
+                            channels != 1
+                            or sample_width != 2
+                            or sample_rate < 8_000
+                            or sample_rate > 48_000
+                            or duration <= 0
+                            or duration > MAX_LIVE_MEDIA_AUDIO_SECONDS_PER_CHUNK
+                            or audio_file.getcomptype() != "NONE"
+                        ):
+                            raise ValueError("unsupported audio parameters")
+                        frames = audio_file.readframes(frame_count)
+                        if len(frames) != frame_count * channels * sample_width:
+                            raise ValueError("truncated audio data")
+                except (wave.Error, EOFError, OSError, ValueError):
+                    await websocket.send_json({
+                        "type": "audio_error",
+                        "error": "Audio must be a valid mono PCM16 WAV chunk no longer than five seconds.",
+                    })
+                    continue
+                try:
+                    assessment = await asyncio.to_thread(analyze_audio, audio)
+                except (OSError, RuntimeError, ValueError, EOFError, wave.Error, ImportError) as error:
+                    await websocket.send_json({
+                        "type": "audio_error",
+                        "error": f"Audio analysis failed ({error.__class__.__name__}); this segment was not scored.",
+                    })
+                    continue
+                audio_chunks_analyzed += 1
+                audio_bytes_analyzed += len(audio)
+                audio_risk = max(0, min(99, int(assessment.get("score", 50))))
+                highest_audio_risk = max(highest_audio_risk, audio_risk)
+                await websocket.send_json({
+                    "type": "audio_result",
+                    "chunk_number": audio_chunks_analyzed,
+                    "risk_score": audio_risk,
+                    "method": assessment.get("method", "audio-analysis"),
+                    "indicators": assessment.get("indicators", [])[:20],
+                    "reasons": assessment.get("reasons", [])[:10],
+                    "duration_seconds": round(duration, 2),
+                    "calibration": "Uncalibrated audio triage; not a probability, voice identity, or audio/video synchronization result.",
+                })
+                continue
+            if message.get("type") != "frame":
+                await websocket.send_json({"type": "media_error", "error": "Expected a frame, audio, or stop message."})
+                continue
+
+            now = time.monotonic()
+            if last_frame_at and now - last_frame_at < MIN_LIVE_MEDIA_FRAME_INTERVAL_SECONDS:
+                await websocket.send_json({"type": "frame_error", "error": "Frame rate limit exceeded; wait before sending another frame."})
+                continue
+            last_frame_at = now
+            encoded_frame = message.get("image")
+            if not isinstance(encoded_frame, str) or not encoded_frame:
+                await websocket.send_json({"type": "frame_error", "error": "A base64-encoded image is required."})
+                continue
+            try:
+                frame = base64.b64decode(encoded_frame, validate=True)
+            except (binascii.Error, ValueError):
+                await websocket.send_json({"type": "frame_error", "error": "Frame image must be valid base64."})
+                continue
+            if not frame or len(frame) > MAX_LIVE_MEDIA_FRAME_BYTES:
+                await websocket.send_json({
+                    "type": "frame_error",
+                    "error": f"Frame must be between 1 byte and {MAX_LIVE_MEDIA_FRAME_BYTES} bytes.",
+                })
+                continue
+            try:
+                from PIL import Image, UnidentifiedImageError
+
+                with Image.open(io.BytesIO(frame)) as image:
+                    image.verify()
+                    width, height = image.size
+                    image_format = image.format
+            except (OSError, ValueError, SyntaxError, UnidentifiedImageError, Image.DecompressionBombError):
+                await websocket.send_json({"type": "frame_error", "error": "Frame is not a decodable image."})
+                continue
+            if image_format not in {"JPEG", "PNG", "WEBP"} or width > 1920 or height > 1080 or width * height > 2_073_600:
+                await websocket.send_json({
+                    "type": "frame_error",
+                    "error": "Frames must be JPEG, PNG, or WebP and no larger than 1920x1080 (2 megapixels).",
+                })
+                continue
+
+            analysis = await asyncio.to_thread(
+                analyze_media,
+                frame,
+                f"image/{image_format.lower()}",
+                f"live-frame-{frames_analyzed + 1}.{image_format.lower()}",
+                "deepfake",
+            )
+            frames_analyzed += 1
+            risk_score = max(0, min(99, int(analysis.get("score", 50))))
+            highest_risk = max(highest_risk, risk_score)
+            await websocket.send_json({
+                "type": "frame_result",
+                "frame_number": frames_analyzed,
+                "risk_score": risk_score,
+                "method": analysis.get("method", "media-analysis"),
+                "indicators": analysis.get("indicators", [])[:20],
+                "reasons": analysis.get("reasons", [])[:10],
+                "elapsed_seconds": round(time.monotonic() - started_at, 2),
+                "calibration": "Uncalibrated per-frame triage; not a probability or identity verification.",
+            })
     except WebSocketDisconnect:
         return
 
