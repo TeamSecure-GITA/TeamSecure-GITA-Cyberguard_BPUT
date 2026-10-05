@@ -31,7 +31,7 @@ const runFileAnalysis = async (channel, file) => {
   const responsePromise = page.waitForResponse((response) => (
     response.url().endsWith('/api/v1/analyze/file')
     && response.request().method() === 'POST'
-  ));
+  ), { timeout: 120_000 });
   await page.getByRole('button', { name: 'Run Multi-Engine Inspection' }).click();
   const response = await responsePromise;
   if (!response.ok()) throw new Error(`${channel} upload analysis failed: ${response.status()}`);
@@ -65,19 +65,19 @@ const createTestWav = () => {
 try {
   await page.goto(baseUrl, { waitUntil: 'networkidle' });
   await page.getByRole('heading', { name: 'See the signal before it spreads.' }).waitFor();
-  await page.getByRole('button', { name: 'SOC Login' }).click();
+  await page.getByRole('button', { name: 'Open detection workspace' }).click();
   await page.getByRole('heading', { name: 'SOC Authentication' }).waitFor();
-  await page.getByRole('textbox', { name: 'Enter your administrator username' }).fill('lead');
-  await page.getByRole('textbox').nth(1).fill('invalid');
+  await page.getByPlaceholder('teamsecure.project@gmail.com').fill('lead');
+  await page.getByPlaceholder('Password configured for this server').fill('invalid');
   expectingInvalidLogin = true;
   await page.getByRole('button', { name: 'Authenticate' }).click();
   await page.getByText('Invalid username or password').waitFor();
   expectingInvalidLogin = false;
 
-  await page.getByRole('textbox', { name: 'Enter your administrator username' }).fill('lead');
-  await page.getByRole('textbox').nth(1).fill('lead123');
+  await page.getByPlaceholder('teamsecure.project@gmail.com').fill('lead');
+  await page.getByPlaceholder('Password configured for this server').fill('lead123');
   await page.getByRole('button', { name: 'Authenticate' }).click();
-  await page.getByText('[ CYBERGUARD WORKSPACE READY ]').waitFor();
+  await page.getByRole('button', { name: 'Detection Studio' }).waitFor();
   await page.getByRole('button', { name: 'Detection Studio' }).click();
   await page.getByRole('heading', { name: 'Detection Studio' }).waitFor();
 

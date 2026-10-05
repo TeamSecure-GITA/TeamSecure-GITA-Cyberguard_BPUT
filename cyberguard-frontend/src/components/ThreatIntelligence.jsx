@@ -6,8 +6,9 @@ import CampaignCorrelation from './CampaignCorrelation';
 import AttackChainTimeline from './AttackChainTimeline';
 import RiskForecastGraph from './RiskForecastGraph';
 import ResponseSimulatorPanel from './ResponseSimulatorPanel';
+import { getApiBaseUrl } from '../apiConfig';
 
-const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+const apiBaseUrl = getApiBaseUrl();
 const panelClass = 'glass-panel p-5';
 
 function RiskBar({ value, color = 'var(--cyan)' }) {
@@ -170,4 +171,3 @@ export default function ThreatIntelligence({ accessToken, incidents = [] }) {
     <div className={panelClass}><div className="eyebrow flex items-center gap-2"><BrainCircuit size={13} /> 10 / cyber brain XAI</div><div className="brain-strip"><strong>{selectedIncident?.id || 'No incident selected'}</strong><span>{selectedIncident?.explanation || 'The explainable reasoning layer will appear after the first analyzed incident.'}</span><span className="brain-status">MODEL EVIDENCE LINKED</span></div></div>
   </div>;
 }
-

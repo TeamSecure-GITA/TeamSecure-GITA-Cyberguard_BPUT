@@ -2,12 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { X, AlertOctagon, Cpu, ShieldAlert, Download } from 'lucide-react';
 import { jsPDF } from 'jspdf';
 import axios from 'axios';
+import { getApiBaseUrl } from '../apiConfig';
 
 export default function XaiModal({ incident, onClose, userRole, accessToken }) {
   const [detail, setDetail] = useState(null);
   const [genome, setGenome] = useState(null);
   const [correlations, setCorrelations] = useState(null);
-  const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+  const apiBaseUrl = getApiBaseUrl();
   useEffect(() => {
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') onClose();

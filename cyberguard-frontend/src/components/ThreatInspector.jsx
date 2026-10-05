@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Mail, Video, Link, FileText, UserX, AlertTriangle, Upload, Search, Loader2, PlayCircle, Globe, Trash2 } from 'lucide-react';
 import axios from 'axios';
+import { getApiBaseUrl } from '../apiConfig';
 
 export default function ThreatInspector({ accessToken }) {
   const [activeSubTab, setActiveSubTab] = useState('email');
@@ -28,7 +29,7 @@ export default function ThreatInspector({ accessToken }) {
   const [contactBusy, setContactBusy] = useState(false);
   const [contactError, setContactError] = useState('');
 
-  const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+  const apiBaseUrl = getApiBaseUrl();
   const fileAnalysisTabs = ['image', 'audio', 'video', 'deepfake', 'email_file', 'malware'];
   const showLivePreview = activeSubTab === 'email' && Boolean(inputText.trim());
   const liveAssessment = showLivePreview && livePreview.payload === inputText ? livePreview.assessment : null;

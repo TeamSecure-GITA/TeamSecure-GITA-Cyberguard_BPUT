@@ -55,7 +55,7 @@ Invoke-VerificationStep 'Pretrained image/audio model inference' {
 if ($env:API_URL) {
     Invoke-VerificationStep 'Deployed API health' {
         $response = Invoke-RestMethod -Uri "$($env:API_URL.TrimEnd('/'))/" -TimeoutSec 15
-        if ($response.status -ne 'healthy') { throw 'API health endpoint did not report healthy.' }
+        if ($response.status -ne 'Active') { throw 'API root endpoint did not report Active.' }
     }
 }
 else {

@@ -2,8 +2,9 @@ import React, { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { KeyRound, Users, ClipboardList, ShieldAlert } from 'lucide-react';
 import CloudflareWafPanel from './CloudflareWafPanel';
+import { getApiBaseUrl } from '../apiConfig';
 
-const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+const apiBaseUrl = getApiBaseUrl();
 
 export default function AdminConsole({ accessToken, routeData = null }) {
   const [users, setUsers] = useState([]);

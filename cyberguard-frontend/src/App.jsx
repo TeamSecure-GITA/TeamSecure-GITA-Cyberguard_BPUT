@@ -231,14 +231,8 @@ export default function App() {
           currentSession={session}
           currentLang={language}
           onLanguageChange={setLanguage}
-          onOpenWorkspace={async () => {
-            if (!session) {
-              try {
-                await handleQuickLogin('teamsecure.project@gmail.com', 'Secure@9040');
-              } catch (err) {
-                console.error('Quick login failed:', err);
-              }
-            } else {
+          onOpenWorkspace={() => {
+            if (session) {
               setViewMode('workspace');
               setActiveTab('dashboard');
             }
@@ -320,8 +314,7 @@ export default function App() {
                 <InsiderRiskPanel accessToken={session?.access_token} />
               </div>
               <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                <ContainmentQueue accessToken={session?.access_token} />
-                  <ContainmentQueue accessToken={session?.access_token} userRole={session?.user?.role} />
+                <ContainmentQueue accessToken={session?.access_token} userRole={session?.user?.role} />
                 <PolicyEnginePanel accessToken={session?.access_token} userRole={session?.user?.role} />
               </div>
               <SystemView health={health} modelStatus={modelStatus} />

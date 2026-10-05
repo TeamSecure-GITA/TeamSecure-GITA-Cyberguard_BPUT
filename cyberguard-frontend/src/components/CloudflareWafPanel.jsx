@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { Cloud, ShieldBan } from 'lucide-react';
+import { getApiBaseUrl } from '../apiConfig';
 
-const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+const apiBaseUrl = getApiBaseUrl();
 
 export default function CloudflareWafPanel({ accessToken }) {
   const [status, setStatus] = useState(null);

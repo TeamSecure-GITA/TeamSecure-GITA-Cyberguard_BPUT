@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { AlertTriangle, CheckCircle2, Download, FileText, LockKeyhole, Play, Radar, ShieldCheck, Siren, Smartphone, Undo2 } from 'lucide-react';
+import { getApiBaseUrl } from '../apiConfig';
 
-const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+const apiBaseUrl = getApiBaseUrl();
 const initialSignals = {
   provider: 'generic',
   unknown_session: false,

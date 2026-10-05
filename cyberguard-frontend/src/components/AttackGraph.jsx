@@ -2,9 +2,10 @@ import React, { useEffect, useState } from 'react';
 import ReactFlow, { Background, Controls, MarkerType } from 'reactflow';
 import axios from 'axios';
 import { GitBranch, RefreshCw } from 'lucide-react';
+import { getApiBaseUrl } from '../apiConfig';
 import 'reactflow/dist/style.css';
 
-const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+const apiBaseUrl = getApiBaseUrl();
 
 const initialNodes = [
   { id: '1', position: { x: 50, y: 120 }, data: { label: 'Attacker (Threat Origin)' }, style: { background: '#ef4444', color: '#fff', borderRadius: '8px', border: '1px solid #b91c1c', fontWeight: 'bold', fontSize: '11px' } },

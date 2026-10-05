@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { Bell, Check } from 'lucide-react';
+import { getApiBaseUrl } from '../apiConfig';
 
-const apiBaseUrl = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+const apiBaseUrl = getApiBaseUrl();
 
 export default function NotificationsPanel({ accessToken, workload = null }) {
   const [items, setItems] = useState([]);
