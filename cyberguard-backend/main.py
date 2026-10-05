@@ -62,8 +62,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from webauthn import generate_authentication_options, generate_registration_options, options_to_json, verify_authentication_response, verify_registration_response
 from webauthn.helpers.structs import PublicKeyCredentialDescriptor, UserVerificationRequirement
-from database import connect_database
+from database import connect_database, get_mongodb_uri
 from ephemeral_store import EphemeralStore
+
+try:
+    from pymongo import AsyncMongoClient
+except ImportError:
+    AsyncMongoClient = None
 
 from detection_engine import FALLBACK_TEXT_MODEL, TEXT_MODEL, adversarial_self_test, analyze_screenshot_brand_mismatches, evaluate_threat_payload
 from behavioral_baseline import baseline_key, login_sample, parse_login_event, score_login_deviation, successful_login
@@ -120,6 +125,7 @@ from production_integrations import IntegrationNotConfigured, create_ticket as c
 from models import AccessRequestCreate, AdvancedTelemetryRequest, AgentConsensusRequest, AlertRequest, AnalystLoadRequest, BattleRequest, CognitiveEchoRequest, DarkMeshRequest, DeceptionRequest, ForecastRequest, IncidentComment, IncidentUpdate, InfrastructureEchoRequest, LoginRequest, NeuromorphicRequest, NotificationUpdate, OtpVerificationRequest, PasskeyCredentialRequest, PermissionRequest, PolymorphismRequest, PsychologyRequest, ProviderEndpointIsolationRequest, ProviderIdentityDisableRequest, ProviderTicketRequest, QStateRequest, QuantumDecoyRequest, ResponseExecutionRequest, SatelliteRequest, ScannerRequest, SimulationRequest, SpeculativeTelemetryRequest, TemporalHealingRequest, ThreatAnalysisRequest, ThreatIntelLookup, TopologyMorphRequest, ThreatPhysicsRequest, UserCreate, VaccineRequest
 
 DB_PATH = Path(os.getenv("CYBERGUARD_DB_PATH", str(Path(__file__).with_name("cyberguard.db"))))
+MONGODB_URI = get_mongodb_uri()
 CYBERGUARD_ENV = os.getenv("CYBERGUARD_ENV", "development").lower()
 JWT_SECRET = os.getenv("CYBERGUARD_JWT_SECRET", "").strip()
 ALLOW_ANONYMOUS_EVAL = os.getenv("CYBERGUARD_ALLOW_ANONYMOUS_EVAL", "false").lower() in {"true", "1", "yes"}
@@ -695,10 +701,37 @@ def initialize_database():
                 )
 
 
+async def startup_event(app_instance: FastAPI | None = None):
+    target_app = app_instance or globals().get("app")
+    if AsyncMongoClient:
+        try:
+            client = AsyncMongoClient(MONGODB_URI)
+            if target_app is not None:
+                target_app.mongodb_client = client
+        except Exception as exc:
+            if target_app is not None:
+                target_app.mongodb_client = None
+            print(f"[CyberGuard] MongoDB initialization warning: {exc}")
+    elif target_app is not None:
+        target_app.mongodb_client = None
+
+
+async def shutdown_event(app_instance: FastAPI | None = None):
+    target_app = app_instance or globals().get("app")
+    client = getattr(target_app, "mongodb_client", None) if target_app else None
+    if client is not None:
+        try:
+            await client.close()
+        except Exception:
+            pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     initialize_database()
+    await startup_event(app)
     yield
+    await shutdown_event(app)
 
 
 app = FastAPI(
@@ -1816,7 +1849,31 @@ def persist_cyberguard_x(incident_id: int, incident: dict):
 @app.get("/health")
 @app.get("/healthz")
 def root():
-    return {"status": "Active", "system": "CYBERGUARD AI Engine v2.0"}
+    return {
+        "status": "Active",
+        "system": "CYBERGUARD AI Engine v2.0",
+        "message": "FastAPI + AsyncMongoClient is running. Try GET /ping-db",
+    }
+
+
+@app.get("/ping-db")
+@app.get("/api/v1/ping-db")
+async def ping_db():
+    client = getattr(app, "mongodb_client", None)
+    if not client:
+        if AsyncMongoClient:
+            try:
+                client = AsyncMongoClient(MONGODB_URI)
+                app.mongodb_client = client
+            except Exception as e:
+                return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+        else:
+            return JSONResponse(status_code=500, content={"ok": False, "error": "pymongo AsyncMongoClient is not installed"})
+    try:
+        await client.admin.command("ping")
+        return {"ok": True, "message": "MongoDB is reachable"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
 
 
 

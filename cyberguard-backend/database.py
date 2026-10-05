@@ -109,3 +109,18 @@ def connect_database(path: Path):
 
 def database_backend() -> str:
     return "postgresql" if os.getenv("CYBERGUARD_DATABASE_URL", "").strip().startswith(("postgresql://", "postgres://")) else "sqlite"
+
+
+DEFAULT_MONGODB_URI = "mongodb://teamsecureproject_db_user:<db_password>@<hostname>/?ssl=true&replicaSet=atlas-qs3uco-shard-0&authSource=admin&appName=Cluster0&compressors=zlib"
+
+
+def get_mongodb_uri() -> str:
+    return os.getenv("MONGODB_URI", os.getenv("CYBERGUARD_MONGODB_URI", DEFAULT_MONGODB_URI)).strip()
+
+
+def create_async_mongo_client(uri: str | None = None):
+    try:
+        from pymongo import AsyncMongoClient
+        return AsyncMongoClient(uri or get_mongodb_uri())
+    except ImportError as error:
+        raise RuntimeError("MongoDB requires pymongo>=4.9; install with pip install pymongo") from error
