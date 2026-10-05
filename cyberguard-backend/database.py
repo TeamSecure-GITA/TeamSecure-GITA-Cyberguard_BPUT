@@ -118,9 +118,10 @@ def get_mongodb_uri() -> str:
     return os.getenv("MONGODB_URI", os.getenv("CYBERGUARD_MONGODB_URI", DEFAULT_MONGODB_URI)).strip()
 
 
-def create_async_mongo_client(uri: str | None = None):
+def create_async_mongo_client(uri: str | None = None, server_selection_timeout_ms: int = 5000):
     try:
         from pymongo import AsyncMongoClient
-        return AsyncMongoClient(uri or get_mongodb_uri())
+        return AsyncMongoClient(uri or get_mongodb_uri(), serverSelectionTimeoutMS=server_selection_timeout_ms)
     except ImportError as error:
         raise RuntimeError("MongoDB requires pymongo>=4.9; install with pip install pymongo") from error
+

@@ -705,7 +705,7 @@ async def startup_event(app_instance: FastAPI | None = None):
     target_app = app_instance or globals().get("app")
     if AsyncMongoClient:
         try:
-            client = AsyncMongoClient(MONGODB_URI)
+            client = AsyncMongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
             if target_app is not None:
                 target_app.mongodb_client = client
         except Exception as exc:
@@ -1882,7 +1882,7 @@ async def ping_db():
     if not client:
         if AsyncMongoClient:
             try:
-                client = AsyncMongoClient(MONGODB_URI)
+                client = AsyncMongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)
                 app.mongodb_client = client
             except Exception as e:
                 return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
