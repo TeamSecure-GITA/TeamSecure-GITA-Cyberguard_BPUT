@@ -38,10 +38,22 @@ import InsiderRiskPanel from './components/InsiderRiskPanel';
 import ContainmentQueue from './components/ContainmentQueue';
 import PolicyEnginePanel from './components/PolicyEnginePanel';
 import AccountRescueCenter from './components/AccountRescueCenter';
+import Login from './components/Login';
 import { LanguageProvider } from './i18n';
 
 export default function App() {
-  const [viewMode, setViewMode] = useState('portal'); // 'portal' or 'workspace'
+  const getInitialViewMode = () => {
+    if (typeof window !== 'undefined') {
+      const path = window.location.pathname.toLowerCase();
+      const hash = window.location.hash.toLowerCase();
+      const search = window.location.search.toLowerCase();
+      if (path === '/login' || hash === '#login' || search.includes('login') || search.includes('view=login')) {
+        return 'login';
+      }
+    }
+    return 'portal';
+  };
+  const [viewMode, setViewMode] = useState(getInitialViewMode); // 'portal', 'login', or 'workspace'
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedIncident, setSelectedIncident] = useState(null);
   const [language, setLanguage] = useState('EN');
@@ -53,12 +65,18 @@ export default function App() {
   const [modelStatus, setModelStatus] = useState(null);
   const [unread, setUnread] = useState(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [incidentSearch, setIncidentSearch] = useState('');
   const [refreshKey, setRefreshKey] = useState(0);
   const [demoSeeded, setDemoSeeded] = useState(false);
   const [routingInfo, setRoutingInfo] = useState(null);
   const authFailureHandled = React.useRef(false);
   const apiBaseUrl = getApiBaseUrl();
+
+  const sessionRef = React.useRef(session);
+  React.useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
 
   React.useEffect(() => {
     const interceptorId = axios.interceptors.response.use(
@@ -192,6 +210,10 @@ export default function App() {
           )),
         );
 
+        const incidentsResponse = await axios.get(`${apiBaseUrl}/api/v1/incidents`, {
+          headers: { Authorization: `Bearer ${session.access_token}` },
+        });
+        setIncidents(incidentsResponse.data.incidents || []);
         setDemoSeeded(true);
         setRefreshKey((value) => value + 1);
       } catch {
@@ -222,6 +244,47 @@ export default function App() {
     return () => socket?.close();
   }, [session, apiBaseUrl]);
 
+  React.useEffect(() => {
+    const handleNavigation = () => {
+      const path = window.location.pathname.toLowerCase();
+      const hash = window.location.hash.toLowerCase();
+      const search = window.location.search.toLowerCase();
+      if (path === '/login' || hash === '#login' || search.includes('login') || search.includes('view=login')) {
+        setViewMode('login');
+      } else if (hash === '#portal' || (path === '/' && hash === '')) {
+        if (!session) setViewMode('portal');
+      }
+    };
+    window.addEventListener('popstate', handleNavigation);
+    window.addEventListener('hashchange', handleNavigation);
+    return () => {
+      window.removeEventListener('popstate', handleNavigation);
+      window.removeEventListener('hashchange', handleNavigation);
+    };
+  }, [session]);
+
+  // Dedicated Login View
+  if (viewMode === 'login') {
+    return (
+      <LanguageProvider language={language}>
+        <Login
+          onLogin={(approvedSession) => {
+            authFailureHandled.current = false;
+            setSession(approvedSession);
+            setViewMode('workspace');
+            setActiveTab('dashboard');
+          }}
+          onReturnToPortal={() => {
+            if (window.location.hash === '#login') {
+              window.history.pushState(null, '', window.location.pathname);
+            }
+            setViewMode('portal');
+          }}
+        />
+      </LanguageProvider>
+    );
+  }
+
   // Primary Landing View: Animated CyberGyroscopic Threat Radar Portal
   if (viewMode === 'portal') {
     return (
@@ -231,6 +294,7 @@ export default function App() {
           currentSession={session}
           currentLang={language}
           onLanguageChange={setLanguage}
+          onOpenLoginPage={() => setViewMode('login')}
           onOpenWorkspace={() => {
             if (session) {
               setViewMode('workspace');
@@ -256,11 +320,12 @@ export default function App() {
     } else {
       setActiveTab(tabId);
     }
+    setMobileMenuOpen(false);
   };
 
   return (
     <LanguageProvider language={language}>
-      <div className="app-shell min-h-screen text-slate-100 flex flex-col bg-[#05111f]">
+      <div className="app-shell min-h-screen min-h-[100dvh] text-slate-100 flex flex-col bg-[#05111f] overflow-x-hidden">
       <div className="utility-bar">
         <span><span className="utility-dot" />BPUT SOC / INNOVATION SUBMISSION</span>
         <LanguageToggle currentLang={language} onToggle={setLanguage} />
@@ -273,17 +338,21 @@ export default function App() {
         onOpenNotifications={() => setActiveTab('notifications')}
         onReturnToPortal={() => setViewMode('portal')}
         onLogout={() => { setSession(null); setViewMode('portal'); }}
+        mobileMenuOpen={mobileMenuOpen}
+        setMobileMenuOpen={setMobileMenuOpen}
       />
 
-      <div className="flex flex-1">
+      <div className="workspace-shell flex flex-1 relative overflow-x-hidden">
         <Sidebar 
           activeTab={activeTab} 
           setActiveTab={handleSidebarTabChange} 
           collapsed={sidebarCollapsed} 
           setCollapsed={setSidebarCollapsed} 
+          mobileOpen={mobileMenuOpen}
+          setMobileOpen={setMobileMenuOpen}
         />
         
-        <main className="workspace flex-1 p-6 overflow-y-auto space-y-6">
+        <main className={`workspace flex-1 p-3 sm:p-4 md:p-6 overflow-y-auto space-y-4 sm:space-y-6 max-w-full ${sidebarCollapsed ? 'workspace-sidebar-collapsed' : 'workspace-sidebar-expanded'}`}>
           <SystemHealth health={health} />
 
           {activeTab === 'dashboard' && (

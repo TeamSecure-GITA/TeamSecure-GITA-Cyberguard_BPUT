@@ -1,9 +1,40 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any
 
+_TIMELINE_TYPES = {
+    "incident_created",
+    "analysis_completed",
+    "campaign_correlated",
+    "workflow_updated",
+    "response_action",
+}
 
-def build_timeline(incident: dict[str, Any]) -> list[dict[str, Any]]:
-    created = datetime.fromisoformat(incident["created_at"].replace("Z", "+00:00")) if incident.get("created_at") else datetime.now(timezone.utc)
-    risk = incident.get("risk_score", 0)
-    steps = [("signal", "Signal observed", "Telemetry entered the detection pipeline"), ("triage", "AI triage", "Risk indicators and IOCs were scored"), ("correlation", "Campaign correlation", "Threat genome compared against recent incidents"), ("response", "Response recommendation", "Containment sequence prepared")]
-    return [{"id": index + 1, "type": kind, "label": label, "detail": detail, "timestamp": (created + timedelta(minutes=index * 3)).isoformat(), "status": "complete" if index < 2 or risk > 70 else "pending"} for index, (kind, label, detail) in enumerate(steps)]
+
+def build_timeline(
+    incident: dict[str, Any],
+    events: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Return only persisted events with real timestamps; never synthesize steps."""
+    del incident
+    normalized = []
+    for event in events or []:
+        if not isinstance(event, dict) or event.get("type") not in _TIMELINE_TYPES:
+            continue
+        timestamp = event.get("timestamp")
+        if not isinstance(timestamp, str):
+            continue
+        try:
+            parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        normalized.append(
+            {
+                "type": event["type"],
+                "label": str(event.get("label", event["type"].replace("_", " ").title())),
+                "detail": str(event.get("detail", "")),
+                "timestamp": parsed.isoformat(),
+                "status": str(event.get("status", "complete")),
+            }
+        )
+    normalized.sort(key=lambda event: event["timestamp"])
+    return [{"id": index, **event} for index, event in enumerate(normalized, start=1)]

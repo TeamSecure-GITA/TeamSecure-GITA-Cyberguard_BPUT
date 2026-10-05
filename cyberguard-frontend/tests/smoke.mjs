@@ -1,16 +1,24 @@
 import { chromium } from 'playwright';
 
 const baseUrl = process.env.CYBERGUARD_FRONTEND_URL || 'http://127.0.0.1:5173';
+const adminUsername = process.env.CYBERGUARD_HEAD_ADMIN_USERNAME;
+const adminPassword = process.env.CYBERGUARD_HEAD_ADMIN_PASSWORD;
+if (!adminUsername || !adminPassword) {
+  throw new Error('Set CYBERGUARD_HEAD_ADMIN_USERNAME and CYBERGUARD_HEAD_ADMIN_PASSWORD for the smoke test.');
+}
 const browser = await chromium.launch({ headless: true });
-const page = await browser.newPage();
+let page = await browser.newPage();
 const errors = [];
 let expectingInvalidLogin = false;
-page.on('console', (message) => {
-  if (message.type() !== 'error') return;
-  if (expectingInvalidLogin && message.text().includes('401 (Unauthorized)')) return;
-  errors.push(message.text());
-});
-page.on('pageerror', (error) => errors.push(error.message));
+const monitorPage = (target) => {
+  target.on('console', (message) => {
+    if (message.type() !== 'error') return;
+    if (expectingInvalidLogin && message.text().includes('401 (Unauthorized)')) return;
+    errors.push(message.text());
+  });
+  target.on('pageerror', (error) => errors.push(error.message));
+};
+monitorPage(page);
 
 const runTextAnalysis = async (channel, payload) => {
   await page.getByRole('button', { name: channel, exact: true }).click();
@@ -22,7 +30,16 @@ const runTextAnalysis = async (channel, payload) => {
   await page.getByRole('button', { name: 'Run Multi-Engine Inspection' }).click();
   const response = await responsePromise;
   if (!response.ok()) throw new Error(`${channel} analysis failed: ${response.status()}`);
+  const result = await response.json();
+  const scoring = result.assessment?.scoring;
+  const allocatedRisk = (result.assessment?.indicators || []).reduce((total, indicator) => total + (indicator.contribution || 0), 0);
+  if (scoring?.method !== 'evidence_weighted_attribution_v1' || allocatedRisk !== scoring.risk_score) {
+    throw new Error(`${channel} analysis returned an invalid evidence attribution contract.`);
+  }
   await page.getByText('FASTAPI ENGINE ASSESSMENT').waitFor();
+  if (result.assessment?.indicators?.some((indicator) => indicator.feature_attribution?.status === 'available')) {
+    await page.getByLabel('Local text model feature attribution').waitFor();
+  }
 };
 
 const runFileAnalysis = async (channel, file) => {
@@ -35,6 +52,12 @@ const runFileAnalysis = async (channel, file) => {
   await page.getByRole('button', { name: 'Run Multi-Engine Inspection' }).click();
   const response = await responsePromise;
   if (!response.ok()) throw new Error(`${channel} upload analysis failed: ${response.status()}`);
+  const result = await response.json();
+  const scoring = result.assessment?.scoring;
+  const allocatedRisk = (result.assessment?.indicators || []).reduce((total, indicator) => total + (indicator.contribution || 0), 0);
+  if (scoring?.method !== 'evidence_weighted_attribution_v1' || allocatedRisk !== scoring.risk_score) {
+    throw new Error(`${channel} upload returned an invalid evidence attribution contract.`);
+  }
   await page.getByText('FASTAPI ENGINE ASSESSMENT').waitFor();
 };
 
@@ -67,17 +90,29 @@ try {
   await page.getByRole('heading', { name: 'See the signal before it spreads.' }).waitFor();
   await page.getByRole('button', { name: 'Open detection workspace' }).click();
   await page.getByRole('heading', { name: 'SOC Authentication' }).waitFor();
-  await page.getByPlaceholder('teamsecure.project@gmail.com').fill('lead');
-  await page.getByPlaceholder('Password configured for this server').fill('invalid');
+  const usernameField = page.locator('input[type="text"]').first();
+  const passwordField = page.locator('input[type="password"]').first();
+  await usernameField.fill('not-real@example.com');
+  await passwordField.fill('wrong-password');
   expectingInvalidLogin = true;
   await page.getByRole('button', { name: 'Authenticate' }).click();
-  await page.getByText('Invalid username or password').waitFor();
+  await page.getByText(/Invalid username or password\.?/).waitFor();
   expectingInvalidLogin = false;
 
-  await page.getByPlaceholder('teamsecure.project@gmail.com').fill('lead');
-  await page.getByPlaceholder('Password configured for this server').fill('lead123');
+  await page.close();
+  page = await browser.newPage();
+  monitorPage(page);
+  await page.goto(baseUrl, { waitUntil: 'networkidle' });
+  await page.getByRole('heading', { name: 'See the signal before it spreads.' }).waitFor();
+  await page.getByRole('button', { name: 'SOC Login' }).click();
+  await page.getByRole('heading', { name: 'SOC Authentication' }).waitFor();
+  const reloadedUsernameField = page.locator('input[type="text"]').first();
+  const reloadedPasswordField = page.locator('input[type="password"]').first();
+  await reloadedUsernameField.fill(adminUsername);
+  await reloadedPasswordField.fill(adminPassword);
   await page.getByRole('button', { name: 'Authenticate' }).click();
-  await page.getByRole('button', { name: 'Detection Studio' }).waitFor();
+  await page.getByText('[ CYBERGUARD WORKSPACE READY ]').waitFor();
+  await page.getByRole('heading', { name: /Security Command Center/ }).waitFor();
   await page.getByRole('button', { name: 'Detection Studio' }).click();
   await page.getByRole('heading', { name: 'Detection Studio' }).waitFor();
 
@@ -86,6 +121,8 @@ try {
   await page.getByText('FASTAPI ENGINE ASSESSMENT').waitFor();
 
   await runTextAnalysis('Malicious URL', 'https://secure-login.xyz/auth?redirect=https://evil.example/login');
+  await runTextAnalysis('SMS / Social', 'Urgent: your refund is ready; confirm your UPI PIN and OTP at this link now.');
+  await runTextAnalysis('Credential / ATO', JSON.stringify({ failed_attempts: 12, total_attempts: 15, distinct_accounts: 8, distinct_countries: 2, impossible_travel: true, new_device: true, mfa_denials: 4 }));
   await runTextAnalysis('System Logs', JSON.stringify({ events: [{ event_id: 1102, event_type: 'audit_log_cleared' }] }));
   await runTextAnalysis('Network Traffic', JSON.stringify({ flows: [{ src_ip: '10.0.0.5', destination_ports: Array.from({ length: 12 }, (_, index) => 20 + index) }] }));
   await runFileAnalysis('EML Sender Inspection', {
@@ -130,6 +167,17 @@ try {
   await page.getByText(/sender does not match/i).last().waitFor();
   await page.getByRole('button', { name: 'Delete selected contact profile' }).click();
   await page.getByRole('option', { name: `${contactName} · 3 samples` }).waitFor({ state: 'detached' });
+
+  await page.getByRole('button', { name: 'XDR Fusion' }).click();
+  await page.getByRole('heading', { name: 'Advanced SOC decision support' }).waitFor();
+  await page.getByText('LIVE DATA', { exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Generate simulated canary plan' }).click();
+  await page.getByText(/Honeytoken plan: simulation/).waitFor();
+
+  await page.getByRole('button', { name: 'Attack Graph' }).click();
+  await page.getByRole('button', { name: 'Supply Chain' }).click();
+  await page.getByRole('button', { name: 'Calculate blast radius' }).click();
+  await page.getByText(/2 downstream node\(s\) affected/).waitFor();
 
   if (errors.length) throw new Error(`Browser console errors: ${errors.join('; ')}`);
   console.log('Frontend authenticated analysis smoke test passed');

@@ -14,13 +14,19 @@ from statistics import median
 from media_engine import analyze_media
 
 
+NON_DEEPFAKE_METHODS = {"media-fallback", "metadata-fallback", "qr-decoder"}
+
+
 def calculate_metrics(rows: list[dict], threshold: float = 50) -> dict:
-    if not 0 <= threshold <= 100:
+    if not math.isfinite(threshold) or not 0 <= threshold <= 100:
         raise ValueError("Threshold must be between 0 and 100")
     labels = [int(row["label"]) for row in rows]
     if set(labels) != {0, 1}:
         raise ValueError("Evaluation data must contain both real and fake samples (labels 0 and 1)")
-    scores = [max(0.0, min(100.0, float(row["score"]))) for row in rows]
+    raw_scores = [float(row["score"]) for row in rows]
+    if any(not math.isfinite(score) for score in raw_scores):
+        raise ValueError("Evaluation scores must be finite numbers")
+    scores = [max(0.0, min(100.0, score)) for score in raw_scores]
     predictions = [int(score >= threshold) for score in scores]
     tn = sum(label == 0 and prediction == 0 for label, prediction in zip(labels, predictions))
     fp = sum(label == 0 and prediction == 1 for label, prediction in zip(labels, predictions))
@@ -70,32 +76,123 @@ def calculate_metrics(rows: list[dict], threshold: float = 50) -> dict:
     }
 
 
-def evaluate(root: Path, threshold: float = 50) -> dict:
+def select_threshold(rows: list[dict], max_false_positive_rate: float = 0.05) -> dict:
+    if not math.isfinite(max_false_positive_rate) or not 0 <= max_false_positive_rate <= 1:
+        raise ValueError("Maximum false-positive rate must be between 0 and 1")
+    candidate_thresholds = sorted({
+        0.0,
+        100.0,
+        *(max(0.0, min(100.0, float(row["score"]))) for row in rows),
+    })
+    feasible = [
+        calculate_metrics(rows, threshold)
+        for threshold in candidate_thresholds
+    ]
+    feasible = [
+        result for result in feasible
+        if result["false_positive_rate"] <= max_false_positive_rate
+    ]
+    if not feasible:
+        raise ValueError(
+            "No threshold on the calibration data meets the requested false-positive rate; "
+            "collect more representative calibration data or relax the target."
+        )
+    selected = max(
+        feasible,
+        key=lambda result: (
+            result["recall"],
+            result["precision"],
+            result["threshold"],
+        ),
+    )
+    return {
+        "threshold": selected["threshold"],
+        "target_false_positive_rate": max_false_positive_rate,
+        "calibration_false_positive_rate": selected["false_positive_rate"],
+        "calibration_recall": selected["recall"],
+        "calibration_precision": selected["precision"],
+        "calibration_samples": selected["samples"],
+        "selection_method": "highest recall subject to the requested calibration false-positive-rate ceiling",
+        "calibration_metrics": selected,
+    }
+
+
+def _score_dataset(root: Path) -> list[dict]:
     rows = []
     for label_name, label in (("real", 0), ("fake", 1)):
-        for path in (root / label_name).rglob("*"):
-            if not path.is_file():
-                continue
+        class_directory = root / label_name
+        if not class_directory.is_dir():
+            raise ValueError(f"Dataset is missing required directory: {class_directory}")
+        files = sorted(path for path in class_directory.rglob("*") if path.is_file())
+        if not files:
+            raise ValueError(f"Dataset class directory contains no files: {class_directory}")
+        for path in files:
             content = path.read_bytes()
             started = time.perf_counter()
             result = analyze_media(content, "", path.name, "deepfake")
             elapsed = (time.perf_counter() - started) * 1000
-            rows.append({"label": label, "score": result["score"], "latency_ms": elapsed, "method": result.get("method"), "pretrained": bool(result.get("pretrained_model"))})
-    if not rows:
-        raise ValueError("Dataset must contain real/ and fake/ directories with media files")
-    result = calculate_metrics(rows, threshold)
+            method = result.get("method")
+            if method in NON_DEEPFAKE_METHODS:
+                raise ValueError(
+                    f"Deepfake evaluation failed for {path}: {': '.join(result.get('reasons', ['no deepfake detector available']))}"
+                )
+            if not isinstance(result.get("score"), (int, float)) or not math.isfinite(float(result["score"])):
+                raise ValueError(f"Media detector returned no finite numeric score for {path}")
+            rows.append({
+                "label": label,
+                "score": result["score"],
+                "latency_ms": elapsed,
+                "method": method,
+                "pretrained": bool(result.get("pretrained_model")),
+            })
+    return rows
+
+
+def evaluate(
+    root: Path,
+    threshold: float = 50,
+    calibration_root: Path | None = None,
+    max_false_positive_rate: float = 0.05,
+) -> dict:
+    if calibration_root is not None and root.resolve() == calibration_root.resolve():
+        raise ValueError("Calibration and final evaluation datasets must be separate directories")
+    test_rows = _score_dataset(root)
+    selected_threshold = threshold
+    calibration = None
+    if calibration_root is not None:
+        calibration_rows = _score_dataset(calibration_root)
+        calibration = select_threshold(calibration_rows, max_false_positive_rate)
+        selected_threshold = calibration["threshold"]
+
+    result = calculate_metrics(test_rows, selected_threshold)
     result.update({
-        "median_latency_ms": median(row["latency_ms"] for row in rows),
-        "p95_latency_ms": sorted(row["latency_ms"] for row in rows)[max(0, math.ceil(len(rows) * 0.95) - 1)],
-        "methods": sorted({row["method"] for row in rows}),
-        "pretrained_outputs": sum(row["pretrained"] for row in rows),
+        "dataset": str(root),
+        "threshold_source": "separate_calibration_dataset" if calibration else "fixed_cutoff",
+        "calibration": calibration,
+        "score_interpretation": "Detector risk scores and selected decision threshold are not probabilities or proof of authenticity.",
+        "median_latency_ms": median(row["latency_ms"] for row in test_rows),
+        "p95_latency_ms": sorted(row["latency_ms"] for row in test_rows)[max(0, math.ceil(len(test_rows) * 0.95) - 1)],
+        "methods": sorted({row["method"] for row in test_rows}),
+        "pretrained_outputs": sum(row["pretrained"] for row in test_rows),
     })
     return result
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate CyberGuard media detectors")
-    parser.add_argument("--data", type=Path, required=True)
-    parser.add_argument("--threshold", type=float, default=50, help="Risk-score cutoff from 0 to 100")
+    parser.add_argument("--data", type=Path, required=True, help="Untouched final dataset with real/ and fake/ directories")
+    parser.add_argument("--threshold", type=float, default=50, help="Fixed risk-score cutoff from 0 to 100; ignored when --calibration-data is supplied")
+    parser.add_argument("--calibration-data", type=Path, help="Separate authorised calibration dataset with real/ and fake/ directories")
+    parser.add_argument("--max-false-positive-rate", type=float, default=0.05, help="Calibration false-positive-rate ceiling between 0 and 1")
+    parser.add_argument("--output", type=Path, help="Optional JSON output path")
     args = parser.parse_args()
-    print(json.dumps(evaluate(args.data, args.threshold), indent=2))
+    result = evaluate(
+        args.data,
+        args.threshold,
+        args.calibration_data,
+        args.max_false_positive_rate,
+    )
+    serialized = json.dumps(result, indent=2)
+    print(serialized)
+    if args.output:
+        args.output.write_text(serialized + "\n", encoding="utf-8")

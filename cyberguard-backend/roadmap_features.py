@@ -7,7 +7,7 @@ import hmac
 import json
 import math
 import re
-from collections import Counter
+from collections import Counter, deque
 from typing import Any
 
 
@@ -240,3 +240,78 @@ def compliance_diff(controls: list[dict[str, Any]], cves: list[dict[str, Any]] |
         if str(control.get("status", "")).lower() not in {"compliant", "passed"}:
             gaps.append({"type": "control", "id": control.get("id", "unknown"), "severity": "review", "action": control.get("evidence", "collect updated evidence")})
     return {"control_count": len(controls), "cve_count": len(cves), "gaps": gaps, "gap_count": len(gaps), "status": "attention required" if gaps else "no gaps detected", "source": "local control inventory and supplied CVE feed"}
+
+
+def supply_chain_blast_radius(
+    nodes: list[dict[str, Any]],
+    dependencies: list[dict[str, Any]],
+    compromised_nodes: list[str],
+) -> dict[str, Any]:
+    """Propagate a supplied supplier-to-dependent graph without claiming live discovery."""
+    if not isinstance(nodes, list) or len(nodes) > 1_000:
+        raise ValueError("Supply-chain inventory must be a list of at most 1000 nodes.")
+    if not isinstance(dependencies, list) or len(dependencies) > 5_000:
+        raise ValueError("Supply-chain dependencies must be a list of at most 5000 edges.")
+    if not isinstance(compromised_nodes, list) or len(compromised_nodes) > 1_000:
+        raise ValueError("Compromised node identifiers must be a list of at most 1000 ids.")
+
+    node_by_id: dict[str, dict[str, Any]] = {}
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            raise ValueError(f"Supply-chain node {index} must be an object.")
+        node_id = str(node.get("id") or node.get("node_id") or "").strip()
+        if not node_id:
+            raise ValueError(f"Supply-chain node {index} is missing an id.")
+        if len(node_id) > 128:
+            raise ValueError(f"Supply-chain node {index} id exceeds 128 characters.")
+        if node_id in node_by_id:
+            raise ValueError(f"Duplicate supply-chain node id: {node_id}")
+        node_by_id[node_id] = node
+
+    graph: dict[str, list[str]] = {node_id: [] for node_id in node_by_id}
+    for index, edge in enumerate(dependencies):
+        if not isinstance(edge, dict):
+            raise ValueError(f"Supply-chain dependency {index} must be an object.")
+        supplier = str(edge.get("supplier") or edge.get("source") or "").strip()
+        dependent = str(edge.get("dependent") or edge.get("target") or "").strip()
+        if not supplier or not dependent:
+            raise ValueError(f"Supply-chain dependency {index} requires supplier and dependent ids.")
+        if len(supplier) > 128 or len(dependent) > 128:
+            raise ValueError(f"Supply-chain dependency {index} node ids exceed 128 characters.")
+        if supplier not in node_by_id or dependent not in node_by_id:
+            raise ValueError(f"Supply-chain dependency {index} references an unknown node.")
+        graph[supplier].append(dependent)
+
+    sources = list(dict.fromkeys(str(node_id).strip() for node_id in compromised_nodes if str(node_id).strip()))
+    if any(source not in node_by_id for source in sources):
+        raise ValueError("Compromised node list references an unknown node.")
+
+    affected: dict[str, list[str]] = {}
+    queue = deque((source, [source]) for source in sources)
+    visited = set(sources)
+    while queue:
+        current, path = queue.popleft()
+        for dependent in graph[current]:
+            if dependent in visited:
+                continue
+            visited.add(dependent)
+            affected[dependent] = path + [dependent]
+            queue.append((dependent, path + [dependent]))
+
+    affected_nodes = [
+        {
+            "id": node_id,
+            "name": str(node_by_id[node_id].get("name") or node_by_id[node_id].get("label") or node_id)[:256],
+            "dependency_chain": affected[node_id],
+            "criticality": str(node_by_id[node_id].get("criticality") or "unknown")[:64],
+        }
+        for node_id in sorted(affected)
+    ]
+    return {
+        "compromised_nodes": sources,
+        "affected_count": len(affected_nodes),
+        "affected_nodes": affected_nodes,
+        "edge_direction": "supplier to downstream dependent",
+        "status": "blast radius calculated" if affected_nodes else "no downstream dependencies",
+        "mode": "data-driven simulation; inventory and compromise signals were operator supplied",
+    }

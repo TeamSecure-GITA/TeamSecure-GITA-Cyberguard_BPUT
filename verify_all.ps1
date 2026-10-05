@@ -54,8 +54,10 @@ Invoke-VerificationStep 'Pretrained image/audio model inference' {
 
 if ($env:API_URL) {
     Invoke-VerificationStep 'Deployed API health' {
-        $response = Invoke-RestMethod -Uri "$($env:API_URL.TrimEnd('/'))/" -TimeoutSec 15
-        if ($response.status -ne 'Active') { throw 'API root endpoint did not report Active.' }
+        $response = Invoke-RestMethod -Uri "$($env:API_URL.TrimEnd('/'))/health" -TimeoutSec 20
+        if ($response.status -ne 'Active' -or $response.system -ne 'CYBERGUARD AI Engine v2.0') {
+            throw 'The deployment health response does not match this CyberGuard API.'
+        }
     }
 }
 else {
@@ -65,7 +67,12 @@ else {
 if ($env:CYBERGUARD_FRONTEND_URL) {
     Invoke-VerificationStep 'Playwright frontend smoke test' {
         Push-Location (Join-Path $root 'cyberguard-frontend')
-        try { npm.cmd run test:smoke } finally { Pop-Location }
+        try {
+            if (-not $env:CYBERGUARD_HEAD_ADMIN_USERNAME -or -not $env:CYBERGUARD_HEAD_ADMIN_PASSWORD) {
+                throw 'Set CYBERGUARD_HEAD_ADMIN_USERNAME and CYBERGUARD_HEAD_ADMIN_PASSWORD in the environment to run the authenticated deployment smoke test.'
+            }
+            npm.cmd run test:smoke
+        } finally { Pop-Location }
     }
 }
 else {

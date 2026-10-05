@@ -3,7 +3,9 @@ import asyncio
 import hashlib
 import html
 import ipaddress
+import io
 import json
+import math
 import os
 import re
 import secrets
@@ -12,6 +14,8 @@ import sys
 import smtplib
 import time
 import base64
+import binascii
+import wave
 from email.message import EmailMessage
 
 try:
@@ -61,11 +65,12 @@ from webauthn.helpers.structs import PublicKeyCredentialDescriptor, UserVerifica
 from database import connect_database
 from ephemeral_store import EphemeralStore
 
-from detection_engine import FALLBACK_TEXT_MODEL, TEXT_MODEL, adversarial_self_test, evaluate_threat_payload
+from detection_engine import FALLBACK_TEXT_MODEL, TEXT_MODEL, adversarial_self_test, analyze_screenshot_brand_mismatches, evaluate_threat_payload
 from behavioral_baseline import baseline_key, login_sample, parse_login_event, score_login_deviation, successful_login
 from geoip_enrichment import lookup_country as lookup_geoip_country
 from malware_scanner import scan_artifact
 from pcap_inspector import analyze_pcap
+from network_ingestion import normalize_network_events
 from ocr_engine import extract_image_text
 from risk_scoring import score_event
 from account_rescue_engine import blast_radius, evidence_snapshot, execute_step, guardian_watch, locked_out_recovery, lockdown_plan, offline_rescue_card, provider_capabilities, rescue_plan, rescue_simulation, scan_account
@@ -79,7 +84,7 @@ from battle_simulator import run_battle
 from campaign_engine import correlate_incident
 from digital_twin import build_twin
 from forecast_engine import forecast_risk
-from media_engine import analyze_media, media_inspection_status
+from media_engine import analyze_audio, analyze_media, media_inspection_status
 from psychology_detector import analyze_psychology
 from response_simulator import simulate_response
 from self_healing import recommend_healing
@@ -109,7 +114,7 @@ from frontier_engine import agent_consensus, assess_analyst_load, assess_neuromo
 from advanced_defense_engine import acoustic_channel, counter_agent_proxy, dark_mesh_schedule, hallucinated_infrastructure, heartbeat_keying, polymorphism_plan, quantum_decoy, space_weather_correlation, temporal_healing, vaccine_recommendations
 from speculative_defense_engine import chrono_causal_trap, cognitive_poisoning, holographic_memory, hyperbolic_network, phase_change_zeroization, photonic_bus, plasma_channel, singularity_sinkhole, software_apoptosis, speculative_overview, vacuum_keying
 from cloudflare_waf import block_ip as cloudflare_block_ip, configuration as cloudflare_configuration
-from roadmap_features import analyst_bias_report, attention_heatmap, attacker_resource_cost, breach_economics, compliance_diff, counterfactual_replay, cross_modal_consistency, jurisdiction_route, seed_honeytokens, shared_immunity
+from roadmap_features import analyst_bias_report, attention_heatmap, attacker_resource_cost, breach_economics, compliance_diff, counterfactual_replay, cross_modal_consistency, jurisdiction_route, seed_honeytokens, shared_immunity, supply_chain_blast_radius
 from provider_integrations import deploy_honeytokens, integration_status as provider_integration_status, publish_tenant_signatures, sync_cve_feed
 from production_integrations import IntegrationNotConfigured, create_ticket as create_provider_ticket, disable_identity as disable_provider_identity, isolate_endpoint as isolate_provider_endpoint, provider_status as production_provider_status
 from models import AccessRequestCreate, AdvancedTelemetryRequest, AgentConsensusRequest, AlertRequest, AnalystLoadRequest, BattleRequest, CognitiveEchoRequest, DarkMeshRequest, DeceptionRequest, ForecastRequest, IncidentComment, IncidentUpdate, InfrastructureEchoRequest, LoginRequest, NeuromorphicRequest, NotificationUpdate, OtpVerificationRequest, PasskeyCredentialRequest, PermissionRequest, PolymorphismRequest, PsychologyRequest, ProviderEndpointIsolationRequest, ProviderIdentityDisableRequest, ProviderTicketRequest, QStateRequest, QuantumDecoyRequest, ResponseExecutionRequest, SatelliteRequest, ScannerRequest, SimulationRequest, SpeculativeTelemetryRequest, TemporalHealingRequest, ThreatAnalysisRequest, ThreatIntelLookup, TopologyMorphRequest, ThreatPhysicsRequest, UserCreate, VaccineRequest
@@ -124,15 +129,13 @@ LOGIN_FAILURE_WINDOW_SECONDS = max(60, int(os.getenv("CYBERGUARD_LOGIN_FAILURE_W
 
 
 def validate_auth_configuration(environment: str, jwt_secret: str, allow_anonymous_eval: bool, admin_username: str, admin_password: str):
-    if environment != "production":
-        return
-    if not jwt_secret:
+    if environment == "production" and not jwt_secret:
         raise RuntimeError("CYBERGUARD_JWT_SECRET must be set to a unique value in production")
-    if len(jwt_secret) < 32:
+    if environment == "production" and len(jwt_secret) < 32:
         raise RuntimeError("CYBERGUARD_JWT_SECRET must contain at least 32 characters in production")
     if not admin_username or len(admin_password) < 16:
-        raise RuntimeError("Production requires CYBERGUARD_HEAD_ADMIN_USERNAME and a CYBERGUARD_HEAD_ADMIN_PASSWORD of at least 16 characters")
-    if allow_anonymous_eval:
+        raise RuntimeError("Set CYBERGUARD_HEAD_ADMIN_USERNAME and a CYBERGUARD_HEAD_ADMIN_PASSWORD of at least 16 characters before startup")
+    if environment == "production" and allow_anonymous_eval:
         raise RuntimeError("CYBERGUARD_ALLOW_ANONYMOUS_EVAL cannot be enabled in production")
 
 
@@ -155,9 +158,18 @@ PUBLIC_APP_URL = os.getenv(
     else "http://127.0.0.1:5173",
 )
 ACCESS_REQUEST_TTL_HOURS = max(1, int(os.getenv("CYBERGUARD_ACCESS_REQUEST_TTL_HOURS", "24")))
-HEAD_ADMIN_USERNAME = configured_head_admin_username or "teamsecure.project@gmail.com"
-HEAD_ADMIN_PASSWORD = configured_head_admin_password or "Secure@9040"
+HEAD_ADMIN_USERNAME = configured_head_admin_username
+HEAD_ADMIN_PASSWORD = configured_head_admin_password
 MAX_UPLOAD_BYTES = max(1_000_000, int(os.getenv("CYBERGUARD_MAX_UPLOAD_BYTES", "10485760")))
+MAX_LIVE_MEDIA_FRAME_BYTES = 1_000_000
+MAX_LIVE_MEDIA_AUDIO_BYTES = 1_000_000
+MAX_LIVE_MEDIA_FRAMES = 300
+MAX_LIVE_MEDIA_AUDIO_CHUNKS = 60
+MAX_LIVE_MEDIA_AUDIO_SECONDS_PER_CHUNK = 5
+MAX_LIVE_MEDIA_AUDIO_TOTAL_BYTES = 20_000_000
+MIN_LIVE_MEDIA_AUDIO_INTERVAL_SECONDS = 4
+MAX_LIVE_MEDIA_SECONDS = 300
+MIN_LIVE_MEDIA_FRAME_INTERVAL_SECONDS = 0.5
 STARTED_AT = datetime.now(timezone.utc)
 EPHEMERAL_STATE = EphemeralStore.from_environment()
 OTP_TTL_SECONDS = max(60, int(os.getenv("CYBERGUARD_OTP_TTL_SECONDS", "300")))
@@ -194,9 +206,9 @@ DHCP_LEASES = {
 }
 
 IDP_USER_REGISTRY = {
-    "user_admin": {"name": "Amit Sharma", "role": "Network Administrator", "status": "ACTIVE", "password": "admin123"},
-    "user_faculty": {"name": "Dr. Mishra", "role": "Professor", "status": "ACTIVE", "password": "faculty123"},
-    "user_student": {"name": "Rohan Das", "role": "Student", "status": "SUSPENDED", "password": "student123"},
+    "user_admin": {"name": "Amit Sharma", "role": "Network Administrator", "status": "ACTIVE", "password": os.getenv("CYBERGUARD_IDP_ADMIN_PASSWORD", "")},
+    "user_faculty": {"name": "Dr. Mishra", "role": "Professor", "status": "ACTIVE", "password": os.getenv("CYBERGUARD_IDP_FACULTY_PASSWORD", "")},
+    "user_student": {"name": "Rohan Das", "role": "Student", "status": "SUSPENDED", "password": os.getenv("CYBERGUARD_IDP_STUDENT_PASSWORD", "")},
 }
 
 def get_db():
@@ -291,7 +303,7 @@ def idp_authenticate_user(payload: dict | None, user: dict[str, str] | None = No
     if profile["status"] == "SUSPENDED":
         return {"auth_status": "DENIED", "user": profile["name"], "reason": "Account quarantined automatically due to active security event alerts."}
 
-    if profile["password"] != password:
+    if not profile["password"] or profile["password"] != password:
         return {"auth_status": "DENIED", "user": profile["name"], "reason": "Invalid credentials for IdP authentication."}
 
     hardware_context = correlate_dhcp_ip(source_ip)
@@ -643,12 +655,23 @@ def initialize_database():
         if "metadata" not in columns:
             db.execute("ALTER TABLE incidents ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
         users = []
+        configured_demo_accounts = []
         if CYBERGUARD_ENV != "production":
-            users.extend([
-                ("analyst", hash_password("analyst123"), "analyst", "", None, "active"),
-                ("lead", hash_password("lead123"), "lead", "", None, "active"),
-                ("admin", hash_password("admin123"), "admin", SECURITY_OWNER_EMAIL, HEAD_ADMIN_USERNAME, "active"),
-            ])
+            demo_accounts = (
+                ("analyst", "CYBERGUARD_DEMO_ANALYST_PASSWORD", "analyst", "", None),
+                ("lead", "CYBERGUARD_DEMO_LEAD_PASSWORD", "lead", "", None),
+                ("admin", "CYBERGUARD_DEMO_ADMIN_PASSWORD", "admin", SECURITY_OWNER_EMAIL, HEAD_ADMIN_USERNAME),
+            )
+            for username, password_key, role, email, parent in demo_accounts:
+                password = os.getenv(password_key, "")
+                if password:
+                    configured_demo_accounts.append((username, password))
+                    users.append((username, hash_password(password), role, email, parent, "active"))
+                else:
+                    db.execute(
+                        "UPDATE users SET status = 'disabled' WHERE lower(username) = lower(?) AND role = ?",
+                        (username, role),
+                    )
         users.append((HEAD_ADMIN_USERNAME, hash_password(HEAD_ADMIN_PASSWORD), "head_admin", SECURITY_OWNER_EMAIL, None, "active"))
         db.executemany("INSERT OR IGNORE INTO users (username, password_hash, role, email, parent_username, status) VALUES (?, ?, ?, ?, ?, ?)", users)
         if CYBERGUARD_ENV == "production":
@@ -664,6 +687,12 @@ def initialize_database():
             "UPDATE users SET password_hash = ?, role = 'head_admin', email = ?, status = 'active' WHERE lower(username) = lower(?)",
             (hash_password(HEAD_ADMIN_PASSWORD), SECURITY_OWNER_EMAIL, HEAD_ADMIN_USERNAME),
         )
+        if CYBERGUARD_ENV != "production":
+            for username, password in configured_demo_accounts:
+                db.execute(
+                    "UPDATE users SET password_hash = ?, status = 'active' WHERE lower(username) = lower(?)",
+                    (hash_password(password), username),
+                )
 
 
 @asynccontextmanager
@@ -877,14 +906,39 @@ def admin_user(request: Request, user: dict[str, str] = Depends(current_user)) -
     return user
 
 
-def normalize_residency_metadata(metadata: Any) -> dict[str, str]:
+def normalize_residency_metadata(metadata: Any) -> dict[str, Any]:
     if not isinstance(metadata, dict):
         return {}
-    return {
+    normalized: dict[str, Any] = {
         key: value.strip()[:64]
         for key in ("country", "region")
         if isinstance((value := metadata.get(key)), str) and value.strip()
     }
+    source_location = metadata.get("source_location")
+    if source_location is not None:
+        if not isinstance(source_location, dict):
+            raise HTTPException(status_code=400, detail="Source location metadata must be an object.")
+        country = source_location.get("country")
+        latitude = source_location.get("lat")
+        longitude = source_location.get("lng")
+        if not isinstance(country, str) or not country.strip() or len(country.strip()) > 64:
+            raise HTTPException(status_code=400, detail="Source location must include a country label of at most 64 characters.")
+        if isinstance(latitude, bool) or isinstance(longitude, bool):
+            raise HTTPException(status_code=400, detail="Source location coordinates must be numeric.")
+        try:
+            latitude = float(latitude)
+            longitude = float(longitude)
+        except (TypeError, ValueError) as error:
+            raise HTTPException(status_code=400, detail="Source location coordinates must be numeric.") from error
+        if not math.isfinite(latitude) or not math.isfinite(longitude) or not (-90 <= latitude <= 90) or not (-180 <= longitude <= 180):
+            raise HTTPException(status_code=400, detail="Source location coordinates are outside valid latitude/longitude ranges.")
+        normalized["source_location"] = {
+            "country": country.strip(),
+            "lat": latitude,
+            "lng": longitude,
+            "source": "reported_metadata",
+        }
+    return normalized
 
 
 def store_incident(category: str, payload: str, assessment: dict, filename: str | None = None, file_hash: str | None = None, metadata: dict | None = None):
@@ -1331,11 +1385,65 @@ def record_identity_trust(payload: IdentityTrustRequest, user: dict[str, str] = 
 
 @app.get("/api/v1/prevention/insider-risk")
 def prevention_insider_risk(user: dict[str, str] = Depends(current_user)):
+    now = datetime.now(timezone.utc)
     with get_db() as db:
         row = db.execute(
             "SELECT event_id, assessment_json, incident_id, created_at FROM insider_risk_events WHERE username = ? ORDER BY created_at DESC LIMIT 1",
             (user["username"],),
         ).fetchone()
+        audit_rows = db.execute(
+            "SELECT action, resource, details, created_at FROM audit_logs "
+            "WHERE username = ? AND created_at >= ? ORDER BY created_at DESC LIMIT 500",
+            (user["username"], (now - timedelta(days=30)).isoformat()),
+        ).fetchall()
+    audit_activity = {
+        "downloads": 0,
+        "off_hours": False,
+        "privilege_change": False,
+        "sensitive_access": 0,
+    }
+    observed_audit_events = 0
+    for audit_row in audit_rows:
+        action = str(audit_row["action"] or "").lower()
+        resource = str(audit_row["resource"] or "").lower()
+        details = str(audit_row["details"] or "").lower()
+        if action == "insider_risk_assessed":
+            continue
+        try:
+            timestamp = datetime.fromisoformat(str(audit_row["created_at"]).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        timestamp = timestamp.astimezone(timezone.utc)
+        if timestamp > now:
+            continue
+        is_download = any(term in action for term in ("download", "export"))
+        is_privilege_change = any(term in action for term in ("role", "permission", "policy", "user_create", "user_update", "user_delete"))
+        is_sensitive_access = any(term in f"{action} {resource} {details}" for term in ("credential", "secret", "private_key", "sensitive", "bulk_export"))
+        if not (is_download or is_privilege_change or is_sensitive_access):
+            continue
+        observed_audit_events += 1
+        audit_activity["off_hours"] = audit_activity["off_hours"] or timestamp.hour < 6 or timestamp.hour >= 22
+        if is_download:
+            audit_activity["downloads"] += 1
+        if is_privilege_change:
+            audit_activity["privilege_change"] = True
+        if is_sensitive_access:
+            audit_activity["sensitive_access"] += 1
+
+    if observed_audit_events:
+        assessment = insider_threat_risk(audit_activity)
+        return {
+            **assessment,
+            "status": "review_required" if assessment["risk_score"] >= 60 else "observed",
+            "assessment_source": "application_audit_telemetry",
+            "event_count": observed_audit_events,
+            "observation_window_days": 30,
+            "event_id": None,
+            "incident_id": None,
+            "message": "Derived from this user's recorded CyberGuard audit events. Endpoint, file-system, and identity-provider telemetry are not connected.",
+        }
     if not row:
         return {
             "risk_score": None,
@@ -1665,17 +1773,43 @@ def alert_quality(user: dict[str, str] | None = None) -> dict:
 
 def persist_cyberguard_x(incident_id: int, incident: dict):
     genome = build_genome(incident)
-    timeline = build_timeline(incident)
     related = recent_incident_context()
     campaign = correlate_incident(incident, [item for item in related if item["id"] != incident_id])
     with get_db() as db:
         now = datetime.now(timezone.utc).isoformat()
+        stored_incident = db.execute(
+            "SELECT created_at FROM incidents WHERE id = ?",
+            (incident_id,),
+        ).fetchone()
+        timeline = build_timeline(incident, [
+            {
+                "type": "incident_created",
+                "label": "Incident created",
+                "detail": "Telemetry was recorded as an incident.",
+                "timestamp": stored_incident["created_at"],
+            },
+            {
+                "type": "analysis_completed",
+                "label": "Threat analysis completed",
+                "detail": "Risk assessment and indicators were persisted.",
+                "timestamp": now,
+            },
+            {
+                "type": "campaign_correlated",
+                "label": "Campaign correlation completed",
+                "detail": "The incident was compared with available incident evidence.",
+                "timestamp": now,
+            },
+        ])
         db.execute("INSERT INTO threat_fingerprints (incident_id, fingerprint, genome_json, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(incident_id) DO UPDATE SET fingerprint = excluded.fingerprint, genome_json = excluded.genome_json, created_at = excluded.created_at", (incident_id, genome["fingerprint"], serialize_genome(genome), now))
         db.execute("INSERT OR IGNORE INTO campaigns (campaign_id, confidence, stage, created_at) VALUES (?, ?, ?, ?)", (campaign["campaign_id"], campaign["confidence"], campaign["stage"], now))
         for match in campaign["related_incidents"]:
             db.execute("INSERT OR IGNORE INTO campaign_incidents (campaign_id, incident_id, score) VALUES (?, ?, ?)", (campaign["campaign_id"], match["incident_id"], match["score"]))
         db.execute("INSERT INTO campaign_incidents (campaign_id, incident_id, score) VALUES (?, ?, ?) ON CONFLICT DO NOTHING", (campaign["campaign_id"], incident_id, 100))
-        db.executemany("INSERT INTO incident_timelines (incident_id, event_json, created_at) VALUES (?, ?, ?)", [(incident_id, json.dumps(event), now) for event in timeline])
+        db.executemany(
+            "INSERT INTO incident_timelines (incident_id, event_json, created_at) VALUES (?, ?, ?)",
+            [(incident_id, json.dumps(event), event["timestamp"]) for event in timeline],
+        )
 
 
 @app.get("/")
@@ -1983,6 +2117,34 @@ def analyze_threat(request: ThreatAnalysisRequest, user: dict[str, str] = Depend
     return {"status": "success", "incident_id": incident_id, "category": request.category, "assessment": assessment, "user": user["username"]}
 
 
+@app.post("/api/v1/network/ingest")
+def ingest_network_telemetry(payload: dict[str, Any], user: dict[str, str] = Depends(current_user)):
+    try:
+        normalized = normalize_network_events(payload)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    serialized = json.dumps(normalized)
+    assessment = evaluate_threat_payload("network", serialized)
+    if assessment["risk_score"] < 40:
+        return {
+            "status": "accepted",
+            "detected": False,
+            "incident_id": None,
+            "assessment": assessment,
+        }
+
+    incident = analyze_threat(
+        ThreatAnalysisRequest(category="network", payload=serialized),
+        user,
+    )
+    return {
+        **incident,
+        "status": "incident_created",
+        "detected": True,
+    }
+
+
 @app.post("/api/v1/analyze/preview")
 def preview_threat(request: ThreatAnalysisRequest, user: dict[str, str] = Depends(current_user)):
     if not request.payload.strip():
@@ -2038,7 +2200,7 @@ async def analyze_file(category: str = Form(...), file: UploadFile = File(...), 
             raise HTTPException(status_code=503, detail=str(error)) from error
     is_image = content_type.startswith("image/") or filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"))
     ocr_result = extract_image_text(content) if is_image else None
-    email_result = analyze_eml(content) if is_eml else None
+    email_result = analyze_eml(content, scan_artifact) if is_eml else None
     payload = email_result["payload"] if email_result else json.dumps(network_capture) if network_capture else (content.decode("utf-8", errors="replace") if is_text else f"Uploaded {file.content_type or 'media'} file: {filename}")
     assessment = evaluate_threat_payload(category, payload)
     if category.lower() in {"auth_logs", "ato"}:
@@ -2046,18 +2208,61 @@ async def analyze_file(category: str = Form(...), file: UploadFile = File(...), 
     if category.lower() == "malware":
         malware_scan = scan_artifact(content, filename)
         assessment["malware_scan"] = malware_scan
-        assessment["indicators"].extend({"name": match["rule"], "weight": match["meta"].get("risk_score", 70)} for match in malware_scan["matches"])
+        assessment["indicators"].extend(
+            {
+                "name": match["rule"],
+                "weight": match["meta"].get("risk_score", 70),
+                **({"archive_path": match["archive_path"]} if match.get("archive_path") else {}),
+            }
+            for match in malware_scan["matches"]
+        )
         assessment["risk_score"] = max(assessment["risk_score"], malware_scan["risk_score"])
-        if malware_scan["matches"]:
+        if malware_scan["reasons"]:
             assessment["xai_explanation"] += " " + " ".join(malware_scan["reasons"])
+        archive_scan = malware_scan.get("archive_scan") or {}
+        if malware_scan["status"] in {"unavailable", "error", "partial"} or archive_scan.get("status") in {"error", "partial"}:
+            assessment["indicators"].append({
+                "name": "Incomplete Malware Scan Coverage",
+                "weight": 0,
+                "status": malware_scan["status"],
+            })
     assessment["iocs"] = enrich_iocs(extract_iocs(payload))
     if email_result:
         assessment["risk_score"] = max(assessment["risk_score"], email_result["score"])
         assessment["indicators"].extend(email_result["indicators"])
         assessment["xai_explanation"] += " " + " ".join(email_result["reasons"])
+        for attachment in email_result["attachments"]:
+            malware_scan = attachment.get("malware_scan")
+            if not malware_scan:
+                continue
+            assessment["risk_score"] = max(assessment["risk_score"], malware_scan["risk_score"])
+            assessment["indicators"].extend(
+                {
+                    "name": "Email Attachment YARA Match",
+                    "weight": match["meta"].get("risk_score", 70),
+                    "rule": match["rule"],
+                    "filename": attachment["filename"],
+                    **({"archive_path": match["archive_path"]} if match.get("archive_path") else {}),
+                }
+                for match in malware_scan["matches"]
+            )
+            if malware_scan["reasons"]:
+                assessment["xai_explanation"] += " " + " ".join(
+                    f"Attachment {attachment['filename']}: {reason}"
+                    for reason in malware_scan["reasons"]
+                )
+            archive_scan = malware_scan.get("archive_scan") or {}
+            if malware_scan["status"] in {"unavailable", "error", "partial"} or archive_scan.get("status") in {"error", "partial"}:
+                assessment["indicators"].append({
+                    "name": "Incomplete Email Attachment Scan Coverage",
+                    "weight": 0,
+                    "filename": attachment["filename"],
+                    "status": malware_scan["status"],
+                })
         assessment["sender_authenticity"] = email_result["metadata"]
         assessment["sender_identity_verification"] = email_result["identity_verification"]
         assessment["email_html_inspection"] = email_result["html_inspection"]
+        assessment["email_attachments"] = email_result["attachments"]
     if network_capture:
         assessment["network_capture_summary"] = {
             "packet_count": network_capture["packet_count"],
@@ -2080,6 +2285,23 @@ async def analyze_file(category: str = Form(...), file: UploadFile = File(...), 
             assessment["explanation_summary"] += " OCR: " + ocr_assessment["explanation_summary"]
             assessment["ocr_analysis"]["risk_score"] = ocr_assessment["risk_score"]
             assessment["ocr_analysis"]["evidence"] = ocr_assessment["explanation_summary"]
+            brand_mismatches = analyze_screenshot_brand_mismatches(ocr_result["text"])
+            if brand_mismatches:
+                assessment["risk_score"] = min(99, assessment["risk_score"] + 35)
+                assessment["ocr_analysis"]["brand_domain_mismatches"] = brand_mismatches
+                for mismatch in brand_mismatches:
+                    evidence = (
+                        f"OCR detected a {mismatch['brand']} login claim with a visible URL on "
+                        f"{mismatch['observed_domain']}; the configured brand domain is "
+                        f"{mismatch['expected_domain']}."
+                    )
+                    assessment["indicators"].append({
+                        "name": "OCR Login Brand-Domain Mismatch",
+                        "weight": 35,
+                        **mismatch,
+                    })
+                    assessment["xai_explanation"] += " " + evidence
+                    assessment["explanation_summary"] += " " + evidence
         elif ocr_result.get("reason"):
             assessment["ocr_analysis"]["reason"] = ocr_result["reason"]
     if not is_text and not email_result and not network_capture:
@@ -2088,6 +2310,10 @@ async def analyze_file(category: str = Form(...), file: UploadFile = File(...), 
         assessment["indicators"].extend(media_result["indicators"])
         assessment["xai_explanation"] += " " + " ".join(media_result["reasons"])
         assessment["media_method"] = media_result["method"]
+        if media_result.get("audio_analysis") is not None:
+            assessment["video_audio_analysis"] = media_result["audio_analysis"]
+        if media_result.get("audio_video_synchronization") is not None:
+            assessment["audio_video_synchronization"] = media_result["audio_video_synchronization"]
         if media_result.get("decoded_payload"):
             qr_assessment = evaluate_threat_payload("url", media_result["decoded_payload"])
             assessment["qr_payload"] = media_result["decoded_payload"]
@@ -2241,6 +2467,23 @@ def update_incident(incident_id: int, request: IncidentUpdate, user: dict[str, s
         if request.note:
             notes = f"{notes}\n[{datetime.now(timezone.utc).isoformat()}] {user['username']}: {request.note}".strip()
         db.execute("UPDATE incidents SET status = COALESCE(?, status), assigned_to = COALESCE(?, assigned_to), notes = ? WHERE id = ?", (request.status, assignee, notes, incident_id))
+        if request.status is not None or assignee is not None or request.note:
+            timestamp = datetime.now(timezone.utc).isoformat()
+            event = {
+                "type": "workflow_updated",
+                "label": "Incident workflow updated",
+                "detail": json.dumps({
+                    "status": request.status,
+                    "assigned_to": assignee,
+                    "comment_added": bool(request.note),
+                }),
+                "timestamp": timestamp,
+                "status": "complete",
+            }
+            db.execute(
+                "INSERT INTO incident_timelines (incident_id, event_json, created_at) VALUES (?, ?, ?)",
+                (incident_id, json.dumps(event), timestamp),
+            )
     write_audit(user, "incident_updated", f"incident:{incident_id}", json.dumps({"status": request.status, "assigned_to": assignee, "comment_added": bool(request.note)}))
     return {"status": "updated", "incident_id": incident_id}
 
@@ -2286,7 +2529,28 @@ def incident_correlations(incident_id: int, user: dict[str, str] = Depends(curre
 @app.get("/incidents/{incident_id}/attack-chain")
 @app.get("/incidents/{incident_id}/timeline")
 def incident_attack_chain(incident_id: int, user: dict[str, str] = Depends(current_user)):
-    return {"incident_id": incident_id, "events": build_timeline(incident_context(incident_id))}
+    incident = incident_context(incident_id)
+    with get_db() as db:
+        timeline_rows = db.execute(
+            "SELECT event_json FROM incident_timelines WHERE incident_id = ? ORDER BY created_at",
+            (incident_id,),
+        ).fetchall()
+        action_rows = db.execute(
+            "SELECT action_id, status, created_at FROM actions WHERE incident_id IN (?, ?) ORDER BY created_at",
+            (str(incident_id), f"INC-{incident_id:04d}"),
+        ).fetchall()
+    events = [json.loads(row["event_json"]) for row in timeline_rows]
+    events.extend(
+        {
+            "type": "response_action",
+            "label": "Response action recorded",
+            "detail": f"{row['action_id']} ({row['status']})",
+            "timestamp": row["created_at"],
+            "status": "complete",
+        }
+        for row in action_rows
+    )
+    return {"incident_id": incident_id, "events": build_timeline(incident, events)}
 
 
 @app.get("/api/v1/incidents/{incident_id}/intent")
@@ -2496,10 +2760,20 @@ def identity_risk(user: dict[str, str] = Depends(current_user)):
 
 @app.post("/api/v1/media/trust")
 async def media_trust(file: UploadFile = File(...), user: dict[str, str] = Depends(current_user)):
-    content = await file.read()
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded media cannot be empty.")
-    return analyze_trust_media(content, file.filename or "upload", file.content_type or "")
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"Uploaded file exceeds the {MAX_UPLOAD_BYTES // 1_000_000} MB limit.")
+    filename = file.filename or "upload"
+    content_type = (file.content_type or "").lower()
+    supported_suffixes = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".wav", ".flac", ".ogg", ".oga", ".aiff", ".aif", ".mp3", ".m4a", ".aac", ".mp4", ".avi", ".mov")
+    if not (content_type.startswith(("image/", "audio/", "video/")) or filename.lower().endswith(supported_suffixes)):
+        raise HTTPException(status_code=415, detail="Upload a supported image, audio, or video file.")
+    try:
+        return analyze_trust_media(content, filename, content_type)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=f"Media could not be inspected: {error}") from error
 
 
 @app.websocket("/api/v1/ws/events")
@@ -2508,6 +2782,7 @@ async def events_socket(websocket: WebSocket):
     offered_protocols = websocket.scope.get("subprotocols", [])
     token = next((value for value in offered_protocols if value != protocol), None)
     try:
+        initialize_database()
         current_user(f"Bearer {token}" if token else None)
     except HTTPException:
         await websocket.close(code=4401)
@@ -2533,6 +2808,234 @@ async def events_socket(websocket: WebSocket):
             if time.monotonic() >= next_heartbeat:
                 await websocket.send_json({"type": "heartbeat", "status": "connected"})
                 next_heartbeat = time.monotonic() + 20
+    except WebSocketDisconnect:
+        return
+
+
+@app.websocket("/api/v1/ws/media")
+async def live_media_socket(websocket: WebSocket):
+    protocol = "cyberguard.media.v1"
+    offered_protocols = websocket.scope.get("subprotocols", [])
+    token = next((value for value in offered_protocols if value != protocol), None)
+    try:
+        initialize_database()
+        user = current_user(f"Bearer {token}" if token else None)
+    except HTTPException:
+        await websocket.close(code=4401)
+        return
+
+    await websocket.accept(subprotocol=protocol if protocol in offered_protocols else None)
+    started_at = time.monotonic()
+    last_frame_at = 0.0
+    frames_analyzed = 0
+    highest_risk = 0
+    audio_chunks_analyzed = 0
+    audio_bytes_analyzed = 0
+    highest_audio_risk = 0
+    last_audio_at = 0.0
+    await websocket.send_json({
+        "type": "ready",
+        "max_frame_bytes": MAX_LIVE_MEDIA_FRAME_BYTES,
+        "max_frames": MAX_LIVE_MEDIA_FRAMES,
+        "max_audio_bytes_per_chunk": MAX_LIVE_MEDIA_AUDIO_BYTES,
+        "max_audio_chunks": MAX_LIVE_MEDIA_AUDIO_CHUNKS,
+        "max_audio_seconds_per_chunk": MAX_LIVE_MEDIA_AUDIO_SECONDS_PER_CHUNK,
+        "minimum_audio_interval_seconds": MIN_LIVE_MEDIA_AUDIO_INTERVAL_SECONDS,
+        "max_session_seconds": MAX_LIVE_MEDIA_SECONDS,
+        "minimum_frame_interval_seconds": MIN_LIVE_MEDIA_FRAME_INTERVAL_SECONDS,
+        "storage": "ephemeral",
+    })
+    try:
+        while True:
+            elapsed = time.monotonic() - started_at
+            if elapsed >= MAX_LIVE_MEDIA_SECONDS or frames_analyzed >= MAX_LIVE_MEDIA_FRAMES:
+                await websocket.send_json({
+                    "type": "session_limit",
+                    "frames_analyzed": frames_analyzed,
+                    "highest_risk": highest_risk,
+                    "audio_chunks_analyzed": audio_chunks_analyzed,
+                    "highest_audio_risk": highest_audio_risk,
+                    "reason": "Live media session limit reached.",
+                })
+                await websocket.close(code=1000)
+                return
+
+            try:
+                message_text = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=max(1.0, MAX_LIVE_MEDIA_SECONDS - elapsed),
+                )
+            except asyncio.TimeoutError:
+                await websocket.send_json({
+                    "type": "session_timeout",
+                    "frames_analyzed": frames_analyzed,
+                    "highest_risk": highest_risk,
+                    "audio_chunks_analyzed": audio_chunks_analyzed,
+                    "highest_audio_risk": highest_audio_risk,
+                    "reason": "Live media session reached its time limit.",
+                })
+                await websocket.close(code=1000)
+                return
+            max_encoded_bytes = max(MAX_LIVE_MEDIA_FRAME_BYTES, MAX_LIVE_MEDIA_AUDIO_BYTES) * 4 // 3 + 4096
+            if len(message_text) > max_encoded_bytes:
+                await websocket.send_json({"type": "media_error", "error": "WebSocket message exceeds the media size limit."})
+                continue
+            try:
+                message = json.loads(message_text)
+            except json.JSONDecodeError:
+                await websocket.send_json({"type": "frame_error", "error": "Message must be valid JSON."})
+                continue
+            if not isinstance(message, dict):
+                await websocket.send_json({"type": "frame_error", "error": "Message must be a JSON object."})
+                continue
+            if message.get("type") == "stop":
+                await websocket.send_json({
+                    "type": "session_complete",
+                    "frames_analyzed": frames_analyzed,
+                    "highest_risk": highest_risk,
+                    "audio_chunks_analyzed": audio_chunks_analyzed,
+                    "highest_audio_risk": highest_audio_risk,
+                    "storage": "ephemeral",
+                })
+                await websocket.close(code=1000)
+                return
+            if message.get("type") == "audio":
+                now = time.monotonic()
+                if last_audio_at and now - last_audio_at < MIN_LIVE_MEDIA_AUDIO_INTERVAL_SECONDS:
+                    await websocket.send_json({"type": "audio_error", "error": "Audio chunk rate limit exceeded."})
+                    continue
+                last_audio_at = now
+                encoded_audio = message.get("audio")
+                if not isinstance(encoded_audio, str) or not encoded_audio:
+                    await websocket.send_json({"type": "audio_error", "error": "A base64-encoded PCM WAV audio chunk is required."})
+                    continue
+                if audio_chunks_analyzed >= MAX_LIVE_MEDIA_AUDIO_CHUNKS:
+                    await websocket.send_json({"type": "audio_error", "error": "The live audio chunk limit has been reached."})
+                    continue
+                try:
+                    audio = base64.b64decode(encoded_audio, validate=True)
+                except (binascii.Error, ValueError):
+                    await websocket.send_json({"type": "audio_error", "error": "Audio chunk must be valid base64."})
+                    continue
+                if not audio or len(audio) > MAX_LIVE_MEDIA_AUDIO_BYTES:
+                    await websocket.send_json({
+                        "type": "audio_error",
+                        "error": f"Audio chunks must be between 1 byte and {MAX_LIVE_MEDIA_AUDIO_BYTES} bytes.",
+                    })
+                    continue
+                if audio_bytes_analyzed + len(audio) > MAX_LIVE_MEDIA_AUDIO_TOTAL_BYTES:
+                    await websocket.send_json({"type": "audio_error", "error": "The live audio byte limit has been reached."})
+                    continue
+                try:
+                    with wave.open(io.BytesIO(audio), "rb") as audio_file:
+                        channels = audio_file.getnchannels()
+                        sample_width = audio_file.getsampwidth()
+                        sample_rate = audio_file.getframerate()
+                        frame_count = audio_file.getnframes()
+                        duration = frame_count / sample_rate if sample_rate else 0
+                        if (
+                            channels != 1
+                            or sample_width != 2
+                            or sample_rate < 8_000
+                            or sample_rate > 48_000
+                            or duration <= 0
+                            or duration > MAX_LIVE_MEDIA_AUDIO_SECONDS_PER_CHUNK
+                            or audio_file.getcomptype() != "NONE"
+                        ):
+                            raise ValueError("unsupported audio parameters")
+                        frames = audio_file.readframes(frame_count)
+                        if len(frames) != frame_count * channels * sample_width:
+                            raise ValueError("truncated audio data")
+                except (wave.Error, EOFError, OSError, ValueError):
+                    await websocket.send_json({
+                        "type": "audio_error",
+                        "error": "Audio must be a valid mono PCM16 WAV chunk no longer than five seconds.",
+                    })
+                    continue
+                try:
+                    assessment = await asyncio.to_thread(analyze_audio, audio)
+                except (OSError, RuntimeError, ValueError, EOFError, wave.Error, ImportError) as error:
+                    await websocket.send_json({
+                        "type": "audio_error",
+                        "error": f"Audio analysis failed ({error.__class__.__name__}); this segment was not scored.",
+                    })
+                    continue
+                audio_chunks_analyzed += 1
+                audio_bytes_analyzed += len(audio)
+                audio_risk = max(0, min(99, int(assessment.get("score", 50))))
+                highest_audio_risk = max(highest_audio_risk, audio_risk)
+                await websocket.send_json({
+                    "type": "audio_result",
+                    "chunk_number": audio_chunks_analyzed,
+                    "risk_score": audio_risk,
+                    "method": assessment.get("method", "audio-analysis"),
+                    "indicators": assessment.get("indicators", [])[:20],
+                    "reasons": assessment.get("reasons", [])[:10],
+                    "duration_seconds": round(duration, 2),
+                    "calibration": "Uncalibrated audio triage; not a probability, voice identity, or audio/video synchronization result.",
+                })
+                continue
+            if message.get("type") != "frame":
+                await websocket.send_json({"type": "media_error", "error": "Expected a frame, audio, or stop message."})
+                continue
+
+            now = time.monotonic()
+            if last_frame_at and now - last_frame_at < MIN_LIVE_MEDIA_FRAME_INTERVAL_SECONDS:
+                await websocket.send_json({"type": "frame_error", "error": "Frame rate limit exceeded; wait before sending another frame."})
+                continue
+            last_frame_at = now
+            encoded_frame = message.get("image")
+            if not isinstance(encoded_frame, str) or not encoded_frame:
+                await websocket.send_json({"type": "frame_error", "error": "A base64-encoded image is required."})
+                continue
+            try:
+                frame = base64.b64decode(encoded_frame, validate=True)
+            except (binascii.Error, ValueError):
+                await websocket.send_json({"type": "frame_error", "error": "Frame image must be valid base64."})
+                continue
+            if not frame or len(frame) > MAX_LIVE_MEDIA_FRAME_BYTES:
+                await websocket.send_json({
+                    "type": "frame_error",
+                    "error": f"Frame must be between 1 byte and {MAX_LIVE_MEDIA_FRAME_BYTES} bytes.",
+                })
+                continue
+            try:
+                from PIL import Image, UnidentifiedImageError
+
+                with Image.open(io.BytesIO(frame)) as image:
+                    image.verify()
+                    width, height = image.size
+                    image_format = image.format
+            except (OSError, ValueError, SyntaxError, UnidentifiedImageError, Image.DecompressionBombError):
+                await websocket.send_json({"type": "frame_error", "error": "Frame is not a decodable image."})
+                continue
+            if image_format not in {"JPEG", "PNG", "WEBP"} or width > 1920 or height > 1080 or width * height > 2_073_600:
+                await websocket.send_json({
+                    "type": "frame_error",
+                    "error": "Frames must be JPEG, PNG, or WebP and no larger than 1920x1080 (2 megapixels).",
+                })
+                continue
+
+            analysis = await asyncio.to_thread(
+                analyze_media,
+                frame,
+                f"image/{image_format.lower()}",
+                f"live-frame-{frames_analyzed + 1}.{image_format.lower()}",
+                "deepfake",
+            )
+            frames_analyzed += 1
+            risk_score = max(0, min(99, int(analysis.get("score", 50))))
+            highest_risk = max(highest_risk, risk_score)
+            await websocket.send_json({
+                "type": "frame_result",
+                "frame_number": frames_analyzed,
+                "risk_score": risk_score,
+                "method": analysis.get("method", "media-analysis"),
+                "indicators": analysis.get("indicators", [])[:20],
+                "reasons": analysis.get("reasons", [])[:10],
+                "elapsed_seconds": round(time.monotonic() - started_at, 2),
+                "calibration": "Uncalibrated per-frame triage; not a probability or identity verification.",
+            })
     except WebSocketDisconnect:
         return
 
@@ -3153,6 +3656,24 @@ def roadmap_immunity_publish(request: dict, user: dict[str, str] = Depends(head_
 @app.get("/api/v1/roadmap/resource/{incident_id}")
 def roadmap_resource_cost(incident_id: int, user: dict[str, str] = Depends(current_user)):
     return attacker_resource_cost(incident_context(incident_id))
+
+
+@app.post("/api/v1/roadmap/supply-chain")
+def roadmap_supply_chain(request: dict, user: dict[str, str] = Depends(current_user)):
+    nodes = request.get("nodes", [])
+    dependencies = request.get("dependencies", request.get("edges", []))
+    compromised_nodes = request.get("compromised_nodes", [])
+    try:
+        result = supply_chain_blast_radius(nodes, dependencies, compromised_nodes)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    write_audit(
+        user,
+        "supply_chain_blast_radius",
+        f"{len(nodes)} nodes",
+        f"{result['affected_count']} downstream nodes",
+    )
+    return result
 
 
 @app.get("/api/v1/roadmap/attention")

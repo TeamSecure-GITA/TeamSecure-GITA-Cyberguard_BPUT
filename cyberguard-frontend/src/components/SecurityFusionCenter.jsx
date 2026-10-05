@@ -13,7 +13,7 @@ export default function SecurityFusionCenter({ apiBaseUrl, accessToken }) {
   const [authResult, setAuthResult] = useState({ auth_status: 'IDLE' });
   const [form, setForm] = useState({
     username: 'user_admin',
-    password: 'admin123',
+    password: '',
     source_ip: '192.168.1.99',
     service_provider_app: 'CYBERGUARD SOC',
   });

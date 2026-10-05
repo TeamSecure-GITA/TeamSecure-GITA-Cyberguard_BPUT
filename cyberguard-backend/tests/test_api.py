@@ -1,9 +1,12 @@
 import asyncio
+import base64
 import io
 import json
 import sqlite3
 import sys
 import types
+import zipfile
+import wave
 
 import pytest
 import numpy as np
@@ -72,7 +75,7 @@ import website_inspector
 from extended_intel import scan_payload
 from models import ForecastRequest, LoginRequest, SimulationRequest, ThreatAnalysisRequest, ThreatIntelLookup
 from models import ProviderEndpointIsolationRequest, ProviderIdentityDisableRequest, ProviderTicketRequest
-from roadmap_features import analyst_bias_report, attention_heatmap, attacker_resource_cost, breach_economics, compliance_diff, counterfactual_replay, cross_modal_consistency, jurisdiction_route, seed_honeytokens, shared_immunity
+from roadmap_features import analyst_bias_report, attention_heatmap, attacker_resource_cost, breach_economics, compliance_diff, counterfactual_replay, cross_modal_consistency, jurisdiction_route, seed_honeytokens, shared_immunity, supply_chain_blast_radius
 from prevention_engine import (
     campaign_aware_prevention,
     containment_action_plan,
@@ -756,17 +759,61 @@ def test_text_model_risk_gate_uses_configured_confidence_threshold(monkeypatch):
 def test_text_training_defaults_to_uci_and_saves_a_usable_artifact(tmp_path):
     assert DEFAULT_DATASET.name == "uci_sms_spam.csv"
     dataset = tmp_path / "messages.csv"
-    dataset.write_text(
-        "text,label\n" + "".join(f"normal campus notice {index},0\n" for index in range(20))
-        + "".join(f"urgent prize claim verify account {index},1\n" for index in range(20)),
-        encoding="utf-8",
+    rows = [
+        *[(f"normal campus notice benignword{index}", 0) for index in range(20)],
+        *[(f"urgent prize claim verify account spamword{index}", 1) for index in range(20)],
+    ]
+    dataset.write_text("text,label\n" + "".join(f"{text},{label}\n" for text, label in rows), encoding="utf-8")
+    from sklearn.model_selection import train_test_split
+
+    train_texts, holdout_texts, _, _ = train_test_split(
+        [text for text, _ in rows],
+        [label for _, label in rows],
+        test_size=0.25,
+        random_state=42,
+        stratify=[label for _, label in rows],
     )
     model_path = tmp_path / "model.joblib"
+    metrics_path = tmp_path / "metrics.json"
 
-    model = train_text_model(dataset, model_path)
+    model = train_text_model(dataset, model_path, metrics_path)
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    vocabulary = model.named_steps["tfidf"].vocabulary_
 
     assert model_path.exists()
+    assert metrics["artifact_is_holdout_evaluated"] is True
+    assert metrics["holdout_reused_for_artifact_training"] is False
+    assert metrics["artifact_training_samples"] == len(train_texts)
+    assert metrics["evaluation_holdout_samples"] == len(holdout_texts)
+    assert all(text.split()[-1] not in vocabulary for text in holdout_texts)
     assert model.predict_proba(["urgent verify account"])[0][1] > model.predict_proba(["normal campus notice"])[0][1]
+
+
+def test_trained_text_model_explains_local_linear_features_without_raw_identifiers(monkeypatch, tmp_path):
+    pytest.importorskip("sklearn")
+    dataset = tmp_path / "explainable-messages.csv"
+    dataset.write_text(
+        "text,label\n"
+        + "".join(f"normal campus notice routineword{index},0\n" for index in range(20))
+        + "".join(f"urgent verify credentials threatword{index},1\n" for index in range(20)),
+        encoding="utf-8",
+    )
+    model = train_text_model(dataset, tmp_path / "explainable-model.joblib")
+    monkeypatch.setattr(detection_engine, "TEXT_MODEL", model)
+    monkeypatch.setattr(detection_engine, "FALLBACK_TEXT_MODEL", None)
+
+    score, indicator = detection_engine.model_signal(
+        "urgent verify credentials threatword3 contact analyst@example.test at 203.0.113.5"
+    )
+    attribution = indicator["feature_attribution"]
+
+    assert 0 <= score <= 100
+    assert attribution["status"] == "available"
+    assert attribution["method"] == "tfidf_logistic_logit_contribution"
+    assert any(feature["effect"] == "suspicious" for feature in attribution["features"])
+    serialized = json.dumps(attribution)
+    assert "analyst@example.test" not in serialized
+    assert "203.0.113.5" not in serialized
 
 
 def test_flower_client_redacts_local_data_and_requires_both_labels(tmp_path):
@@ -888,6 +935,202 @@ def test_websocket_pushes_new_incident_metadata_for_authenticated_user(tmp_path,
     assert "payload" not in event["incident"]
 
 
+def test_websocket_initializes_missing_incident_schema_before_query(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "events-without-schema.db")
+    initialize_database()
+    session = login(LoginRequest(username="lead", password="lead123"))
+    token = session["access_token"]
+    with main.get_db() as db:
+        db.execute("DROP TABLE incidents")
+
+    client = TestClient(main.app)
+    with client.websocket_connect(
+        "/api/v1/ws/events",
+        subprotocols=[token, "cyberguard.events.v1"],
+    ) as websocket:
+        assert websocket.receive_json() == {"type": "ready"}
+        incident_id = main.store_incident(
+            "url",
+            "malicious example",
+            {"risk_score": 75, "risk_level": "High"},
+        )
+        event = websocket.receive_json()
+
+    client.close()
+    assert event["type"] == "incident_created"
+    assert event["incident"]["id"] == incident_id
+
+
+def test_live_media_websocket_analyzes_bounded_camera_frames_without_persisting_images(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from PIL import Image
+
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "live-media.db")
+    initialize_database()
+    session = login(LoginRequest(username="lead", password="lead123"))
+    token = session["access_token"]
+    frame_buffer = io.BytesIO()
+    Image.new("RGB", (32, 24), "navy").save(frame_buffer, format="JPEG")
+    encoded_frame = base64.b64encode(frame_buffer.getvalue()).decode("ascii")
+    analyzed = []
+
+    def fake_analyze_media(content, content_type, filename, category):
+        analyzed.append((content_type, filename, category, len(content)))
+        return {
+            "score": 67,
+            "method": "test-image-detector",
+            "indicators": [{"name": "test frame signal"}],
+            "reasons": ["test frame review"],
+        }
+
+    monkeypatch.setattr(main, "analyze_media", fake_analyze_media)
+    client = TestClient(main.app)
+    with client.websocket_connect(
+        "/api/v1/ws/media",
+        subprotocols=[token, "cyberguard.media.v1"],
+    ) as websocket:
+        ready = websocket.receive_json()
+        assert ready["type"] == "ready"
+        assert ready["storage"] == "ephemeral"
+        websocket.send_json({"type": "frame", "image": encoded_frame})
+        frame_result = websocket.receive_json()
+        assert frame_result["type"] == "frame_result"
+        assert frame_result["risk_score"] == 67
+        assert frame_result["frame_number"] == 1
+        assert "not a probability" in frame_result["calibration"]
+        websocket.send_json({"type": "stop"})
+        completed = websocket.receive_json()
+
+    client.close()
+    assert completed["type"] == "session_complete"
+    assert completed["frames_analyzed"] == 1
+    assert analyzed == [("image/jpeg", "live-frame-1.jpeg", "deepfake", len(frame_buffer.getvalue()))]
+    with main.get_db() as db:
+        assert db.execute("SELECT COUNT(*) FROM incidents").fetchone()[0] == 0
+
+
+def test_live_media_websocket_rejects_invalid_frame_data_and_requires_authentication(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from PIL import Image
+    from starlette.websockets import WebSocketDisconnect
+
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "live-media-validation.db")
+    monkeypatch.setattr(main, "MIN_LIVE_MEDIA_FRAME_INTERVAL_SECONDS", 0)
+    initialize_database()
+    session = login(LoginRequest(username="lead", password="lead123"))
+    token = session["access_token"]
+    client = TestClient(main.app)
+    with client.websocket_connect(
+        "/api/v1/ws/media",
+        subprotocols=[token, "cyberguard.media.v1"],
+    ) as websocket:
+        assert websocket.receive_json()["type"] == "ready"
+        websocket.send_json({"type": "frame", "image": "not base64!"})
+        rejected = websocket.receive_json()
+        assert rejected["type"] == "frame_error"
+        assert "valid base64" in rejected["error"]
+        oversized_dimensions = io.BytesIO()
+        Image.new("RGB", (1921, 1), "white").save(oversized_dimensions, format="JPEG")
+        websocket.send_json({
+            "type": "frame",
+            "image": base64.b64encode(oversized_dimensions.getvalue()).decode("ascii"),
+        })
+        dimension_rejection = websocket.receive_json()
+        assert dimension_rejection["type"] == "frame_error"
+        assert "1920x1080" in dimension_rejection["error"]
+        websocket.send_json({"type": "stop"})
+        assert websocket.receive_json()["type"] == "session_complete"
+
+    with pytest.raises(WebSocketDisconnect) as disconnect:
+        with client.websocket_connect("/api/v1/ws/media"):
+            pass
+    client.close()
+    assert disconnect.value.code == 4401
+
+
+def test_live_media_websocket_analyzes_opt_in_bounded_pcm_audio(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "live-media-audio.db")
+    monkeypatch.setattr(main, "MIN_LIVE_MEDIA_AUDIO_INTERVAL_SECONDS", 0)
+    initialize_database()
+    session = login(LoginRequest(username="lead", password="lead123"))
+    token = session["access_token"]
+    audio_buffer = io.BytesIO()
+    with wave.open(audio_buffer, "wb") as audio_file:
+        audio_file.setnchannels(1)
+        audio_file.setsampwidth(2)
+        audio_file.setframerate(16_000)
+        audio_file.writeframes(b"\x00\x00" * 16_000)
+    audio_content = audio_buffer.getvalue()
+    analyzed = []
+    monkeypatch.setattr(main, "analyze_audio", lambda content: (
+        analyzed.append(content) or {
+            "score": 73,
+            "method": "test-audio-detector",
+            "indicators": [{"name": "test voice signal"}],
+            "reasons": ["test audio review"],
+        }
+    ))
+    client = TestClient(main.app)
+    with client.websocket_connect(
+        "/api/v1/ws/media",
+        subprotocols=[token, "cyberguard.media.v1"],
+    ) as websocket:
+        ready = websocket.receive_json()
+        assert ready["max_audio_seconds_per_chunk"] == 5
+        websocket.send_json({"type": "audio", "audio": base64.b64encode(audio_content).decode("ascii")})
+        audio_result = websocket.receive_json()
+        assert audio_result["type"] == "audio_result"
+        assert audio_result["risk_score"] == 73
+        assert audio_result["duration_seconds"] == 1.0
+        assert "not a probability" in audio_result["calibration"]
+        websocket.send_json({"type": "stop"})
+        completed = websocket.receive_json()
+
+    client.close()
+    assert completed["type"] == "session_complete"
+    assert completed["audio_chunks_analyzed"] == 1
+    assert completed["highest_audio_risk"] == 73
+    assert analyzed == [audio_content]
+    with main.get_db() as db:
+        assert db.execute("SELECT COUNT(*) FROM incidents").fetchone()[0] == 0
+
+
+def test_live_media_websocket_rejects_invalid_and_oversized_audio(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "live-media-invalid-audio.db")
+    monkeypatch.setattr(main, "MIN_LIVE_MEDIA_AUDIO_INTERVAL_SECONDS", 0)
+    monkeypatch.setattr(main, "MAX_LIVE_MEDIA_AUDIO_BYTES", 32)
+    initialize_database()
+    session = login(LoginRequest(username="lead", password="lead123"))
+    token = session["access_token"]
+    client = TestClient(main.app)
+    with client.websocket_connect(
+        "/api/v1/ws/media",
+        subprotocols=[token, "cyberguard.media.v1"],
+    ) as websocket:
+        assert websocket.receive_json()["type"] == "ready"
+        websocket.send_json({"type": "audio", "audio": "not base64!"})
+        invalid = websocket.receive_json()
+        assert invalid["type"] == "audio_error"
+        assert "valid base64" in invalid["error"]
+        websocket.send_json({"type": "audio", "audio": base64.b64encode(b"x" * 33).decode("ascii")})
+        oversized = websocket.receive_json()
+        assert oversized["type"] == "audio_error"
+        assert "bytes" in oversized["error"]
+        websocket.send_json({"type": "audio", "audio": base64.b64encode(b"not a wav").decode("ascii")})
+        invalid_wav = websocket.receive_json()
+        assert invalid_wav["type"] == "audio_error"
+        assert "WAV" in invalid_wav["error"]
+        websocket.send_json({"type": "stop"})
+        assert websocket.receive_json()["type"] == "session_complete"
+    client.close()
+
+
 def test_cyberguard_x_artifacts_are_available():
     initialize_database()
     lead = login(LoginRequest(username="lead", password="lead123"))["user"]
@@ -895,7 +1138,17 @@ def test_cyberguard_x_artifacts_are_available():
     incident_id = result["incident_id"]
     assert incident_genome(incident_id, lead)["genome"]["fingerprint"]
     assert incident_correlations(incident_id, lead)["campaign_id"]
-    assert len(incident_attack_chain(incident_id, lead)["events"]) == 4
+    timeline = incident_attack_chain(incident_id, lead)["events"]
+    assert {event["type"] for event in timeline} == {
+        "incident_created",
+        "analysis_completed",
+        "campaign_correlated",
+    }
+    assert all(event["timestamp"] for event in timeline)
+    assert all(event["type"] not in {"signal", "triage", "response"} for event in timeline)
+    main.update_incident(incident_id, main.IncidentUpdate(status="Contained"), lead)
+    timeline = incident_attack_chain(incident_id, lead)["events"]
+    assert timeline[-1]["type"] == "workflow_updated"
     assert threat_forecast(ForecastRequest(horizon=3), lead)["forecast"][-1]["step"] == 3
     assert incident_simulation(incident_id, SimulationRequest(actions=["isolate", "revoke"]), lead)["projected_risk"] < result["assessment"]["risk_score"]
 
@@ -1288,6 +1541,59 @@ def test_limited_roadmap_workflows_are_functional():
     assert diff["gap_count"] == 2
 
 
+def test_supply_chain_blast_radius_propagates_only_through_supplied_dependencies():
+    nodes = [
+        {"id": "vendor", "name": "Shared package vendor", "criticality": "high"},
+        {"id": "service-a", "name": "Payments API", "criticality": "critical"},
+        {"id": "service-b", "name": "Analytics", "criticality": "medium"},
+        {"id": "unrelated", "name": "Unrelated system", "criticality": "low"},
+    ]
+    dependencies = [
+        {"supplier": "vendor", "dependent": "service-a"},
+        {"source": "service-a", "target": "service-b"},
+        {"supplier": "service-b", "dependent": "vendor"},
+    ]
+
+    result = supply_chain_blast_radius(nodes, dependencies, ["vendor"])
+
+    assert result["affected_count"] == 2
+    assert [node["id"] for node in result["affected_nodes"]] == ["service-a", "service-b"]
+    assert next(node for node in result["affected_nodes"] if node["id"] == "service-b")["dependency_chain"] == [
+        "vendor",
+        "service-a",
+        "service-b",
+    ]
+    assert result["mode"].startswith("data-driven simulation")
+    assert "unrelated" not in {node["id"] for node in result["affected_nodes"]}
+
+
+def test_supply_chain_blast_radius_rejects_unknown_graph_references():
+    with pytest.raises(ValueError, match="unknown node"):
+        supply_chain_blast_radius(
+            [{"id": "vendor"}],
+            [{"supplier": "vendor", "dependent": "unknown"}],
+            ["vendor"],
+        )
+
+    with pytest.raises(HTTPException) as error:
+        main.roadmap_supply_chain(
+            {"nodes": [{"id": "vendor"}], "dependencies": [], "compromised_nodes": ["unknown"]},
+            {"username": "lead", "role": "lead"},
+        )
+    assert error.value.status_code == 422
+
+    result = main.roadmap_supply_chain(
+        {
+            "nodes": [{"id": "vendor"}, {"id": "service"}],
+            "dependencies": [{"supplier": "vendor", "dependent": "service"}],
+            "compromised_nodes": ["vendor"],
+        },
+        {"username": "lead", "role": "lead"},
+    )
+    assert result["affected_count"] == 1
+    assert result["affected_nodes"][0]["id"] == "service"
+
+
 def test_counterfactual_replay_rejects_unmodeled_variables_and_actions():
     incident = {"database_id": 9, "risk_score": 70}
 
@@ -1536,6 +1842,197 @@ def test_bundled_yara_rules_detect_the_eicar_test_string():
     assert result["matches"][0]["rule"] == "EICAR_Antivirus_Test_File"
 
 
+def test_malware_scanner_detects_yara_signatures_inside_zip_without_extracting(monkeypatch):
+    class FakeMatch:
+        rule = "Archive_Test_Signature"
+        namespace = "default"
+        meta = {"risk_score": 86}
+
+    class FakeRules:
+        def match(self, data):
+            return [FakeMatch()] if b"nested test signature" in data else []
+
+    class FakeYara:
+        @staticmethod
+        def compile(filepath):
+            return FakeRules()
+
+    archive_bytes = io.BytesIO()
+    with zipfile.ZipFile(archive_bytes, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("folder/payload.bin", b"nested test signature")
+    monkeypatch.setattr(malware_scanner, "_load_yara", lambda: FakeYara())
+
+    result = malware_scanner.scan_artifact(archive_bytes.getvalue(), "bundle.zip")
+
+    assert result["status"] == "matches_found"
+    assert result["risk_score"] == 86
+    assert result["archive_scan"]["entries_scanned"] == 1
+    assert any(match.get("archive_path") == "bundle.zip!/payload.bin" for match in result["matches"])
+
+
+def test_malware_scanner_recurses_into_nested_zip_with_full_member_path(monkeypatch):
+    class FakeMatch:
+        rule = "Nested_Archive_Signature"
+        namespace = "default"
+        meta = {"risk_score": 89}
+
+    class FakeRules:
+        def match(self, data):
+            return [FakeMatch()] if b"nested archive payload" in data else []
+
+    class FakeYara:
+        @staticmethod
+        def compile(filepath):
+            return FakeRules()
+
+    inner_bytes = io.BytesIO()
+    with zipfile.ZipFile(inner_bytes, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("payload.bin", b"nested archive payload")
+    outer_bytes = io.BytesIO()
+    with zipfile.ZipFile(outer_bytes, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("inner.zip", inner_bytes.getvalue())
+    monkeypatch.setattr(malware_scanner, "_load_yara", lambda: FakeYara())
+
+    result = malware_scanner.scan_artifact(outer_bytes.getvalue(), "outer.zip")
+
+    assert result["status"] == "matches_found"
+    assert result["risk_score"] == 89
+    assert any(
+        match.get("archive_path") == "outer.zip!/inner.zip!/payload.bin"
+        for match in result["matches"]
+    )
+    assert result["archive_scan"]["entries_scanned"] == 2
+
+
+def test_malware_scanner_reports_nested_archive_depth_limit(monkeypatch):
+    class FakeRules:
+        def match(self, data):
+            return []
+
+    class FakeYara:
+        @staticmethod
+        def compile(filepath):
+            return FakeRules()
+
+    inner_bytes = io.BytesIO()
+    with zipfile.ZipFile(inner_bytes, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("payload.bin", b"payload")
+    outer_bytes = io.BytesIO()
+    with zipfile.ZipFile(outer_bytes, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("inner.zip", inner_bytes.getvalue())
+    monkeypatch.setattr(malware_scanner, "_load_yara", lambda: FakeYara())
+    monkeypatch.setattr(malware_scanner, "MAX_ARCHIVE_DEPTH", 0)
+
+    result = malware_scanner.scan_artifact(outer_bytes.getvalue(), "outer.zip")
+
+    assert result["status"] == "partial"
+    assert result["archive_scan"]["skipped_entries"] == [{
+        "filename": "outer.zip!/inner.zip",
+        "reason": "nesting_depth_limit",
+    }]
+
+
+def test_malware_scanner_reports_invalid_zip_named_file(monkeypatch):
+    class FakeRules:
+        def match(self, data):
+            return []
+
+    class FakeYara:
+        @staticmethod
+        def compile(filepath):
+            return FakeRules()
+
+    monkeypatch.setattr(malware_scanner, "_load_yara", lambda: FakeYara())
+
+    result = malware_scanner.scan_artifact(b"not a zip", "broken.zip")
+
+    assert result["status"] == "error"
+    assert result["archive_scan"]["skipped_entries"] == [{
+        "filename": "broken.zip",
+        "reason": "invalid_zip_archive",
+    }]
+    assert "not scanned" in result["reasons"][0]
+
+
+def test_malware_scanner_reports_archive_member_size_limit(monkeypatch):
+    class FakeRules:
+        def match(self, data):
+            return []
+
+    class FakeYara:
+        @staticmethod
+        def compile(filepath):
+            return FakeRules()
+
+    archive_bytes = io.BytesIO()
+    with zipfile.ZipFile(archive_bytes, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("large.bin", bytes(range(32)))
+    monkeypatch.setattr(malware_scanner, "_load_yara", lambda: FakeYara())
+    monkeypatch.setattr(malware_scanner, "MAX_ARCHIVE_MEMBER_BYTES", 8)
+
+    result = malware_scanner.scan_artifact(archive_bytes.getvalue(), "bundle.zip")
+
+    assert result["status"] == "partial"
+    assert result["archive_scan"]["skipped_entries"] == [{
+        "filename": "bundle.zip!/large.bin",
+        "reason": "member_size_limit",
+    }]
+    assert "not considered clean" in " ".join(result["reasons"])
+
+
+def test_malware_scanner_enforces_archive_compression_ratio_limit(monkeypatch):
+    class FakeRules:
+        def match(self, data):
+            return []
+
+    class FakeYara:
+        @staticmethod
+        def compile(filepath):
+            return FakeRules()
+
+    archive_bytes = io.BytesIO()
+    with zipfile.ZipFile(archive_bytes, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("compressed.txt", b"A" * 4096)
+    monkeypatch.setattr(malware_scanner, "_load_yara", lambda: FakeYara())
+    monkeypatch.setattr(malware_scanner, "MAX_ARCHIVE_COMPRESSION_RATIO", 2)
+
+    result = malware_scanner.scan_artifact(archive_bytes.getvalue(), "bundle.zip")
+
+    assert result["archive_scan"]["skipped_entries"] == [{
+        "filename": "bundle.zip!/compressed.txt",
+        "reason": "compression_ratio_limit",
+    }]
+    assert result["status"] == "partial"
+
+
+def test_malware_scanner_enforces_archive_entry_limit(monkeypatch):
+    class FakeRules:
+        def match(self, data):
+            return []
+
+    class FakeYara:
+        @staticmethod
+        def compile(filepath):
+            return FakeRules()
+
+    archive_bytes = io.BytesIO()
+    with zipfile.ZipFile(archive_bytes, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("first.bin", b"first")
+        archive.writestr("second.bin", b"second")
+    monkeypatch.setattr(malware_scanner, "_load_yara", lambda: FakeYara())
+    monkeypatch.setattr(malware_scanner, "MAX_ARCHIVE_ENTRIES", 1)
+
+    result = malware_scanner.scan_artifact(archive_bytes.getvalue(), "bundle.zip")
+
+    assert result["archive_scan"]["entries_scanned"] == 1
+    assert result["archive_scan"]["skipped_entries"] == [{
+        "filename": "bundle.zip!/second.bin",
+        "reason": "entry_count_limit",
+        "count": 1,
+    }]
+    assert result["status"] == "partial"
+
+
 def test_uploaded_malware_scan_updates_final_risk_and_explanation(monkeypatch, tmp_path):
     monkeypatch.setattr("main.DB_PATH", tmp_path / "malware-upload.sqlite")
     initialize_database()
@@ -1564,6 +2061,102 @@ def test_uploaded_malware_scan_updates_final_risk_and_explanation(monkeypatch, t
     assert result["assessment"]["malware_scan"]["status"] == "matches_found"
     assert result["assessment"]["risk_level"] == "Critical"
     assert result["assessment"]["xai_explanation"].startswith("Critical Risk:")
+
+
+def test_uploaded_malware_scan_exposes_nested_member_match_path(monkeypatch, tmp_path):
+    monkeypatch.setattr("main.DB_PATH", tmp_path / "malware-archive-upload.sqlite")
+    initialize_database()
+    monkeypatch.setattr("main.scan_artifact", lambda *_: {
+        "status": "matches_found",
+        "engine": "yara",
+        "sha256": "b" * 64,
+        "filename": "bundle.zip",
+        "matches": [{
+            "rule": "Nested_Test_Signature",
+            "namespace": "default",
+            "meta": {"risk_score": 82},
+            "archive_path": "bundle.zip!/payload.bin",
+        }],
+        "risk_score": 82,
+        "reasons": ["YARA rule matched in archive member bundle.zip!/payload.bin."],
+        "archive_scan": {
+            "status": "matches_found",
+            "entries_scanned": 1,
+            "skipped_entries": [],
+            "skipped_count": 0,
+        },
+    })
+    monkeypatch.setattr("main.persist_cyberguard_x", lambda *args, **kwargs: None)
+    monkeypatch.setattr("main.write_audit", lambda *args, **kwargs: None)
+    monkeypatch.setattr("main.create_notification", lambda *args, **kwargs: None)
+    monkeypatch.setattr("main.evaluate_threat_payload", lambda category, payload: {
+        "risk_score": 5,
+        "risk_level": "Safe",
+        "indicators": [],
+        "recommended_actions": [{"id": "warn_user", "label": "Warn"}],
+        "xai_explanation": "Safe Risk: file triage.",
+        "explanation_summary": "File triage.",
+    })
+
+    result = asyncio.run(analyze_file(
+        category="malware",
+        file=UploadFile(file=io.BytesIO(b"zip bytes"), filename="bundle.zip"),
+        metadata="{}",
+        user={"username": "analyst", "role": "analyst"},
+    ))
+
+    assert result["assessment"]["risk_score"] == 82
+    assert result["assessment"]["indicators"][0]["archive_path"] == "bundle.zip!/payload.bin"
+    assert "bundle.zip!/payload.bin" in result["assessment"]["xai_explanation"]
+
+
+def test_uploaded_malware_partial_archive_scan_is_visible_without_inventing_risk(monkeypatch, tmp_path):
+    monkeypatch.setattr("main.DB_PATH", tmp_path / "malware-partial-upload.sqlite")
+    initialize_database()
+    monkeypatch.setattr("main.analyze_media", lambda *args: {
+        "score": 0,
+        "indicators": [],
+        "reasons": [],
+        "method": "unsupported-file",
+    })
+    monkeypatch.setattr("main.scan_artifact", lambda *_: {
+        "status": "partial",
+        "engine": "yara",
+        "sha256": "c" * 64,
+        "filename": "bundle.zip",
+        "matches": [],
+        "risk_score": 0,
+        "reasons": ["Archive inspection skipped 1 member; that member is not considered clean."],
+        "archive_scan": {
+            "status": "partial",
+            "entries_scanned": 0,
+            "skipped_entries": [{"filename": "bundle.zip!/large.bin", "reason": "member_size_limit"}],
+            "skipped_count": 1,
+        },
+    })
+    monkeypatch.setattr("main.persist_cyberguard_x", lambda *args, **kwargs: None)
+    monkeypatch.setattr("main.write_audit", lambda *args, **kwargs: None)
+    monkeypatch.setattr("main.create_notification", lambda *args, **kwargs: None)
+    monkeypatch.setattr("main.evaluate_threat_payload", lambda category, payload: {
+        "risk_score": 5,
+        "risk_level": "Safe",
+        "indicators": [],
+        "recommended_actions": [{"id": "warn_user", "label": "Warn"}],
+        "xai_explanation": "Safe Risk: file triage.",
+        "explanation_summary": "File triage.",
+    })
+
+    result = asyncio.run(analyze_file(
+        category="malware",
+        file=UploadFile(file=io.BytesIO(b"zip bytes"), filename="bundle.zip"),
+        metadata="{}",
+        user={"username": "analyst", "role": "analyst"},
+    ))
+
+    assessment = result["assessment"]
+    assert assessment["risk_score"] == 5
+    assert any(item["name"] == "Incomplete Malware Scan Coverage" for item in assessment["indicators"])
+    assert "not considered clean" in assessment["xai_explanation"]
 
 
 def test_network_flow_and_api_rate_analytics_use_structured_fields():
@@ -1666,6 +2259,47 @@ def test_eml_attachment_metadata_and_text_are_inspected():
     assert result["attachments"][0]["status"] == "text_content_scanned"
     assert result["attachments"][1]["status"] == "active_content_review"
     assert any(indicator["name"] == "Risky Email Attachment Type" for indicator in result["indicators"])
+
+
+def test_eml_upload_scans_attachments_and_includes_yara_matches_in_assessment(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "eml-attachment-scan.db")
+    monkeypatch.setattr(main, "scan_artifact", lambda content, filename: {
+        "status": "matches_found",
+        "engine": "yara",
+        "sha256": "a" * 64,
+        "filename": filename,
+        "matches": [{
+            "rule": "Test_Malware",
+            "namespace": "cyberguard",
+            "meta": {"risk_score": 88},
+        }],
+        "risk_score": 88,
+        "reasons": ["YARA rule matched: Test_Malware."],
+    })
+    initialize_database()
+    message = (
+        b"From: sender@example.com\r\n"
+        b"Subject: Document\r\n"
+        b"MIME-Version: 1.0\r\n"
+        b"Content-Type: multipart/mixed; boundary=sample\r\n\r\n"
+        b"--sample\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nPlease review.\r\n"
+        b"--sample\r\nContent-Type: application/octet-stream\r\n"
+        b"Content-Disposition: attachment; filename=invoice.bin\r\n"
+        b"Content-Transfer-Encoding: base64\r\n\r\nTVqQ\r\n--sample--\r\n"
+    )
+
+    result = asyncio.run(main.analyze_file(
+        category="email",
+        file=UploadFile(file=io.BytesIO(message), filename="message.eml", headers={"content-type": "message/rfc822"}),
+        metadata="{}",
+        user={"username": "analyst", "role": "analyst"},
+    ))
+
+    assessment = result["assessment"]
+    assert assessment["risk_score"] == 88
+    assert assessment["email_attachments"][0]["malware_scan"]["status"] == "matches_found"
+    assert any(item["name"] == "Email Attachment YARA Match" for item in assessment["indicators"])
+    assert "Test_Malware" in assessment["xai_explanation"]
 
 
 def test_category_playbooks_are_dry_run_and_approval_gated():

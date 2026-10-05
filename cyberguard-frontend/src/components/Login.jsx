@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import axios from 'axios';
-import { LockKeyhole, LogIn, Shield } from 'lucide-react';
+import { ArrowLeft, LockKeyhole, LogIn, Shield } from 'lucide-react';
 
 import { getApiBaseUrl } from '../apiConfig';
 
-export default function Login({ onLogin }) {
+export default function Login({ onLogin, onReturnToPortal }) {
   const apiBaseUrl = getApiBaseUrl();
   const [username, setUsername] = useState('teamsecure.project@gmail.com');
   const [password, setPassword] = useState('');
@@ -48,9 +48,10 @@ export default function Login({ onLogin }) {
         <label className="block text-xs font-semibold text-slate-400">Password
           <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password configured for this server" className="mt-2 w-full bg-darkBg border border-slate-700 rounded-lg p-3 text-sm text-white focus:border-cyan-500 focus:outline-none" />
         </label>
-        {error && <p className="text-xs text-red-400">{error}</p>}
+        {error && <p role="alert" className="text-xs text-red-400">{error}</p>}
         <button disabled={loading} className="w-full py-3 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-sm font-semibold flex items-center justify-center gap-2"><LockKeyhole size={16} />{loading ? 'Signing in...' : <><LogIn size={16} />Sign in</>}</button>
-        <p className="text-[11px] text-slate-500">Head administrator: teamsecure.project@gmail.com</p>
+        {onReturnToPortal && <button type="button" onClick={onReturnToPortal} className="w-full py-2 rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 text-sm font-medium flex items-center justify-center gap-2"><ArrowLeft size={15} />Return to portal</button>}
+        <p className="text-[11px] text-slate-500">Use the administrator credentials configured for this API server.</p>
       </form>
     </main>
   );

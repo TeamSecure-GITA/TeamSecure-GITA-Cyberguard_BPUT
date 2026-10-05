@@ -27,7 +27,7 @@ def load_dataset(path: Path):
     return texts, labels
 
 
-def train(dataset_path: Path, output_path: Path):
+def train(dataset_path: Path, output_path: Path, metrics_path: Path | None = None):
     texts, labels = load_dataset(dataset_path)
     train_texts, test_texts, train_labels, test_labels = train_test_split(
         texts, labels, test_size=0.25, random_state=42, stratify=labels
@@ -36,22 +36,26 @@ def train(dataset_path: Path, output_path: Path):
     evaluation_model.fit(train_texts, train_labels)
     predictions = evaluation_model.predict(test_texts)
     report = classification_report(test_labels, predictions, output_dict=True, zero_division=0)
-    model = _build_model()
-    model.fit(texts, labels)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(model, output_path)
+    joblib.dump(evaluation_model, output_path)
     metrics = {
         "dataset": str(dataset_path),
         "samples": len(texts),
         "evaluation_training_samples": len(train_texts),
         "evaluation_holdout_samples": len(test_texts),
-        "artifact_training_samples": len(texts),
+        "artifact_training_samples": len(train_texts),
+        "artifact_is_holdout_evaluated": True,
+        "holdout_reused_for_artifact_training": False,
         "accuracy": accuracy_score(test_labels, predictions),
         "classification_report": report,
         "model": str(output_path),
     }
-    print(json.dumps(metrics, indent=2))
-    return model
+    serialized_metrics = json.dumps(metrics, indent=2)
+    if metrics_path:
+        metrics_path.parent.mkdir(parents=True, exist_ok=True)
+        metrics_path.write_text(serialized_metrics + "\n", encoding="utf-8")
+    print(serialized_metrics)
+    return evaluation_model
 
 
 def _build_model():
@@ -65,5 +69,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train the CYBERGUARD text threat classifier.")
     parser.add_argument("--data", type=Path, default=DEFAULT_DATASET, help="CSV file with text,label columns")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Output joblib model path")
+    parser.add_argument("--metrics-output", type=Path, help="Optional JSON file for holdout metrics")
     args = parser.parse_args()
-    train(args.data, args.output)
+    train(args.data, args.output, args.metrics_output)

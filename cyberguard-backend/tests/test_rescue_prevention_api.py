@@ -153,6 +153,31 @@ def test_production_database_seeds_only_configured_head_admin(monkeypatch, tmp_p
     assert error.value.status_code == 401
 
 
+def test_development_database_does_not_seed_unconfigured_demo_users(monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "no-demo-users.sqlite")
+    monkeypatch.setattr(main, "CYBERGUARD_ENV", "development")
+    monkeypatch.setattr(main, "HEAD_ADMIN_USERNAME", "configured-owner")
+    monkeypatch.setattr(main, "HEAD_ADMIN_PASSWORD", "a-long-development-password")
+    for key in (
+        "CYBERGUARD_DEMO_ANALYST_PASSWORD",
+        "CYBERGUARD_DEMO_LEAD_PASSWORD",
+        "CYBERGUARD_DEMO_ADMIN_PASSWORD",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    main.initialize_database()
+
+    with main.get_db() as db:
+        usernames = {row["username"] for row in db.execute("SELECT username FROM users").fetchall()}
+
+    assert usernames == {"configured-owner"}
+
+
+def test_auth_configuration_requires_explicit_admin_credentials_in_development():
+    with pytest.raises(RuntimeError, match="CYBERGUARD_HEAD_ADMIN_USERNAME"):
+        main.validate_auth_configuration("development", "", False, "", "")
+
+
 def test_production_disables_demo_identity_provider(monkeypatch):
     monkeypatch.setattr(main, "CYBERGUARD_ENV", "production")
 

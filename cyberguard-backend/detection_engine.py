@@ -11,6 +11,7 @@ from typing import List
 from urllib.parse import parse_qs, urlparse
 from xml.etree import ElementTree
 from regional_scam_detector import analyze_regional_scam
+from dlp_engine import analyze_dlp
 
 import tldextract
 
@@ -87,7 +88,48 @@ def model_signal(payload: str) -> tuple[int, dict | None]:
     else:
         return 0, None
     score = round(probability * 100)
-    return score, {"name": "Trained Text Model Output", "model_output": score, "model": "TF-IDF + Logistic Regression" if TEXT_MODEL is not None else FALLBACK_TEXT_MODEL["algorithm"]}
+    indicator = {"name": "Trained Text Model Output", "model_output": score, "model": "TF-IDF + Logistic Regression" if TEXT_MODEL is not None else FALLBACK_TEXT_MODEL["algorithm"]}
+    if TEXT_MODEL is not None:
+        indicator["feature_attribution"] = model_feature_attribution(payload)
+    return score, indicator
+
+
+def model_feature_attribution(payload: str, limit: int = 5) -> dict:
+    """Explain a linear text-model margin without presenting terms as causal evidence."""
+    if TEXT_MODEL is None:
+        return {"status": "unavailable", "reason": "The deployed text model does not expose linear feature weights.", "features": []}
+    try:
+        vectorizer = TEXT_MODEL.named_steps["tfidf"]
+        classifier = TEXT_MODEL.named_steps["classifier"]
+        if len(classifier.coef_) != 1 or len(classifier.classes_) != 2:
+            return {"status": "unavailable", "reason": "Feature attribution supports only binary linear classifiers.", "features": []}
+        values = vectorizer.transform([payload]).tocsr()
+        coefficients = classifier.coef_[0]
+        suspicious_index = list(classifier.classes_).index(1)
+        direction = 1 if suspicious_index == 1 else -1
+        contributions = []
+        feature_names = vectorizer.get_feature_names_out()
+        for index, value in zip(values.indices, values.data):
+            contribution = float(value) * float(coefficients[index]) * direction
+            if contribution == 0:
+                continue
+            term = str(feature_names[index])
+            if re.search(r"[@:/\\\d]", term) or len(term) > 48:
+                term = "[redacted feature]"
+            contributions.append({
+                "feature": term,
+                "effect": "suspicious" if contribution > 0 else "benign",
+                "logit_contribution": round(contribution, 5),
+            })
+        contributions.sort(key=lambda item: abs(item["logit_contribution"]), reverse=True)
+        return {
+            "status": "available",
+            "method": "tfidf_logistic_logit_contribution",
+            "interpretation": "Signed local model-margin contribution; not causal evidence or a calibrated probability.",
+            "features": contributions[:max(1, min(int(limit), 10))],
+        }
+    except (AttributeError, KeyError, TypeError, ValueError, IndexError):
+        return {"status": "unavailable", "reason": "The configured model pipeline is incompatible with linear feature attribution.", "features": []}
 
 def analyze_phishing_and_url(payload: str) -> tuple[int, List[str], List[dict]]:
     score = 5
@@ -198,6 +240,38 @@ def analyze_url_intelligence(payload: str) -> tuple[int, List[str], List[dict]]:
         reasons.append("No URL artifact was supplied for reputation enrichment.")
         indicators.append({"name": "URL Extraction", "weight": 1, "observed_urls": 0})
     return min(score, 99), reasons, indicators
+
+
+def analyze_screenshot_brand_mismatches(text: str) -> list[dict[str, str]]:
+    url_pattern = r"(?:(?:https?://|www\.)[^\s<>\"'`]+|(?:[a-z0-9](?:[a-z0-9-]{0,62}\.)+[a-z]{2,63})(?:/[^\s<>\"'`]*)?)"
+    urls = re.findall(url_pattern, text, re.IGNORECASE)
+    visible_text = re.sub(url_pattern, " ", text, flags=re.IGNORECASE)
+    if not re.search(r"\b(?:sign[\s-]?in|log[\s-]?in|password|passcode|user\s*name|email address|verify your account|account verification)\b", visible_text, re.IGNORECASE):
+        return []
+
+    domains = set()
+    for raw_url in urls:
+        candidate = raw_url.rstrip(".,;:!?)]}")
+        parsed = urlparse(candidate if "://" in candidate else f"https://{candidate}")
+        hostname = (parsed.hostname or "").lower().rstrip(".")
+        if hostname:
+            extracted = tldextract.extract(hostname)
+            domains.add((hostname, f"{extracted.domain}.{extracted.suffix}" if extracted.suffix else hostname))
+
+    mismatches = []
+    for brand, trusted_domain in BRAND_DOMAINS.items():
+        if not re.search(rf"\b{re.escape(brand)}\b", visible_text, re.IGNORECASE):
+            continue
+        for hostname, registered_domain in domains:
+            if registered_domain != trusted_domain and not registered_domain.endswith(f".{trusted_domain}"):
+                mismatches.append({
+                    "brand": brand,
+                    "observed_domain": hostname,
+                    "expected_domain": trusted_domain,
+                })
+
+    return mismatches
+
 
 def analyze_account_takeover(payload: str) -> tuple[int, List[str], List[dict]]:
     score = 20
@@ -668,6 +742,11 @@ def analyze_technical_activity(payload: str, category: str = "network") -> tuple
         score = min(99, score + structured_score - 15)
         reasons.extend(structured_reasons)
         indicators.extend(structured_indicators)
+    if category == "exfiltration":
+        dlp_result = analyze_dlp(payload)
+        score = min(99, score + dlp_result["risk_score"])
+        reasons.extend(dlp_result["reasons"])
+        indicators.extend(dlp_result["indicators"])
     return min(score, 99), reasons, indicators
 
 def adversarial_self_test(category: str, payload: str) -> dict:
@@ -769,7 +848,7 @@ def evaluate_threat_payload(category: str, payload: str) -> dict:
         score, reasons, indicators = analyze_impersonation(payload)
         detection_method = "identity-impersonation"
         mitre_techniques = ["T1036", "T1566.001"]
-    elif category == "deepfake":
+    elif category in {"deepfake", "image", "audio", "video"}:
         score, reasons, indicators = analyze_deepfake(payload)
         detection_method = "synthetic-media-triage"
         mitre_techniques = ["T1036", "T1585"]
@@ -821,16 +900,31 @@ def evaluate_threat_payload(category: str, payload: str) -> dict:
     for indicator in indicators:
         indicator.setdefault("weight", max(1, round(score / max(len(indicators), 1))))
     
-    # Intelligent Playbook Mappings
-    actions = []
-    if level in ["Critical", "High"]:
-        actions.append({"id": "block_domain", "label": "Block Suspicious Domain / IP"})
-        actions.append({"id": "quarantine", "label": "Quarantine Email / Flag Media"})
-        actions.append({"id": "revoke_session", "label": "Revoke Active Session & Enforce MFA"})
-        actions.append({"id": "notify_soc", "label": "Notify Administrator / SOC"})
-        actions.append({"id": "escalate", "label": "Escalate for Investigation"})
-    else:
-        actions.append({"id": "warn_user", "label": "Display Safety Banner"})
+    actions = [{"id": "warn_user", "label": "Warn the user and verify through an official channel"}]
+    if level in {"Critical", "High"}:
+        actions = []
+        if category == "url":
+            actions.append({"id": "block_domain", "label": "Block the suspicious URL or domain"})
+        elif category in {"email", "phishing"}:
+            actions.extend([
+                {"id": "quarantine", "label": "Quarantine the suspicious message"},
+                {"id": "block_domain", "label": "Block malicious sender links and domains"},
+            ])
+        elif category in {"sms", "social"}:
+            actions.append({"id": "warn_user", "label": "Warn recipients and report the suspicious message"})
+        elif category == "deepfake":
+            actions.append({"id": "quarantine", "label": "Hold media for manual authenticity review"})
+        elif category == "impersonation":
+            actions.append({"id": "quarantine", "label": "Preserve impersonation evidence for review"})
+        elif category in {"ato", "auth_logs"}:
+            actions.append({"id": "revoke_session", "label": "Revoke suspicious sessions and require re-authentication"})
+        elif category == "malware":
+            actions.append({"id": "quarantine", "label": "Quarantine the suspicious artifact"})
+        elif category in {"network", "api_logs", "system_logs", "exfiltration", "anomaly"}:
+            actions.append({"id": "escalate", "label": "Contain and investigate the technical activity"})
+        actions.append({"id": "notify_soc", "label": "Notify the administrator / SOC"})
+        if not any(action["id"] == "escalate" for action in actions):
+            actions.append({"id": "escalate", "label": "Escalate for investigation"})
         
     return {
         "risk_score": score,

@@ -233,6 +233,7 @@ def score_explainability(incident: dict[str, Any]) -> dict[str, Any]:
                 "share": item.get("score"),
                 "risk_points": item.get("contribution", 0),
                 "weight": item.get("weight"),
+                "feature_attribution": item.get("feature_attribution"),
             }
             for item in indicators
         ],

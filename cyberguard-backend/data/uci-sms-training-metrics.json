@@ -1,0 +1,38 @@
+{
+  "dataset": "data\\uci_sms_spam.csv",
+  "samples": 5574,
+  "evaluation_training_samples": 4180,
+  "evaluation_holdout_samples": 1394,
+  "artifact_training_samples": 4180,
+  "artifact_is_holdout_evaluated": true,
+  "holdout_reused_for_artifact_training": false,
+  "accuracy": 0.966284074605452,
+  "classification_report": {
+    "0": {
+      "precision": 0.9625199362041468,
+      "recall": 1.0,
+      "f1-score": 0.9809020723283218,
+      "support": 1207.0
+    },
+    "1": {
+      "precision": 1.0,
+      "recall": 0.7486631016042781,
+      "f1-score": 0.8562691131498471,
+      "support": 187.0
+    },
+    "accuracy": 0.966284074605452,
+    "macro avg": {
+      "precision": 0.9812599681020734,
+      "recall": 0.874331550802139,
+      "f1-score": 0.9185855927390845,
+      "support": 1394.0
+    },
+    "weighted avg": {
+      "precision": 0.9675477496401759,
+      "recall": 0.966284074605452,
+      "f1-score": 0.9641830168287704,
+      "support": 1394.0
+    }
+  },
+  "model": "models\\threat_text_model.joblib"
+}
