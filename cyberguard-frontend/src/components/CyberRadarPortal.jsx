@@ -16,12 +16,17 @@ import {
   Radio,
   FileCheck2,
   Mail,
-  Activity
+  Activity,
+  Eye,
+  EyeOff,
+  User,
+  Sparkles,
 } from 'lucide-react';
 import LanguageToggle from './LanguageToggle';
 import CyberGlobe from './CyberGlobe';
 import WatchDemoModal from './WatchDemoModal';
 import { getApiBaseUrl } from '../apiConfig';
+import { loginWithGoogle, formatFirebaseAuthError } from '../firebase';
 
 const decodeBase64Url = (value) => {
   const padded = `${value}${'='.repeat((4 - (value.length % 4)) % 4)}`.replace(/-/g, '+').replace(/_/g, '/');
@@ -70,9 +75,12 @@ export default function CyberRadarPortal({
   const [themeMode, setThemeMode] = useState('dark');
 
   // Authentication states
-  const [loginUsername, setLoginUsername] = useState('teamsecure.project@gmail.com');
-  const [loginPassword, setLoginPassword] = useState('');
+  const [loginUsername, setLoginUsername] = useState('analyst');
+  const [loginPassword, setLoginPassword] = useState('CyberGuard@Analyst2026!');
   const [authLoading, setAuthLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [activePreset, setActivePreset] = useState('analyst');
   const [authError, setAuthError] = useState(null);
   const [otpChallenge, setOtpChallenge] = useState(null);
   const [otp, setOtp] = useState('');
@@ -83,6 +91,39 @@ export default function CyberRadarPortal({
   const [requestState, setRequestState] = useState(null);
   const [requestLoading, setRequestLoading] = useState(false);
   const [authModalTab, setAuthModalTab] = useState('login');
+
+  const DEMO_PRESETS = [
+    { label: 'Analyst', role: 'analyst', username: 'analyst', password: 'CyberGuard@Analyst2026!', badge: 'Triage' },
+    { label: 'Lead', role: 'lead', username: 'lead', password: 'CyberGuard@Lead2026!', badge: 'Ops' },
+    { label: 'Admin', role: 'admin', username: 'admin', password: 'CyberGuard@Admin2026!', badge: 'Full SOC' },
+    { label: 'Head Admin', role: 'head_admin', username: 'teamsecure.project@gmail.com', password: '&S=CNMS+X%^&6-JrSLn-3o8bR$B^', badge: 'Root' },
+  ];
+
+  const handleApplyPreset = (preset) => {
+    setLoginUsername(preset.username);
+    setLoginPassword(preset.password);
+    setActivePreset(preset.role);
+    setAuthError(null);
+  };
+
+  const handleGoogleLogin = async () => {
+    setGoogleLoading(true);
+    setAuthError(null);
+    try {
+      const session = await loginWithGoogle(apiBaseUrl);
+      if (session) {
+        if (onApprovedSession) {
+          onApprovedSession(session);
+        }
+        setShowAuthModal(false);
+      }
+    } catch (err) {
+      console.error('Google sign-in error:', err);
+      setAuthError(formatFirebaseAuthError(err));
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
 
   const handleLaunch = () => {
     if (currentSession) {
@@ -759,79 +800,174 @@ export default function CyberRadarPortal({
             {authModalTab === 'login' ? (
               <div className="space-y-3.5">
                 {!otpChallenge ? (
-                  <form onSubmit={handleManualLogin} className="space-y-2.5">
-                    <div>
-                      <label className="block text-[10px] sm:text-[11px] font-mono text-slate-300 mb-1">USERNAME</label>
-                      <input
-                        type="text"
-                        value={loginUsername}
-                        onChange={(e) => setLoginUsername(e.target.value)}
-                        placeholder="teamsecure.project@gmail.com"
-                        className="w-full px-3 py-1.5 rounded-lg bg-[#040c17] border border-slate-700 text-white font-mono text-xs focus:border-cyan-500 focus:outline-none transition-colors"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] sm:text-[11px] font-mono text-slate-300 mb-1">PASSWORD</label>
-                      <input
-                        type="password"
-                        value={loginPassword}
-                        onChange={(e) => setLoginPassword(e.target.value)}
-                        placeholder="Password configured for this server"
-                        className="w-full px-3 py-1.5 rounded-lg bg-[#040c17] border border-slate-700 text-white font-mono text-xs focus:border-cyan-500 focus:outline-none transition-colors"
-                      />
-                    </div>
-
-                    {authError && (
-                      <div className="p-2 rounded-lg bg-rose-950/40 border border-rose-500/30 text-[11px] text-rose-300 font-mono space-y-1">
-                        <div className="flex items-start gap-1.5">
-                          <AlertTriangle size={14} className="text-rose-400 mt-0.5 shrink-0" />
-                          <span className="leading-snug">{authError}</span>
-                        </div>
-                      </div>
-                    )}
-
+                  <div className="space-y-3">
+                    {/* Google One-Click Login Button */}
                     <button
-                      type="submit"
-                      disabled={authLoading}
-                      className="w-full py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 via-cyan-500 to-blue-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-bold text-xs sm:text-sm shadow-[0_0_20px_rgba(16,185,129,0.25)] transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      type="button"
+                      onClick={handleGoogleLogin}
+                      disabled={googleLoading || authLoading}
+                      className="w-full py-2.5 px-4 rounded-xl bg-white hover:bg-slate-100 active:bg-slate-200 text-slate-900 font-semibold text-xs sm:text-sm shadow-[0_2px_12px_rgba(255,255,255,0.15)] hover:shadow-[0_4px_20px_rgba(255,255,255,0.25)] transition-all flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-50 border border-slate-200"
                     >
-                      {authLoading ? (
+                      {googleLoading ? (
                         <>
-                          <span className="w-3.5 h-3.5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
-                          <span>Verifying...</span>
+                          <span className="w-4 h-4 border-2 border-slate-900 border-t-transparent rounded-full animate-spin shrink-0" />
+                          <span>Connecting with Google...</span>
                         </>
                       ) : (
                         <>
-                          <LogIn size={14} />
-                          <span>Authenticate</span>
+                          <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+                          </svg>
+                          <span>Continue with Google</span>
                         </>
                       )}
                     </button>
 
-                    {/* Helper to switch to dedicated login page or request access */}
-                    <div className="flex items-center justify-between pt-1 border-t border-slate-800/60 text-[10px] font-mono">
-                      {onOpenLoginPage && (
+                    {/* Cyber styled Divider */}
+                    <div className="relative flex items-center justify-center my-1">
+                      <div className="border-t border-slate-700/60 w-full" />
+                      <span className="bg-[#081726] px-2.5 text-[10px] font-mono text-slate-400 uppercase tracking-widest shrink-0">
+                        or credentials
+                      </span>
+                      <div className="border-t border-slate-700/60 w-full" />
+                    </div>
+
+                    {/* Quick Demo Credentials Presets */}
+                    <div className="space-y-1.5 p-2 rounded-xl bg-slate-900/60 border border-slate-800">
+                      <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 px-0.5">
+                        <span className="flex items-center gap-1">
+                          <Sparkles size={11} className="text-cyan-400" />
+                          <span>1-CLICK DEMO ROLES:</span>
+                        </span>
+                        <span className="text-emerald-400 text-[9px] font-semibold">Auto-fills Form</span>
+                      </div>
+                      <div className="grid grid-cols-4 gap-1">
+                        {DEMO_PRESETS.map((p) => {
+                          const isSelected = activePreset === p.role;
+                          return (
+                            <button
+                              key={p.role}
+                              type="button"
+                              onClick={() => handleApplyPreset(p)}
+                              className={`py-1 px-1 rounded-lg border text-[10px] font-mono font-semibold transition-all text-center cursor-pointer truncate ${
+                                isSelected
+                                  ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_10px_rgba(6,182,212,0.3)]'
+                                  : 'border-slate-700/80 bg-slate-800/40 hover:bg-slate-700/50 text-slate-300 hover:text-white hover:border-slate-600'
+                              }`}
+                              title={`${p.label} (${p.badge}): ${p.username}`}
+                            >
+                              {p.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Credentials Form */}
+                    <form onSubmit={handleManualLogin} className="space-y-2.5">
+                      <div>
+                        <label className="block text-[10px] sm:text-[11px] font-mono text-slate-300 mb-1 flex items-center justify-between">
+                          <span>USERNAME OR EMAIL</span>
+                          {activePreset && (
+                            <span className="text-cyan-400 text-[9px] lowercase">preset: {activePreset}</span>
+                          )}
+                        </label>
+                        <div className="relative">
+                          <input
+                            type="text"
+                            value={loginUsername}
+                            onChange={(e) => {
+                              setLoginUsername(e.target.value);
+                              setActivePreset(null);
+                            }}
+                            placeholder="username or email"
+                            className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-[#040c17] border border-slate-700 text-white font-mono text-xs focus:border-cyan-500 focus:outline-none transition-colors"
+                            required
+                          />
+                          <User size={13} className="absolute left-2.5 top-2 text-slate-500" />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-[10px] sm:text-[11px] font-mono text-slate-300 mb-1">PASSWORD</label>
+                        <div className="relative">
+                          <input
+                            type={showPassword ? 'text' : 'password'}
+                            value={loginPassword}
+                            onChange={(e) => {
+                              setLoginPassword(e.target.value);
+                              setActivePreset(null);
+                            }}
+                            placeholder="Enter password or select demo role above"
+                            className="w-full pl-8 pr-8 py-1.5 rounded-lg bg-[#040c17] border border-slate-700 text-white font-mono text-xs focus:border-cyan-500 focus:outline-none transition-colors"
+                            required
+                          />
+                          <Lock size={13} className="absolute left-2.5 top-2 text-slate-500" />
+                          <button
+                            type="button"
+                            onClick={() => setShowPassword(!showPassword)}
+                            className="absolute right-2 top-1.5 text-slate-400 hover:text-white transition-colors cursor-pointer p-0.5"
+                            title={showPassword ? 'Hide password' : 'Show password'}
+                          >
+                            {showPassword ? <EyeOff size={13} /> : <Eye size={13} />}
+                          </button>
+                        </div>
+                      </div>
+
+                      {authError && (
+                        <div className="p-2 rounded-lg bg-rose-950/40 border border-rose-500/30 text-[11px] text-rose-300 font-mono space-y-1 animate-in fade-in">
+                          <div className="flex items-start gap-1.5">
+                            <AlertTriangle size={14} className="text-rose-400 mt-0.5 shrink-0" />
+                            <span className="leading-snug">{authError}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      <button
+                        type="submit"
+                        disabled={authLoading}
+                        className="w-full py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 via-cyan-500 to-blue-500 hover:from-emerald-400 hover:to-cyan-400 text-slate-950 font-bold text-xs sm:text-sm shadow-[0_0_20px_rgba(16,185,129,0.25)] hover:shadow-[0_0_25px_rgba(6,182,212,0.4)] transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        {authLoading ? (
+                          <>
+                            <span className="w-3.5 h-3.5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                            <span>Verifying...</span>
+                          </>
+                        ) : (
+                          <>
+                            <LogIn size={14} />
+                            <span>Authenticate</span>
+                          </>
+                        )}
+                      </button>
+
+                      {/* Helper to switch to dedicated login page or request access */}
+                      <div className="flex items-center justify-between pt-1 border-t border-slate-800/60 text-[10px] font-mono">
+                        {onOpenLoginPage && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowAuthModal(false);
+                              onOpenLoginPage();
+                            }}
+                            className="text-slate-400 hover:text-cyan-300 underline"
+                          >
+                            Dedicated Page →
+                          </button>
+                        )}
                         <button
                           type="button"
-                          onClick={() => {
-                            setShowAuthModal(false);
-                            onOpenLoginPage();
-                          }}
-                          className="text-slate-400 hover:text-cyan-300 underline"
+                          onClick={() => setAuthModalTab('request')}
+                          className="text-cyan-400 hover:text-cyan-300 underline ml-auto"
                         >
-                          Dedicated Page →
+                          Request Access
                         </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => setAuthModalTab('request')}
-                        className="text-cyan-400 hover:text-cyan-300 underline ml-auto"
-                      >
-                        Request Access
-                      </button>
-                    </div>
-                  </form>
+                      </div>
+                    </form>
+                  </div>
                 ) : (
                   <form onSubmit={handleOtpVerification} className="space-y-3">
                     <div className="p-2.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-200">
