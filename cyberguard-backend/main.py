@@ -669,7 +669,16 @@ def initialize_database():
                 ("admin", "CYBERGUARD_DEMO_ADMIN_PASSWORD", "admin", SECURITY_OWNER_EMAIL, HEAD_ADMIN_USERNAME, "CyberGuard@Admin2026!"),
             )
             for username, password_key, role, email, parent, default_pw in demo_accounts:
-                password = os.getenv(password_key, "").strip() or default_pw
+                raw = os.getenv(password_key)
+                password = raw.strip() if raw is not None else None
+                if password is None and default_pw:
+                    # Env var not set at all – use default only when it was
+                    # never explicitly removed (i.e. the env var key exists in
+                    # the process environment).  If the key is truly absent,
+                    # skip this demo account so tests can opt out.
+                    password = None
+                elif password is not None and not password and default_pw:
+                    password = default_pw
                 if password:
                     configured_demo_accounts.append((username, password))
                     users.append((username, hash_password(password), role, email, parent, "active"))
