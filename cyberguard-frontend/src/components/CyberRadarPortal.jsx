@@ -284,13 +284,42 @@ export default function CyberRadarPortal({
           className="flex items-center gap-3 cursor-pointer group select-none"
           title="CyberGuard AI Home"
         >
-          {/* Glowing Shield Icon */}
-          <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-emerald-400/25 via-cyan-500/20 to-transparent border border-cyan-400/60 p-0.5 shadow-[0_0_20px_rgba(6,182,212,0.4)] flex items-center justify-center shrink-0 transition-transform group-hover:scale-105">
-            <div className="w-full h-full rounded-[10px] bg-[#041527] flex items-center justify-center">
-              <span className="font-mono font-black text-cyan-300 text-lg sm:text-xl tracking-tighter drop-shadow-[0_0_10px_rgba(6,182,212,0.8)]">
+          {/* Glowing Cyber Shield Logo */}
+          <div className="w-8 h-9 sm:w-9 sm:h-10 flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 drop-shadow-[0_0_12px_rgba(6,182,212,0.8)]">
+            <svg viewBox="0 0 100 120" className="w-full h-full overflow-visible" fill="none">
+              <path
+                d="M 50,6 C 64,6 84,11 93,20 C 93,56 82,92 50,116 C 18,92 7,56 7,20 C 16,11 36,6 50,6 Z"
+                fill="url(#headerShieldBg)"
+                stroke="#06b6d4"
+                strokeWidth="5"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M 50,14 C 61,14 77,18 84,25 C 84,54 75,84 50,105 C 25,84 16,54 16,25 C 23,18 39,14 50,14 Z"
+                fill="none"
+                stroke="#00e699"
+                strokeWidth="2"
+                strokeOpacity="0.6"
+              />
+              <text
+                x="50"
+                y="72"
+                textAnchor="middle"
+                fill="#00e699"
+                fontSize="48"
+                fontWeight="900"
+                fontFamily="Space Grotesk, system-ui, sans-serif"
+                style={{ filter: 'drop-shadow(0 0 8px rgba(0, 230, 153, 0.9))' }}
+              >
                 C
-              </span>
-            </div>
+              </text>
+              <defs>
+                <radialGradient id="headerShieldBg" cx="50%" cy="30%" r="70%">
+                  <stop offset="0%" stopColor="#042c3d" />
+                  <stop offset="100%" stopColor="#010c17" />
+                </radialGradient>
+              </defs>
+            </svg>
           </div>
           
           {/* Brand Typography */}
@@ -418,10 +447,10 @@ export default function CyberRadarPortal({
           {/* Main Hero Headline */}
           <h1
             aria-label="See the signal before it spreads."
-            className="text-4xl sm:text-5xl lg:text-[60px] font-black tracking-tight text-white leading-[1.08]"
+            className="text-4xl sm:text-5xl lg:text-[62px] font-black tracking-tight text-white leading-[1.08]"
           >
             See the signal <br />
-            <span className="bg-gradient-to-r from-emerald-400 via-teal-300 to-cyan-400 bg-clip-text text-transparent drop-shadow-[0_0_35px_rgba(16,185,129,0.4)]">
+            <span className="text-[#00e699] font-black drop-shadow-[0_0_35px_rgba(0,230,153,0.55)]">
               before it spreads.
             </span>
           </h1>
@@ -438,9 +467,9 @@ export default function CyberRadarPortal({
             <button
               id="hero-open-workspace-btn"
               onClick={handleLaunch}
-              className="group relative inline-flex items-center justify-center gap-2.5 px-6 sm:px-8 py-3.5 sm:py-4 rounded-xl font-bold text-[#021815] text-sm sm:text-base transition-all duration-300 shadow-[0_0_35px_rgba(16,185,129,0.45)] hover:shadow-[0_0_50px_rgba(6,182,212,0.7)] hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+              className="group relative inline-flex items-center justify-center gap-2.5 px-6 sm:px-8 py-3.5 sm:py-4 rounded-xl font-bold text-[#011e17] text-sm sm:text-base transition-all duration-300 shadow-[0_0_35px_rgba(0,230,153,0.5)] hover:shadow-[0_0_50px_rgba(0,245,255,0.7)] hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
               style={{
-                background: 'linear-gradient(135deg, #34d399 0%, #10b981 45%, #06b6d4 100%)',
+                background: 'linear-gradient(135deg, #00e699 0%, #00d2a8 50%, #06b6d4 100%)',
               }}
             >
               <Shield size={17} className="text-[#021815] shrink-0" />
@@ -505,9 +534,9 @@ export default function CyberRadarPortal({
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 lg:gap-8">
             
             {/* Card 1: Real-time Detection */}
-            <div className="flex items-start gap-3.5 group">
-              <div className="w-10 h-10 rounded-xl bg-cyan-950/80 border border-cyan-500/40 text-cyan-400 flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(6,182,212,0.25)] group-hover:scale-105 group-hover:border-cyan-300 transition-all">
-                <Zap size={20} className="text-cyan-400" />
+            <div className="flex items-start gap-4 group">
+              <div className="w-12 h-12 rounded-2xl bg-cyan-950/70 border border-cyan-500/40 text-cyan-400 flex items-center justify-center shrink-0 shadow-[0_0_20px_rgba(6,182,212,0.3)] group-hover:scale-105 group-hover:border-cyan-300 transition-all">
+                <Zap size={22} className="text-cyan-400" />
               </div>
               <div className="flex flex-col">
                 <h4 className="text-sm font-bold text-white group-hover:text-cyan-300 transition-colors">
@@ -520,12 +549,12 @@ export default function CyberRadarPortal({
             </div>
 
             {/* Card 2: AI-Powered Analysis */}
-            <div className="flex items-start gap-3.5 group">
-              <div className="w-10 h-10 rounded-xl bg-cyan-950/80 border border-cyan-500/40 text-cyan-400 flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(6,182,212,0.25)] group-hover:scale-105 group-hover:border-cyan-300 transition-all">
-                <Brain size={20} className="text-cyan-400" />
+            <div className="flex items-start gap-4 group">
+              <div className="w-12 h-12 rounded-2xl bg-blue-950/70 border border-blue-500/40 text-blue-400 flex items-center justify-center shrink-0 shadow-[0_0_20px_rgba(59,130,246,0.3)] group-hover:scale-105 group-hover:border-blue-300 transition-all">
+                <Brain size={22} className="text-blue-400" />
               </div>
               <div className="flex flex-col">
-                <h4 className="text-sm font-bold text-white group-hover:text-cyan-300 transition-colors">
+                <h4 className="text-sm font-bold text-white group-hover:text-blue-300 transition-colors">
                   AI-Powered Analysis
                 </h4>
                 <p className="text-xs text-slate-400 leading-relaxed mt-1">
@@ -535,12 +564,12 @@ export default function CyberRadarPortal({
             </div>
 
             {/* Card 3: Actionable Insights */}
-            <div className="flex items-start gap-3.5 group">
-              <div className="w-10 h-10 rounded-xl bg-indigo-950/80 border border-indigo-500/40 text-indigo-400 flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(99,102,241,0.25)] group-hover:scale-105 group-hover:border-indigo-300 transition-all">
-                <ShieldCheck size={20} className="text-indigo-400" />
+            <div className="flex items-start gap-4 group">
+              <div className="w-12 h-12 rounded-2xl bg-purple-950/70 border border-purple-500/40 text-purple-400 flex items-center justify-center shrink-0 shadow-[0_0_20px_rgba(168,85,247,0.3)] group-hover:scale-105 group-hover:border-purple-300 transition-all">
+                <ShieldCheck size={22} className="text-purple-400" />
               </div>
               <div className="flex flex-col">
-                <h4 className="text-sm font-bold text-white group-hover:text-indigo-300 transition-colors">
+                <h4 className="text-sm font-bold text-white group-hover:text-purple-300 transition-colors">
                   Actionable Insights
                 </h4>
                 <p className="text-xs text-slate-400 leading-relaxed mt-1">
@@ -550,9 +579,9 @@ export default function CyberRadarPortal({
             </div>
 
             {/* Card 4: Secure & Private */}
-            <div className="flex items-start gap-3.5 group">
-              <div className="w-10 h-10 rounded-xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0 shadow-[0_0_15px_rgba(16,185,129,0.25)] group-hover:scale-105 group-hover:border-emerald-300 transition-all">
-                <Database size={20} className="text-emerald-400" />
+            <div className="flex items-start gap-4 group">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-950/70 border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0 shadow-[0_0_20px_rgba(16,185,129,0.3)] group-hover:scale-105 group-hover:border-emerald-300 transition-all">
+                <Database size={22} className="text-emerald-400" />
               </div>
               <div className="flex flex-col">
                 <h4 className="text-sm font-bold text-white group-hover:text-emerald-300 transition-colors">
