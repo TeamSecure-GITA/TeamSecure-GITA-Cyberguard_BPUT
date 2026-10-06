@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Link2, Mail, User, Shield, Share2 } from 'lucide-react';
+import { Link2, Mail, User, Share2 } from 'lucide-react';
 
 // Continental anchor points [lat, lon] for digital cyber clusters
 const CONTINENT_POINTS = [

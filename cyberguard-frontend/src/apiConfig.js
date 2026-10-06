@@ -3,7 +3,7 @@
  * Priority order:
  * 1. User-configured override stored in localStorage ('CYBERGUARD_API_URL')
  * 2. Vite environment variable import.meta.env.VITE_API_URL
- * 3. Development-only fallback: http://127.0.0.1:8000
+ * 3. Development-only fallback: http://127.0.0.1:8001
  */
 const normalizeApiUrl = (url) => {
   const normalized = url.trim().replace(/\/+$/, '');
@@ -36,12 +36,12 @@ export const getApiBaseUrl = () => {
   if (import.meta.env.PROD) {
     throw new Error('Production backend URL is not configured. Set VITE_API_URL to the public HTTPS backend URL and redeploy.');
   }
-  return 'http://127.0.0.1:8000';
+  return 'http://127.0.0.1:8001';
 };
 
 export const setApiBaseUrl = (url) => {
   if (typeof window !== 'undefined') {
-    if (!url || !url.trim() || url.trim() === 'http://127.0.0.1:8000') {
+    if (!url || !url.trim() || url.trim() === 'http://127.0.0.1:8001') {
       window.localStorage.removeItem('CYBERGUARD_API_URL');
     } else {
       window.localStorage.setItem('CYBERGUARD_API_URL', normalizeApiUrl(url));

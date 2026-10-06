@@ -12,6 +12,8 @@ from typing import Any
 AUDIO_SUFFIXES = {"wav", "flac", "ogg", "oga", "aiff", "aif", "mp3", "m4a", "aac"}
 VIDEO_AUDIO_MAX_SECONDS = 10
 VIDEO_AUDIO_TIMEOUT_SECONDS = 20
+VIDEO_SYNC_SAMPLE_RATE = 5
+VIDEO_SYNC_MAX_SAMPLES = VIDEO_AUDIO_MAX_SECONDS * VIDEO_SYNC_SAMPLE_RATE
 VIDEO_FRAME_MAX_EDGE = 960
 VIDEO_FRAME_MAX_PIXELS = 12_000_000
 
@@ -216,6 +218,24 @@ def _analyze_video_audio(video_path: str) -> dict[str, Any]:
             "reason": f"Extracted audio could not be analyzed ({error.__class__.__name__}).",
             "max_seconds": VIDEO_AUDIO_MAX_SECONDS,
         }
+    try:
+        if np is None:
+            raise ImportError("NumPy is unavailable")
+        with wave.open(io.BytesIO(result.stdout), "rb") as audio:
+            sample_rate = audio.getframerate()
+            channels = audio.getnchannels()
+            sample_width = audio.getsampwidth()
+            samples = audio.readframes(sample_rate * VIDEO_AUDIO_MAX_SECONDS)
+        if sample_width != 2 or channels != 1 or sample_rate <= 0:
+            raise ValueError("FFmpeg audio was not mono 16-bit PCM")
+        waveform = np.frombuffer(samples, dtype="<i2").astype(np.float32) / 32768.0
+        window_size = max(1, round(sample_rate / VIDEO_SYNC_SAMPLE_RATE))
+        energy = [
+            round(float(np.sqrt(np.mean(waveform[offset:offset + window_size] ** 2))), 6)
+            for offset in range(0, len(waveform) - window_size + 1, window_size)
+        ]
+    except (ImportError, OSError, ValueError, EOFError, wave.Error):
+        energy = []
     return {
         "status": "analyzed",
         "score": assessment["score"],
@@ -224,6 +244,144 @@ def _analyze_video_audio(video_path: str) -> dict[str, Any]:
         "indicators": assessment["indicators"],
         "pretrained_model": assessment.get("pretrained_model"),
         "max_seconds": VIDEO_AUDIO_MAX_SECONDS,
+        "_sync_energy": energy,
+    }
+
+
+def _measure_video_mouth_motion(video_path: str) -> dict[str, Any]:
+    import cv2
+
+    capture = cv2.VideoCapture(video_path)
+    try:
+        fps = float(capture.get(cv2.CAP_PROP_FPS) or 0)
+        frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        if (
+            fps <= 0
+            or frame_count <= 0
+            or width <= 0
+            or height <= 0
+            or width * height > VIDEO_FRAME_MAX_PIXELS
+        ):
+            return {"status": "unavailable", "reason": "Video timing or frame dimensions are unavailable or exceed the inspection limit."}
+
+        try:
+            detector = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+            if detector.empty():
+                return {"status": "unavailable", "reason": "The face detector is unavailable; mouth motion was not measured."}
+        except (AttributeError, cv2.error):
+            return {"status": "unavailable", "reason": "The face detector is unavailable; mouth motion was not measured."}
+
+        duration = min(frame_count / fps, VIDEO_AUDIO_MAX_SECONDS)
+        sample_count = min(VIDEO_SYNC_MAX_SAMPLES, max(1, math.ceil(duration * VIDEO_SYNC_SAMPLE_RATE)))
+        previous_roi = None
+        motions: list[float | None] = []
+        for sample_index in range(sample_count):
+            timestamp = sample_index / VIDEO_SYNC_SAMPLE_RATE
+            frame_index = min(frame_count - 1, round(timestamp * fps))
+            capture.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+            ok, frame = capture.read()
+            if not ok:
+                motions.append(None)
+                previous_roi = None
+                continue
+            frame_height, frame_width = frame.shape[:2]
+            if frame_width * frame_height > VIDEO_FRAME_MAX_PIXELS:
+                return {"status": "unavailable", "reason": "A decoded frame exceeded the inspection pixel limit; mouth motion was not measured."}
+            scale = min(1.0, 480 / max(frame_width, frame_height))
+            if scale < 1.0:
+                frame = cv2.resize(
+                    frame,
+                    (max(1, round(frame_width * scale)), max(1, round(frame_height * scale))),
+                    interpolation=cv2.INTER_AREA,
+                )
+            grayscale = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = detector.detectMultiScale(
+                grayscale,
+                scaleFactor=1.1,
+                minNeighbors=4,
+                minSize=(40, 40),
+            )
+            if len(faces) == 0:
+                motions.append(None)
+                previous_roi = None
+                continue
+            x, y, face_width, face_height = max(faces, key=lambda box: box[2] * box[3])
+            mouth_region = grayscale[
+                y + round(face_height * 0.55):y + round(face_height * 0.95),
+                x + round(face_width * 0.15):x + round(face_width * 0.85),
+            ]
+            if mouth_region.size == 0:
+                motions.append(None)
+                previous_roi = None
+                continue
+            roi = cv2.resize(mouth_region, (64, 32), interpolation=cv2.INTER_AREA)
+            if previous_roi is None:
+                motions.append(None)
+            else:
+                motions.append(round(float(cv2.absdiff(previous_roi, roi).mean()) / 255.0, 6))
+            previous_roi = roi
+
+        if sum(value is not None for value in motions) < 10:
+            return {"status": "inconclusive", "reason": "Fewer than 10 usable face-motion samples were available."}
+        return {"status": "measured", "mouth_motion": motions}
+    finally:
+        capture.release()
+
+
+def _assess_audio_video_synchronization(
+    audio_energy: list[float],
+    mouth_motion: list[float | None],
+) -> dict[str, Any]:
+    max_length = min(len(audio_energy), len(mouth_motion))
+    if max_length < 10:
+        return {
+            "status": "inconclusive",
+            "reason": "At least 10 aligned audio-energy and visible-mouth-motion samples are required.",
+        }
+
+    audio = np.asarray(audio_energy[:max_length], dtype=float)
+    motion = np.asarray(
+        [float("nan") if value is None else value for value in mouth_motion[:max_length]],
+        dtype=float,
+    )
+    best_correlation = None
+    best_lag = None
+    for lag in range(-VIDEO_SYNC_SAMPLE_RATE, VIDEO_SYNC_SAMPLE_RATE + 1):
+        if lag < 0:
+            paired_audio = audio[-lag:]
+            paired_motion = motion[:max_length + lag]
+        elif lag > 0:
+            paired_audio = audio[:max_length - lag]
+            paired_motion = motion[lag:]
+        else:
+            paired_audio = audio
+            paired_motion = motion
+        valid = np.isfinite(paired_motion) & np.isfinite(paired_audio)
+        if int(valid.sum()) < 10:
+            continue
+        audio_values = paired_audio[valid]
+        motion_values = paired_motion[valid]
+        if np.std(audio_values) < 1e-6 or np.std(motion_values) < 1e-6:
+            continue
+        correlation = float(np.corrcoef(audio_values, motion_values)[0, 1])
+        if math.isfinite(correlation) and (best_correlation is None or correlation > best_correlation):
+            best_correlation = correlation
+            best_lag = lag
+
+    if best_correlation is None:
+        return {
+            "status": "inconclusive",
+            "reason": "The sampled signals did not contain enough varying, paired audio and face-motion data.",
+        }
+    return {
+        "status": "analyzed",
+        "method": "audio-energy and lower-face pixel-motion correlation (experimental proxy)",
+        "correlation": round(best_correlation, 3),
+        "peak_offset_ms": round(best_lag * 1000 / VIDEO_SYNC_SAMPLE_RATE),
+        "paired_samples": max_length,
+        "interpretation": "Signal correlation is an experimental review cue, not a validated lip-sync detector or authenticity probability.",
     }
 
 
@@ -292,12 +450,42 @@ def analyze_video(content: bytes) -> dict[str, Any]:
         capture.release()
         capture = None
         video_audio = _analyze_video_audio(temporary_path)
+        sync_energy = video_audio.pop("_sync_energy", [])
+        if sync_energy:
+            try:
+                mouth_motion = _measure_video_mouth_motion(temporary_path)
+                if mouth_motion["status"] == "measured":
+                    synchronization = _assess_audio_video_synchronization(
+                        sync_energy,
+                        mouth_motion["mouth_motion"],
+                    )
+                else:
+                    synchronization = {
+                        "status": mouth_motion["status"],
+                        "reason": mouth_motion["reason"],
+                    }
+            except (OSError, RuntimeError, ValueError, cv2.error) as error:
+                synchronization = {
+                    "status": "failed",
+                    "reason": f"Audio/video synchronization proxy failed ({error.__class__.__name__}).",
+                }
+        else:
+            synchronization = {
+                "status": "not_analyzed",
+                "reason": "Audio energy or a decodable audio track was unavailable; synchronization was not measured.",
+            }
     finally:
         if capture is not None:
             capture.release()
         os.unlink(temporary_path)
     score = 20
     reasons = [f"Video container inspected at {width}x{height} with {frame_count} frames."]
+    if synchronization["status"] == "analyzed":
+        reasons.append(
+            "Experimental audio/video review proxy measured audio-energy and lower-face pixel-motion "
+            f"correlation {synchronization['correlation']} at a peak offset of "
+            f"{synchronization['peak_offset_ms']} ms; this signal is not a validated lip-sync result."
+        )
     indicators = [{
         "name": "Video Frame Sampling",
         "observed_frames": frame_count,
@@ -387,10 +575,7 @@ def analyze_video(content: bytes) -> dict[str, Any]:
         "sampling_limit": 30,
         "temporal_score_variance": round(temporal_variance, 2) if temporal_variance is not None else None,
         "audio_analysis": video_audio,
-        "audio_video_synchronization": {
-            "status": "not_analyzed",
-            "reason": "Audio and video authenticity scores are inspected independently; lip-sync and temporal synchronization are not measured.",
-        },
+        "audio_video_synchronization": synchronization,
     }
 
 

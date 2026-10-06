@@ -458,7 +458,11 @@ export default function ThreatInspector({ accessToken, onIncidentCreated }) {
                 <p className="mt-1 text-[11px] text-violet-200/80">{analysisResult.video_audio_analysis.reason}</p>
               )}
               {analysisResult.audio_video_synchronization && (
-                <p className="mt-1 text-[10px] text-violet-200/60">{analysisResult.audio_video_synchronization.reason}</p>
+                <p className="mt-1 text-[10px] text-violet-200/60">
+                  {analysisResult.audio_video_synchronization.status === 'analyzed'
+                    ? `Experimental sync proxy · correlation ${analysisResult.audio_video_synchronization.correlation} · peak offset ${analysisResult.audio_video_synchronization.peak_offset_ms} ms · ${analysisResult.audio_video_synchronization.interpretation}`
+                    : analysisResult.audio_video_synchronization.reason}
+                </p>
               )}
             </div>
           )}
