@@ -55,8 +55,8 @@ python -m uvicorn main:app --reload --port 8001
    ```
 
 The tests use test-only credentials and an isolated temporary SQLite database.
-They do not prove model calibration, live packet capture, external-provider
-delivery, or production deployment. The image and audio weights present in
+They do not prove model calibration, live capture on an authorized sensor host,
+external-provider delivery, or production deployment. The image and audio weights present in
 this checkout passed `python check_models.py` with offline loading; each
 deployment must still verify that its Git-LFS artifacts were hydrated. Model
 inference passing is not calibration evidence, so do not treat heuristic or
@@ -79,8 +79,32 @@ are explanatory signals, not causal evidence or calibrated probabilities.
 Authorized Zeek or Suricata collectors can submit bounded JSON batches to
 `POST /api/v1/network/ingest` using an authenticated session. Supported flow
 events are normalized and analyzed; a sufficiently high-risk batch creates an
-incident. This ingestion endpoint is not itself a packet sniffer and does not
-replace a privileged, continuously running network sensor.
+incident. The optional `cyberguard-backend\network_sensor.py` agent provides
+continuous capture of IPv4/IPv6 TCP/UDP flow metadata and submits it in bounded
+five-minute batches. It requires an authorized sensor host, packet-capture
+privileges, and (on Windows) Npcap. It never submits packet payloads, but the
+flow metadata includes addresses, ports, byte counts, and timestamps and may be
+stored with detected incidents.
+
+To run the sensor from `cyberguard-backend`, create a dedicated active analyst
+account through the head-admin Administration screen first, then set the sensor
+configuration in the environment of the sensor process. It authenticates before
+capture starts. Do not reuse an administrator account or commit its password:
+
+```powershell
+$env:CYBERGUARD_SENSOR_API_URL = "https://<your-cyberguard-api-origin>"
+$env:CYBERGUARD_SENSOR_USERNAME = "<dedicated sensor account>"
+$env:CYBERGUARD_SENSOR_PASSWORD = "<sensor account password>"
+$env:CYBERGUARD_SENSOR_INTERFACE = "<authorized capture interface>"
+python network_sensor.py
+```
+
+`CYBERGUARD_SENSOR_INTERFACE` is optional; `CYBERGUARD_SENSOR_BPF_FILTER`
+defaults to `ip or ip6`, and `CYBERGUARD_SENSOR_BATCH_SECONDS` defaults to 300
+(allowed range 1–3600). HTTP is accepted only for a loopback API. The agent
+keeps flow aggregates in memory, logs detected incident IDs, and exits with an
+explicit error on configuration or delivery failure; it does not provide a
+durable offline queue or replace Zeek/Suricata for richer protocol analysis.
 
 ## Future Feature Roadmap (Serially Numbered)
 

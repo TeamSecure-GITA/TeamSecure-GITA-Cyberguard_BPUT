@@ -4,7 +4,7 @@ import axios from 'axios';
 import { getApiBaseUrl } from '../apiConfig';
 import LiveMediaSession from './LiveMediaSession';
 
-export default function ThreatInspector({ accessToken }) {
+export default function ThreatInspector({ accessToken, onIncidentCreated }) {
   const [activeSubTab, setActiveSubTab] = useState('email');
   const [incidentCountry, setIncidentCountry] = useState('');
   const [inputText, setInputText] = useState('');
@@ -115,6 +115,7 @@ export default function ThreatInspector({ accessToken }) {
         setAssistantResult(null);
         setComplaintDraft(null);
         setScanStage('ready');
+        if (response.data.incident_id) onIncidentCreated?.(response.data.incident_id);
       }
     } catch {
       setError('Failed to connect to CYBERGUARD AI Engine. Ensure FastAPI backend is running on port 8000.');

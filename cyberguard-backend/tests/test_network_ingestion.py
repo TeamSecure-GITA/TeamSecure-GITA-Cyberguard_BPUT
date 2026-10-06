@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from fastapi import HTTPException
 
@@ -85,6 +87,30 @@ def test_network_ingestion_accepts_benign_flow_without_opening_incident(tmp_path
     assert result["status"] == "accepted"
     assert result["detected"] is False
     assert result["incident_id"] is None
+
+
+def test_network_ingestion_detects_aggregated_scan_ports_and_beacon_timestamps(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "aggregated-network-ingestion.sqlite")
+    main.initialize_database()
+    payload = {
+        "events": [{
+            "src_ip": "10.0.0.5",
+            "dest_ip": "8.8.8.8",
+            "proto": "tcp",
+            "destination_ports": list(range(20, 32)),
+            "timestamps": [
+                (datetime(2026, 10, 1, 10, tzinfo=timezone.utc) + timedelta(seconds=60 * index)).isoformat()
+                for index in range(5)
+            ],
+        }]
+    }
+
+    result = main.ingest_network_telemetry(payload, {"username": "analyst", "role": "analyst"})
+    names = {item["name"] for item in result["assessment"]["indicators"]}
+
+    assert result["status"] == "incident_created"
+    assert "Flow Port-Scan Breadth" in names
+    assert "Regular Flow Beaconing" in names
 
 
 def test_network_ingestion_rejects_invalid_and_oversized_batches():

@@ -8,7 +8,7 @@ Use `docker-compose.prod.yml` for the backend, PostgreSQL, Redis, frontend, and 
 
 Render and Docker install `requirements-models.txt` for local pretrained image/audio inference and install Tesseract for image OCR. The model weights occupy about 0.72 GB on disk and need additional runtime memory; select a host sized for CPU inference. Keep `CYBERGUARD_ENABLE_PRETRAINED_MEDIA=true` only where both models are available, and verify the actual weights with `python check_models.py` or `GET /api/v1/models/status`. `CYBERGUARD_ENABLE_RDAP` and `CYBERGUARD_ENABLE_CT` control website-registration and Certificate Transparency lookups; these enrichments require outbound HTTPS access and report unavailable status when providers cannot be reached.
 
-Run `verify_all.ps1` from the project root for backend tests, frontend lint/build, deployment configuration, dependency consistency, and model inference. Set `API_URL` and `CYBERGUARD_FRONTEND_URL` to include deployed API health and Playwright smoke checks.
+Run `verify_all.ps1` from the project root for backend tests, frontend lint/build, deployment configuration, dependency consistency, and model inference. Set `API_URL` and `CYBERGUARD_FRONTEND_URL` to include deployed API health and Playwright smoke checks. The default run labels unavailable deployment checks as `SKIP`; use `.\verify_all.ps1 -RequireDeploymentChecks` for a release gate that fails unless both deployed API health and the authenticated browser smoke test are configured and pass.
 
 ## Health and monitoring
 

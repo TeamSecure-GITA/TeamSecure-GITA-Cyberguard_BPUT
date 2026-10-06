@@ -1,3 +1,7 @@
+param(
+    [switch]$RequireDeploymentChecks
+)
+
 $ErrorActionPreference = 'Continue'
 $script:results = @()
 $root = $PSScriptRoot
@@ -61,7 +65,12 @@ if ($env:API_URL) {
     }
 }
 else {
-    $script:results += 'SKIP  Deployed API health (set API_URL to enable)'
+    if ($RequireDeploymentChecks) {
+        $script:results += 'FAIL  Deployed API health (set API_URL to enable)'
+    }
+    else {
+        $script:results += 'SKIP  Deployed API health (set API_URL to enable)'
+    }
 }
 
 if ($env:CYBERGUARD_FRONTEND_URL) {
@@ -76,7 +85,12 @@ if ($env:CYBERGUARD_FRONTEND_URL) {
     }
 }
 else {
-    $script:results += 'SKIP  Playwright frontend smoke test (set CYBERGUARD_FRONTEND_URL to enable)'
+    if ($RequireDeploymentChecks) {
+        $script:results += 'FAIL  Playwright frontend smoke test (set CYBERGUARD_FRONTEND_URL to enable)'
+    }
+    else {
+        $script:results += 'SKIP  Playwright frontend smoke test (set CYBERGUARD_FRONTEND_URL to enable)'
+    }
 }
 
 $reportPath = Join-Path $root 'release-report.txt'
