@@ -442,3 +442,89 @@ textarea:focus, input:focus { box-shadow: 0 0 0 2px rgba(94, 215, 255, .12); }
 .speculative-grid { display: grid; grid-template-columns: 1fr 220px; gap: 16px; margin-top: 18px; }.speculative-hero { padding: 18px; background: rgba(3, 12, 25, .5); border: 1px solid rgba(119, 151, 181, .16); border-radius: 14px; }.speculative-hero > p { margin: 0; color: #b5cad5; font-size: 12px; }.speculative-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 18px; }.speculative-metrics div { padding: 11px; background: rgba(94, 215, 255, .05); border: 1px solid rgba(94, 215, 255, .12); border-radius: 9px; }.speculative-metrics span, .speculative-controls span { display: block; color: #758d9f; font-family: "IBM Plex Mono", Consolas, monospace; font-size: 8px; text-transform: uppercase; }.speculative-metrics strong { display: block; margin-top: 8px; color: #f2fbff; font-family: "IBM Plex Mono", Consolas, monospace; font-size: 20px; }.speculative-controls { display: grid; grid-template-columns: 1fr 190px; gap: 16px; margin-top: 18px; }.speculative-controls label { color: #8ea6b4; font-size: 10px; }.speculative-controls strong { float: right; color: var(--cyan); font-family: "IBM Plex Mono", Consolas, monospace; }.speculative-controls input, .speculative-controls select { display: block; width: 100%; margin-top: 9px; color: var(--cyan); background: #071522; border: 1px solid var(--line); border-radius: 7px; }.speculative-controls input { accent-color: var(--cyan); }.speculative-controls select { padding: 8px; font-size: 10px; outline: 0; }.speculative-visual { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 210px; background: radial-gradient(circle, rgba(94, 215, 255, .12), transparent 62%), rgba(3, 12, 25, .5); border: 1px solid rgba(94, 215, 255, .16); border-radius: 14px; }.speculative-ring { display: grid; place-items: center; width: 142px; height: 142px; background: conic-gradient(var(--cyan), #8b5cf6, #f6c76c, var(--cyan)); border-radius: 50%; animation: slow-spin 14s linear infinite; }.speculative-ring > div { display: grid; place-items: center; width: 116px; height: 116px; color: var(--cyan); background: #091725; border-radius: 50%; animation: slow-spin 14s linear reverse infinite; }.speculative-ring strong { max-width: 88px; margin-top: 7px; color: #eefaff; font-family: "IBM Plex Mono", Consolas, monospace; font-size: 8px; text-align: center; text-transform: uppercase; }.speculative-visual > span { margin-top: 12px; color: #bcd3de; font-size: 11px; }.speculative-visual > small { margin-top: 5px; color: #738b9d; font-family: "IBM Plex Mono", Consolas, monospace; font-size: 8px; }.speculative-actions { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-top: 14px; }.speculative-actions button { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 9px; color: #aec4cf; text-align: left; background: rgba(3, 12, 25, .6); border: 1px solid var(--line); border-radius: 9px; font-size: 9px; transition: transform .2s ease, border-color .2s ease, color .2s ease; }.speculative-actions button:hover { color: var(--cyan); border-color: rgba(94, 215, 255, .5); transform: translateY(-2px); }.speculative-actions button:disabled { opacity: .5; }.speculative-result { margin-top: 14px; padding: 12px; color: var(--cyan); background: rgba(3, 12, 25, .7); border: 1px solid rgba(94, 215, 255, .18); border-radius: 9px; font-family: "IBM Plex Mono", Consolas, monospace; font-size: 9px; }.speculative-result div { display: flex; align-items: center; gap: 7px; }.speculative-result pre { max-height: 150px; margin: 9px 0 0; overflow: auto; color: #afc5d0; white-space: pre-wrap; }.speculative-disclaimer { margin: 14px 0 0; color: #698294; font-family: "IBM Plex Mono", Consolas, monospace; font-size: 8px; line-height: 1.5; }
 @keyframes slow-spin { to { transform: rotate(360deg); } }
 @media (max-width: 800px) { .speculative-grid { grid-template-columns: 1fr; }.speculative-metrics { grid-template-columns: repeat(2, 1fr); }.speculative-actions { grid-template-columns: repeat(2, 1fr); }.speculative-controls { grid-template-columns: 1fr; } }
+
+/* =========================================================================
+   JUDGE PRESENTATION MODE (High-Contrast Pristine White Enterprise Suite)
+   ========================================================================= */
+[data-theme="judge-white"],
+.theme-judge-white {
+  --ink: #f8fafc;
+  --ink-raised: #ffffff;
+  --panel: rgba(255, 255, 255, 0.95);
+  --panel-solid: #ffffff;
+  --line: rgba(203, 213, 225, 0.85);
+  --line-bright: rgba(14, 165, 233, 0.5);
+  --muted: #475569;
+  --text: #0f172a;
+  --cyan: #0284c7;
+  --green: #059669;
+  --amber: #d97706;
+  --red: #e11d48;
+}
+
+[data-theme="judge-white"] body,
+.theme-judge-white body {
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+[data-theme="judge-white"] .app-shell,
+.theme-judge-white .app-shell {
+  background: #f8fafc !important;
+  color: #0f172a !important;
+}
+
+[data-theme="judge-white"] .app-header,
+.theme-judge-white .app-header {
+  background: rgba(255, 255, 255, 0.96) !important;
+  border-bottom-color: rgba(226, 232, 240, 0.95) !important;
+  color: #0f172a !important;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+}
+
+[data-theme="judge-white"] .workspace,
+.theme-judge-white .workspace {
+  background: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+
+[data-theme="judge-white"] .sidebar,
+.theme-judge-white .sidebar {
+  background: #ffffff !important;
+  border-right-color: #e2e8f0 !important;
+}
+
+[data-theme="judge-white"] .sidebar-nav button,
+.theme-judge-white .sidebar-nav button {
+  color: #475569 !important;
+}
+
+[data-theme="judge-white"] .sidebar-nav button:hover,
+.theme-judge-white .sidebar-nav button:hover {
+  background: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+
+[data-theme="judge-white"] .sidebar-nav button.active,
+.theme-judge-white .sidebar-nav button.active {
+  background: #e0f2fe !important;
+  color: #0369a1 !important;
+  border-left-color: #0284c7 !important;
+}
+
+[data-theme="judge-white"] .metric-card,
+.theme-judge-white .metric-card,
+[data-theme="judge-white"] .panel,
+.theme-judge-white .panel {
+  background: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04) !important;
+  color: #0f172a !important;
+}
+
+[data-theme="judge-white"] .command-hero,
+.theme-judge-white .command-hero {
+  background: linear-gradient(135deg, #ffffff 0%, #f0fdf4 100%) !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+}

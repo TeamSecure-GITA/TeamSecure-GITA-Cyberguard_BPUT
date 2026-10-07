@@ -28,7 +28,8 @@ const THREAT_ARCS = [
   { from: [-33, 151], to: [1, 103], color: 'rgba(16, 185, 129, 0.6)' },   // Sydney to Singapore
 ];
 
-export default function CyberGlobe({ onOpenWorkspace, onSelectBadge }) {
+export default function CyberGlobe({ onOpenWorkspace, onSelectBadge, themeMode = 'dark' }) {
+  const isLight = themeMode === 'judge-white' || themeMode === 'light';
   const canvasRef = useRef(null);
   const [activeBadge, setActiveBadge] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -522,21 +523,29 @@ export default function CyberGlobe({ onOpenWorkspace, onSelectBadge }) {
             onMouseEnter={() => setActiveBadge(badge.id)}
             onMouseLeave={() => setActiveBadge(null)}
             onClick={() => onSelectBadge?.(badge.id)}
-            className={`absolute z-30 flex items-center gap-3 px-3.5 py-2.5 rounded-xl backdrop-blur-md bg-[#041220]/90 border shadow-xl transition-all duration-300 cursor-pointer hover:scale-105 active:scale-95 ${badge.cardPosition} ${badge.borderClass} ${
-              isHovered ? 'shadow-[0_0_30px_rgba(6,182,212,0.6)] border-cyan-300' : 'shadow-[0_4px_20px_rgba(0,0,0,0.6)]'
+            className={`absolute z-30 flex items-center gap-3 px-3.5 py-2.5 rounded-xl backdrop-blur-md border shadow-xl transition-all duration-300 cursor-pointer hover:scale-105 active:scale-95 ${badge.cardPosition} ${
+              isLight
+                ? isHovered
+                  ? 'bg-white/95 border-cyan-500 shadow-[0_10px_25px_rgba(6,182,212,0.3)]'
+                  : 'bg-white/95 border-slate-300 text-slate-800 shadow-[0_4px_20px_rgba(0,0,0,0.08)]'
+                : isHovered
+                  ? 'bg-[#041220]/90 shadow-[0_0_30px_rgba(6,182,212,0.6)] border-cyan-300'
+                  : `bg-[#041220]/90 shadow-[0_4px_20px_rgba(0,0,0,0.6)] ${badge.borderClass}`
             }`}
           >
             {/* Left Square Icon Pill */}
-            <div className={`p-2 rounded-lg border flex items-center justify-center shrink-0 ${badge.iconBg}`}>
+            <div className={`p-2 rounded-lg border flex items-center justify-center shrink-0 ${
+              isLight ? 'bg-slate-100 border-slate-300' : badge.iconBg
+            }`}>
               <IconComponent size={15} style={{ color: badge.accentColor }} />
             </div>
 
             {/* Texts */}
             <div className="flex flex-col text-left">
-              <span className="font-mono text-xs font-bold text-white tracking-wide">
+              <span className={`font-mono text-xs font-bold tracking-wide ${isLight ? 'text-slate-900' : 'text-white'}`}>
                 {badge.title}
               </span>
-              <span className="text-[11px] text-slate-300 font-normal leading-tight mt-0.5">
+              <span className={`text-[11px] font-normal leading-tight mt-0.5 ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>
                 {badge.desc}
               </span>
             </div>

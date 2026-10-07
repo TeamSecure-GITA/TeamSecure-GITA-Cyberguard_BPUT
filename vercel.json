@@ -1,0 +1,9 @@
+{
+  "framework": "vite",
+  "buildCommand": "npm --prefix cyberguard-frontend run build",
+  "outputDirectory": "cyberguard-frontend/dist",
+  "installCommand": "npm --prefix cyberguard-frontend ci",
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/" }
+  ]
+}
