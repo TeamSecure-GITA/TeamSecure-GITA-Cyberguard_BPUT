@@ -693,21 +693,12 @@ def initialize_database():
         configured_demo_accounts = []
         if CYBERGUARD_ENV != "production":
             demo_accounts = (
-                ("analyst", "CYBERGUARD_DEMO_ANALYST_PASSWORD", "analyst", "", None, "CyberGuard@Analyst2026!"),
-                ("lead", "CYBERGUARD_DEMO_LEAD_PASSWORD", "lead", "", None, "CyberGuard@Lead2026!"),
-                ("admin", "CYBERGUARD_DEMO_ADMIN_PASSWORD", "admin", SECURITY_OWNER_EMAIL, HEAD_ADMIN_USERNAME, "CyberGuard@Admin2026!"),
+                ("analyst", "CYBERGUARD_DEMO_ANALYST_PASSWORD", "analyst", "", None),
+                ("lead", "CYBERGUARD_DEMO_LEAD_PASSWORD", "lead", "", None),
+                ("admin", "CYBERGUARD_DEMO_ADMIN_PASSWORD", "admin", SECURITY_OWNER_EMAIL, HEAD_ADMIN_USERNAME),
             )
-            for username, password_key, role, email, parent, default_pw in demo_accounts:
-                raw = os.getenv(password_key)
-                password = raw.strip() if raw is not None else None
-                if password is None and default_pw:
-                    # Env var not set at all – use default only when it was
-                    # never explicitly removed (i.e. the env var key exists in
-                    # the process environment).  If the key is truly absent,
-                    # skip this demo account so tests can opt out.
-                    password = None
-                elif password is not None and not password and default_pw:
-                    password = default_pw
+            for username, password_key, role, email, parent in demo_accounts:
+                password = os.getenv(password_key, "").strip()
                 if password:
                     configured_demo_accounts.append((username, password))
                     users.append((username, hash_password(password), role, email, parent, "active"))
@@ -2237,6 +2228,10 @@ def apply_known_contact_comparison(assessment: dict[str, Any], category: str, pa
         "contact_name": contact["name"],
         "sender_match": comparison["sender_match"],
         "vocabulary_similarity": comparison["vocabulary_similarity"],
+        "style_comparison_status": comparison["style_comparison_status"],
+        "message_word_count": comparison["message_word_count"],
+        "dominant_profile_script": comparison["dominant_profile_script"],
+        "dominant_message_script": comparison["dominant_message_script"],
         "sample_count": comparison["sample_count"],
         "caveat": comparison["caveat"],
     }

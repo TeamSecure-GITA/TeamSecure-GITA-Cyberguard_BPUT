@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta, timezone
+import json
 
 import pytest
 from fastapi import HTTPException
 
+import detection_engine
 import main
 from network_ingestion import normalize_network_events
 
@@ -37,6 +39,60 @@ def test_zeek_and_suricata_records_normalize_to_flow_telemetry():
     assert normalized["flows"][1]["destination_port"] == 53
     assert normalized["flows"][1]["bytes_out"] == 900
     assert normalized["flows"][1]["signature"] == "DNS policy event"
+    assert normalized["flows"][1]["event_type"] == "alert"
+
+
+def test_suricata_alert_severity_is_preserved_and_scored_as_bounded_evidence():
+    normalized = normalize_network_events({
+        "events": [
+            {
+                "event_type": "alert",
+                "src_ip": "10.0.0.5",
+                "dest_ip": "8.8.8.8",
+                "proto": "tcp",
+                "alert": {
+                    "signature": "ET MALWARE C2 callback",
+                    "signature_id": 2026001,
+                    "category": "A Network Trojan was detected",
+                    "severity": 1,
+                    "action": "allowed",
+                },
+            },
+            {
+                "event_type": "alert",
+                "alert": {
+                    "signature": "ET MALWARE C2 callback",
+                    "severity": 2,
+                },
+            },
+        ]
+    })
+
+    score, reasons, indicators = detection_engine.analyze_technical_activity(
+        json.dumps(normalized),
+        "network",
+    )
+
+    assert score == 60
+    assert len(indicators) == 1
+    assert indicators[0]["name"] == "Suricata IDS Alert"
+    assert indicators[0]["weight"] == 45
+    assert indicators[0]["signature"] == "ET MALWARE C2 callback"
+    assert indicators[0]["severity"] == "critical"
+    assert indicators[0]["category"] == "A Network Trojan was detected"
+    assert indicators[0]["action"] == "allowed"
+    assert any("a critical severity IDS alert" in reason for reason in reasons)
+
+
+def test_network_alert_without_recognized_severity_is_not_scored_as_sensor_evidence():
+    score, reasons, indicators = detection_engine.analyze_technical_activity(
+        '{"events":[{"event_type":"alert","signature":"unrated alert","signature_severity":"urgent"}]}',
+        "network",
+    )
+
+    assert score == 15
+    assert reasons == []
+    assert indicators == []
 
 
 def test_network_ingestion_creates_incident_for_port_scan_batch(tmp_path, monkeypatch):

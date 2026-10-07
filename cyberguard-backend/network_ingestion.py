@@ -82,8 +82,12 @@ def normalize_network_events(payload: dict[str, Any]) -> dict[str, list[dict[str
             "packets_out": _number(flow.get("pkts_toserver", entry.get("packets_out", 0))),
             "packets_in": _number(flow.get("pkts_toclient", entry.get("packets_in", 0))),
             "timestamp": str(entry.get("ts", entry.get("timestamp", "")))[:64],
-            "event_type": str(entry.get("event_type", entry.get("event", "")))[:80],
+            "event_type": str(entry.get("event_type", entry.get("event", "alert" if alert else "")))[:80],
             "signature": str(alert.get("signature", entry.get("signature", "")))[:256],
+            "signature_category": str(alert.get("category", entry.get("signature_category", "")))[:160],
+            "signature_severity": str(alert.get("severity", entry.get("signature_severity", "")))[:24],
+            "signature_action": str(alert.get("action", entry.get("signature_action", "")))[:32],
+            "signature_id": str(alert.get("signature_id", alert.get("sid", entry.get("signature_id", ""))))[:64],
         }
         if any(not isinstance(timestamp, str) for timestamp in timestamps):
             raise ValueError(f"Network event {index} timestamps must contain strings.")

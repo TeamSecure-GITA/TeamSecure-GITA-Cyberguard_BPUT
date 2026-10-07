@@ -574,6 +574,55 @@ def analyze_structured_telemetry(payload: str, category: str) -> tuple[int, List
         return 0.0
 
     if category == "network":
+        severity_weights = {
+            "1": 45,
+            "critical": 45,
+            "2": 35,
+            "high": 35,
+            "3": 20,
+            "medium": 20,
+            "4": 10,
+            "low": 10,
+        }
+        severity_names = {
+            "1": "critical",
+            "critical": "critical",
+            "2": "high",
+            "high": "high",
+            "3": "medium",
+            "medium": "medium",
+            "4": "low",
+            "low": "low",
+        }
+        alert_signatures = {}
+        for record in records:
+            if not isinstance(record, dict) or str(record.get("event_type", "")).lower() != "alert":
+                continue
+            signature = str(record.get("signature", "")).strip()
+            severity = str(record.get("signature_severity", "")).strip().lower()
+            weight = severity_weights.get(severity)
+            if not signature or weight is None:
+                continue
+            key = signature.casefold()
+            alert = {
+                "name": "Suricata IDS Alert",
+                "weight": weight,
+                "signature": signature[:256],
+                "severity": severity_names[severity],
+            }
+            for field in ("signature_category", "signature_action", "signature_id"):
+                value = record.get(field)
+                if value:
+                    alert[field.removeprefix("signature_")] = str(value)[:160]
+            if key not in alert_signatures or alert_signatures[key]["weight"] < weight:
+                alert_signatures[key] = alert
+        for alert in sorted(alert_signatures.values(), key=lambda item: item["weight"], reverse=True)[:3]:
+            score += alert["weight"]
+            reasons.append(
+                f"Network sensor reported a {alert['severity']} severity IDS alert: {alert['signature']}."
+            )
+            indicators.append(alert)
+
         ports = set()
         for record in records:
             if not isinstance(record, dict):
@@ -719,6 +768,12 @@ def analyze_technical_activity(payload: str, category: str = "network") -> tuple
     score = 15
     reasons = []
     indicators = []
+    structured_network_payload = False
+    if category == "network":
+        try:
+            structured_network_payload = isinstance(json.loads(payload), (dict, list))
+        except (TypeError, json.JSONDecodeError):
+            pass
     signatures = {
         "malware": (45, "Malware or executable payload indicators detected."),
         "powershell": (35, "Suspicious PowerShell execution pattern detected."),
@@ -732,11 +787,12 @@ def analyze_technical_activity(payload: str, category: str = "network") -> tuple
     }
     if category == "system_logs":
         signatures.pop("powershell")
-    for signature, (increment, reason) in signatures.items():
-        if signature in payload_lower:
-            score += increment
-            reasons.append(reason)
-            indicators.append({"name": f"{signature.title()} Signature", "weight": increment})
+    if not structured_network_payload:
+        for signature, (increment, reason) in signatures.items():
+            if signature in payload_lower:
+                score += increment
+                reasons.append(reason)
+                indicators.append({"name": f"{signature.title()} Signature", "weight": increment})
     structured_score, structured_reasons, structured_indicators = analyze_structured_telemetry(payload, category)
     if structured_reasons:
         score = min(99, score + structured_score - 15)
