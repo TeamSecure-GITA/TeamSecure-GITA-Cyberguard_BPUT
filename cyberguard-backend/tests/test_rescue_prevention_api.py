@@ -178,6 +178,29 @@ def test_auth_configuration_requires_explicit_admin_credentials_in_development()
         main.validate_auth_configuration("development", "", False, "", "")
 
 
+def test_production_deployment_configuration_requires_live_https_origins():
+    main.validate_public_deployment_configuration(
+        "production",
+        "https://app.example.com,https://preview.example.com",
+        "https://app.example.com",
+    )
+
+
+@pytest.mark.parametrize(
+    ("origins", "public_app_url"),
+    [
+        ("", ""),
+        ("http://app.example.com", "https://app.example.com"),
+        ("https://app.example.com/path", "https://app.example.com"),
+        ("https://app.example.com", "http://app.example.com"),
+        ("https://user:password@app.example.com", "https://app.example.com"),
+    ],
+)
+def test_production_deployment_configuration_rejects_invalid_origins(origins, public_app_url):
+    with pytest.raises(RuntimeError, match="CYBERGUARD_|public HTTPS origins"):
+        main.validate_public_deployment_configuration("production", origins, public_app_url)
+
+
 def test_production_disables_demo_identity_provider(monkeypatch):
     monkeypatch.setattr(main, "CYBERGUARD_ENV", "production")
 

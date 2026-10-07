@@ -5,7 +5,7 @@ import { ArrowLeft, Lock, LogIn, Shield, Eye, EyeOff, User, Sparkles } from 'luc
 import { getApiBaseUrl } from '../apiConfig';
 import { loginWithGoogle, formatFirebaseAuthError } from '../firebase';
 
-export default function Login({ onLogin, onReturnToPortal }) {
+export default function Login({ onLogin, onReturnToPortal, googleAuthError }) {
   const apiBaseUrl = getApiBaseUrl();
   const [username, setUsername] = useState('analyst');
   const [password, setPassword] = useState('CyberGuard@Analyst2026!');
@@ -14,6 +14,8 @@ export default function Login({ onLogin, onReturnToPortal }) {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+
+  const displayedError = googleAuthError || error;
 
   const DEMO_PRESETS = [
     { label: 'Analyst', role: 'analyst', username: 'analyst', password: 'CyberGuard@Analyst2026!' },
@@ -50,11 +52,17 @@ export default function Login({ onLogin, onReturnToPortal }) {
     setLoading(true);
     setError(null);
     try {
-      const response = await axios.post(`${apiBaseUrl}/api/v1/auth/login`, { username, password });
+      const response = await axios.post(
+        `${apiBaseUrl}/api/v1/auth/login`,
+        { username, password },
+        { timeout: 90000 },
+      );
       onLogin(response.data);
     } catch (requestError) {
       if (!requestError.response) {
-        setError(`Cannot reach backend server (${apiBaseUrl}). Ensure the backend is running.`);
+        setError(requestError.code === 'ECONNABORTED'
+          ? `The backend at ${apiBaseUrl} did not respond in time. Check that the API is healthy and try again.`
+          : `Cannot reach backend server at ${apiBaseUrl}. Check that the API is running and that its URL is correct.`);
       } else if (requestError.response.status === 401) {
         setError(requestError.response.data?.detail || 'Invalid username or password.');
       } else if (requestError.response.status === 502 || requestError.response.status === 503) {
@@ -207,9 +215,9 @@ export default function Login({ onLogin, onReturnToPortal }) {
             </div>
           </div>
 
-          {error && (
+          {displayedError && (
             <p role="alert" className="text-xs text-rose-300 bg-rose-950/40 border border-rose-500/30 p-2.5 rounded-lg animate-in fade-in">
-              {error}
+              {displayedError}
             </p>
           )}
 

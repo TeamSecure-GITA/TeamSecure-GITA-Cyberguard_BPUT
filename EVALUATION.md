@@ -117,3 +117,25 @@ IOC results include local reputation and risk enrichment. Set `CYBERGUARD_THREAT
 - Authorization: Analyst inspection and Lead response execution.
 - Scalability path: production Compose uses PostgreSQL and Redis; horizontal API replicas still require an external load balancer, shared uploads/artifacts, and tested connection-pool limits.
 - Deployment path: containerize backend/frontend, terminate TLS at the ingress, add structured logging, rate limits, secret management, and a SIEM connector.
+
+## Fresh checkout verification (2026-10-07)
+
+The following checks were run against the current working tree; they supersede historical test counts and claims that dependencies, frontend packages, or media weights are absent:
+
+- Backend: `python -m pytest -q` passed (198 tests, one third-party deprecation warning).
+- Frontend: `npm run lint`, `npm run build`, and the authenticated `npm run test:smoke` passed.
+- Local application: the API health endpoint and frontend returned HTTP 200; the configured local head-admin login succeeded.
+- Pretrained media: `python check_models.py` exercised image and audio inference using the local weight files. A successful inference/load is a runtime smoke check, not an accuracy or calibration result.
+- Production deployment: at verification time, the configured Render health URL returned HTTP 404 and the configured Vercel site returned `DEPLOYMENT_NOT_FOUND`. These endpoints therefore do not demonstrate a working production deployment; correct deployment ownership/settings and a redeploy are required.
+- Production infrastructure: Docker was unavailable in the verification environment, so PostgreSQL, Redis, worker startup, backup/restore, and production Compose health checks were not run.
+- Media evaluation and external actions: no separate authorized media calibration/holdout dataset or live provider credentials were supplied. Pretrained model outputs remain uncalibrated review signals, and external response integrations remain unverified.
+
+These results establish reproducible local checks for the tested paths only. They do not establish 100% implementation coverage, calibrated detector accuracy, production readiness, or a guarantee of zero errors.
+
+### Deployment configuration follow-up (2026-10-07)
+
+- Removed the checked-in production API URL because its Render hostname does not serve this backend. A production Vite build now succeeds only when `VITE_API_URL` is explicitly supplied and rejects a missing value.
+- Removed the retired Vercel URL from backend CORS defaults, configured the supplied branch URL in the Render Blueprint, and added the required private Key Value dependency. The Render Blueprint now targets the user-selected free demo, with ephemeral SQLite storage and pretrained media disabled.
+- Follow-up local checks: focused backend API tests passed (132 tests), frontend lint passed, and the production frontend build passed with an explicit HTTPS test URL. This URL was only used to verify build configuration and is not a deployment target.
+- Live deployment remains unavailable: no Render backend is currently deployed, so the candidate health hostname returns 404; the previously configured Vercel alias also returns 404. Creating the Render Blueprint and setting Vercel's backend URL still require deployment-account access not available in this workspace.
+- The supplied branch-specific Vercel URL returns an SSO redirect for anonymous requests. It is not a publicly accessible production origin unless its Deployment Protection setting is changed.

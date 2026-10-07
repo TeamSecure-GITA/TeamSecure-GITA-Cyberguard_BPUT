@@ -2,8 +2,9 @@ services:
   - type: web
     name: cyberguard-backend
     runtime: python
+    plan: free
     rootDir: cyberguard-backend
-    buildCommand: pip install -r requirements.txt -r requirements-models.txt
+    buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
@@ -12,7 +13,7 @@ services:
       - key: CYBERGUARD_ENV
         value: production
       - key: CYBERGUARD_ENABLE_PRETRAINED_MEDIA
-        value: "true"
+        value: "false"
       - key: CYBERGUARD_ENABLE_RDAP
         value: "true"
       - key: CYBERGUARD_ENABLE_CT
@@ -22,42 +23,19 @@ services:
       - key: CYBERGUARD_HEAD_ADMIN_PASSWORD
         sync: false
       - key: CYBERGUARD_FRONTEND_ORIGINS
-        value: https://teamsecure-gita-cyberguard.vercel.app
+        value: https://teamsecure-gita-cyberguardbputproject-git-main-team-secure1.vercel.app
       - key: CYBERGUARD_PUBLIC_APP_URL
-        value: https://teamsecure-gita-cyberguard.vercel.app
+        value: https://teamsecure-gita-cyberguardbputproject-git-main-team-secure1.vercel.app
       - key: CYBERGUARD_DB_PATH
-        value: /var/data/cyberguard.db
+        value: /tmp/cyberguard.db
       - key: CYBERGUARD_ALLOW_ANONYMOUS_EVAL
         value: "false"
-      - key: CYBERGUARD_DATABASE_URL
-        sync: false
-      - key: CYBERGUARD_SIEM_URL
-        sync: false
-      - key: CYBERGUARD_JIRA_URL
-        sync: false
-      - key: CYBERGUARD_JIRA_TOKEN
-        sync: false
-      - key: CYBERGUARD_JIRA_PROJECT
-        sync: false
-      - key: CYBERGUARD_SERVICENOW_URL
-        sync: false
-      - key: CYBERGUARD_SERVICENOW_TOKEN
-        sync: false
-      - key: CYBERGUARD_GRAPH_TOKEN
-        sync: false
-      - key: CYBERGUARD_OKTA_URL
-        sync: false
-      - key: CYBERGUARD_OKTA_TOKEN
-        sync: false
-      - key: CYBERGUARD_EDR_URL
-        sync: false
-      - key: CYBERGUARD_EDR_TOKEN
-        sync: false
-      - key: CYBERGUARD_SECRET_MANAGER
-        sync: false
-      - key: CYBERGUARD_OTEL_ENDPOINT
-        sync: false
-    disk:
-      name: cyberguard-data
-      mountPath: /var/data
-      sizeGB: 1
+      - key: CYBERGUARD_REDIS_URL
+        fromService:
+          type: keyvalue
+          name: cyberguard-ephemeral-store
+          property: connectionString
+  - type: keyvalue
+    name: cyberguard-ephemeral-store
+    plan: free
+    ipAllowList: []

@@ -17,6 +17,7 @@ import base64
 import binascii
 import wave
 from email.message import EmailMessage
+from urllib.parse import urlsplit
 
 try:
     import bcrypt
@@ -145,6 +146,36 @@ def validate_auth_configuration(environment: str, jwt_secret: str, allow_anonymo
         raise RuntimeError("CYBERGUARD_ALLOW_ANONYMOUS_EVAL cannot be enabled in production")
 
 
+def validate_public_deployment_configuration(environment: str, frontend_origins: str, public_app_url: str):
+    if environment != "production":
+        return
+
+    def validate_origin(value: str, setting_name: str):
+        try:
+            parsed = urlsplit(value.strip())
+            port = parsed.port
+        except ValueError as exc:
+            raise RuntimeError(f"{setting_name} must contain valid public HTTPS origins") from exc
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+            or (port is not None and not 1 <= port <= 65535)
+        ):
+            raise RuntimeError(f"{setting_name} must contain public HTTPS origins without paths or credentials")
+
+    origins = [origin.strip() for origin in frontend_origins.split(",") if origin.strip()]
+    if not origins:
+        raise RuntimeError("CYBERGUARD_FRONTEND_ORIGINS must contain at least one deployed frontend HTTPS origin")
+    for origin in origins:
+        validate_origin(origin, "CYBERGUARD_FRONTEND_ORIGINS")
+    validate_origin(public_app_url, "CYBERGUARD_PUBLIC_APP_URL")
+
+
 configured_head_admin_username = os.getenv("CYBERGUARD_HEAD_ADMIN_USERNAME", "").strip()
 configured_head_admin_password = os.getenv("CYBERGUARD_HEAD_ADMIN_PASSWORD", "")
 validate_auth_configuration(
@@ -159,9 +190,7 @@ if not JWT_SECRET:
 SECURITY_OWNER_EMAIL = os.getenv("CYBERGUARD_SECURITY_OWNER_EMAIL", "teamsecure.project@gmail.com")
 PUBLIC_APP_URL = os.getenv(
     "CYBERGUARD_PUBLIC_APP_URL",
-    "https://teamsecure-gita-cyberguard.vercel.app"
-    if os.getenv("RENDER") or os.getenv("CYBERGUARD_ENV") == "production"
-    else "http://127.0.0.1:5173",
+    "" if CYBERGUARD_ENV == "production" else "http://127.0.0.1:5173",
 )
 ACCESS_REQUEST_TTL_HOURS = max(1, int(os.getenv("CYBERGUARD_ACCESS_REQUEST_TTL_HOURS", "24")))
 HEAD_ADMIN_USERNAME = configured_head_admin_username
@@ -755,10 +784,10 @@ DEFAULT_CORS_ORIGINS = (
     "http://127.0.0.1:5174,http://localhost:5174,"
     "http://127.0.0.1:5175,http://localhost:5175,"
     "http://127.0.0.1:3000,http://localhost:3000,"
-    "http://127.0.0.1:8000,http://localhost:8000,"
-    "https://teamsecure-gita-cyberguard.vercel.app"
+    "http://127.0.0.1:8000,http://localhost:8000"
 )
 configured_origins = os.getenv("CYBERGUARD_FRONTEND_ORIGINS", DEFAULT_CORS_ORIGINS)
+validate_public_deployment_configuration(CYBERGUARD_ENV, configured_origins, PUBLIC_APP_URL)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
