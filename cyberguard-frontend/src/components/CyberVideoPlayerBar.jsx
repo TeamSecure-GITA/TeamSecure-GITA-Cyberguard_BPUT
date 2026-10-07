@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, Volume2, VolumeX, Maximize2, X, Sparkles, Shield, ChevronUp } from 'lucide-react';
+import { Play, Pause, Volume2, VolumeX, Maximize2, X, ChevronUp } from 'lucide-react';
 
 const TOTAL_DURATION_SECONDS = 103; // 1:43 total duration matching reference screenshot
 
@@ -21,14 +21,15 @@ export default function CyberVideoPlayerBar({
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
   const [isMuted, setIsMuted] = useState(false);
   const [isMinimized, setIsMinimized] = useState(!isOpen);
-  const [showTooltip, setShowTooltip] = useState(false);
+  const [prevIsOpen, setPrevIsOpen] = useState(isOpen);
   const timerRef = useRef(null);
 
   const isLight = themeMode === 'judge-white' || themeMode === 'light';
 
-  useEffect(() => {
+  if (isOpen !== prevIsOpen) {
+    setPrevIsOpen(isOpen);
     setIsMinimized(!isOpen);
-  }, [isOpen]);
+  }
 
   useEffect(() => {
     if (isPlaying) {
@@ -159,8 +160,6 @@ export default function CyberVideoPlayerBar({
         {/* Scrubber Progress Bar */}
         <div 
           onClick={handleScrubberClick}
-          onMouseEnter={() => setShowTooltip(true)}
-          onMouseLeave={() => setShowTooltip(false)}
           className="relative flex-1 h-2 rounded-full bg-slate-300/50 dark:bg-slate-700/60 cursor-pointer overflow-visible group"
         >
           {/* Filled Progress Track */}

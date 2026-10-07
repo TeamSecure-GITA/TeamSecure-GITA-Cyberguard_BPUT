@@ -75,17 +75,12 @@ export default function CyberRadarPortal({
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showDemoModal, setShowDemoModal] = useState(false);
   const [showVideoBar, setShowVideoBar] = useState(true);
-  const [themeMode, setThemeMode] = useState(propThemeMode || 'dark');
-
-  React.useEffect(() => {
-    if (propThemeMode) {
-      setThemeMode(propThemeMode);
-    }
-  }, [propThemeMode]);
+  const [internalThemeMode, setInternalThemeMode] = useState(propThemeMode || 'dark');
+  const themeMode = onThemeToggle ? (propThemeMode || 'dark') : internalThemeMode;
 
   const toggleTheme = (targetTheme) => {
     const next = targetTheme || (themeMode === 'dark' ? 'judge-white' : 'dark');
-    setThemeMode(next);
+    setInternalThemeMode(next);
     onThemeToggle?.(next);
   };
 
@@ -740,56 +735,84 @@ export default function CyberRadarPortal({
           ========================================================================= */}
       
       {/* Features Section */}
-      <section id="features" className="relative z-20 py-16 px-6 sm:px-10 border-t border-slate-800/80 bg-[#020914]">
+      <section id="features" className={`relative z-20 py-16 px-6 sm:px-10 border-t transition-colors ${
+        isLight ? 'border-slate-200 bg-white' : 'border-slate-800/80 bg-[#020914]'
+      }`}>
         <div className="max-w-7xl mx-auto space-y-10">
           <div className="text-center max-w-2xl mx-auto space-y-3">
-            <span className="text-xs font-mono font-bold text-cyan-400 tracking-widest uppercase">
+            <span className={`text-xs font-mono font-bold tracking-widest uppercase ${
+              isLight ? 'text-cyan-600' : 'text-cyan-400'
+            }`}>
               // ARCHITECTURE CAPABILITIES
             </span>
-            <h2 className="text-3xl sm:text-4xl font-extrabold text-white">
+            <h2 className={`text-3xl sm:text-4xl font-extrabold ${isLight ? 'text-slate-900' : 'text-white'}`}>
               End-to-End Autonomous Defense Shield
             </h2>
-            <p className="text-sm sm:text-base text-slate-400">
+            <p className={`text-sm sm:text-base ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
               CyberGuard AI inspects suspicious signals across university domains, student portals, executive communications, and network edge gateways.
             </p>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="p-6 rounded-2xl bg-[#051424] border border-cyan-500/20 hover:border-cyan-500/50 transition-all space-y-4 shadow-lg group">
-              <div className="w-12 h-12 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 flex items-center justify-center group-hover:scale-105 transition-transform">
+            <div className={`p-6 rounded-2xl border transition-all space-y-4 group ${
+              isLight 
+                ? 'bg-slate-50/80 border-slate-200/90 hover:border-cyan-500/50 shadow-sm' 
+                : 'bg-[#051424] border-cyan-500/20 hover:border-cyan-500/50 shadow-lg'
+            }`}>
+              <div className={`w-12 h-12 rounded-xl border flex items-center justify-center group-hover:scale-105 transition-transform ${
+                isLight ? 'bg-cyan-50 border-cyan-200 text-cyan-600' : 'bg-cyan-500/10 border-cyan-500/30 text-cyan-400'
+              }`}>
                 <Radio size={24} />
               </div>
-              <h3 className="text-lg font-bold text-white">Neural Phishing Triangulation</h3>
-              <p className="text-xs text-slate-400 leading-relaxed">
+              <h3 className={`text-lg font-bold ${isLight ? 'text-slate-900' : 'text-white'}`}>Neural Phishing Triangulation</h3>
+              <p className={`text-xs leading-relaxed ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
                 Extracts typosquatting distance, zero-day domain age, SSL telemetry, and malicious DOM exfiltration patterns in sub-50ms.
               </p>
-              <div className="pt-2 font-mono text-[11px] text-cyan-300 flex items-center gap-1.5">
+              <div className={`pt-2 font-mono text-[11px] flex items-center gap-1.5 font-semibold ${
+                isLight ? 'text-cyan-700' : 'text-cyan-300'
+              }`}>
                 <span>99.4% F1 Detection Benchmark</span>
               </div>
             </div>
 
-            <div className="p-6 rounded-2xl bg-[#051424] border border-emerald-500/20 hover:border-emerald-500/50 transition-all space-y-4 shadow-lg group">
-              <div className="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center justify-center group-hover:scale-105 transition-transform">
+            <div className={`p-6 rounded-2xl border transition-all space-y-4 group ${
+              isLight 
+                ? 'bg-slate-50/80 border-slate-200/90 hover:border-emerald-500/50 shadow-sm' 
+                : 'bg-[#051424] border-emerald-500/20 hover:border-emerald-500/50 shadow-lg'
+            }`}>
+              <div className={`w-12 h-12 rounded-xl border flex items-center justify-center group-hover:scale-105 transition-transform ${
+                isLight ? 'bg-emerald-50 border-emerald-200 text-emerald-600' : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+              }`}>
                 <Activity size={24} />
               </div>
-              <h3 className="text-lg font-bold text-white">Deepfake & Synthetic Media Forensics</h3>
-              <p className="text-xs text-slate-400 leading-relaxed">
+              <h3 className={`text-lg font-bold ${isLight ? 'text-slate-900' : 'text-white'}`}>Deepfake & Synthetic Media Forensics</h3>
+              <p className={`text-xs leading-relaxed ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
                 Spectral analysis scans voice recordings and video frames for diffusion-model artifacts, acoustic jitter anomalies, and facial boundary mismatch.
               </p>
-              <div className="pt-2 font-mono text-[11px] text-emerald-300 flex items-center gap-1.5">
+              <div className={`pt-2 font-mono text-[11px] flex items-center gap-1.5 font-semibold ${
+                isLight ? 'text-emerald-700' : 'text-emerald-300'
+              }`}>
                 <span>Voice & Face Liveness Verification</span>
               </div>
             </div>
 
-            <div className="p-6 rounded-2xl bg-[#051424] border border-indigo-500/20 hover:border-indigo-500/50 transition-all space-y-4 shadow-lg group">
-              <div className="w-12 h-12 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center group-hover:scale-105 transition-transform">
+            <div className={`p-6 rounded-2xl border transition-all space-y-4 group ${
+              isLight 
+                ? 'bg-slate-50/80 border-slate-200/90 hover:border-indigo-500/50 shadow-sm' 
+                : 'bg-[#051424] border-indigo-500/20 hover:border-indigo-500/50 shadow-lg'
+            }`}>
+              <div className={`w-12 h-12 rounded-xl border flex items-center justify-center group-hover:scale-105 transition-transform ${
+                isLight ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'bg-indigo-500/10 border-indigo-500/30 text-indigo-400'
+              }`}>
                 <FileCheck2 size={24} />
               </div>
-              <h3 className="text-lg font-bold text-white">XAI Explainability & Automated Containment</h3>
-              <p className="text-xs text-slate-400 leading-relaxed">
+              <h3 className={`text-lg font-bold ${isLight ? 'text-slate-900' : 'text-white'}`}>XAI Explainability & Automated Containment</h3>
+              <p className={`text-xs leading-relaxed ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
                 Generates plain-language forensic justifications and directly triggers Cloudflare WAF firewall rules and account isolation.
               </p>
-              <div className="pt-2 font-mono text-[11px] text-indigo-300 flex items-center gap-1.5">
+              <div className={`pt-2 font-mono text-[11px] flex items-center gap-1.5 font-semibold ${
+                isLight ? 'text-indigo-700' : 'text-indigo-300'
+              }`}>
                 <span>Direct WAF / LDAP Orchestration</span>
               </div>
             </div>
@@ -798,46 +821,58 @@ export default function CyberRadarPortal({
       </section>
 
       {/* How It Works Section */}
-      <section id="how-it-works" className="relative z-20 py-16 px-6 sm:px-10 border-t border-slate-800/80 bg-[#030d1d]">
+      <section id="how-it-works" className={`relative z-20 py-16 px-6 sm:px-10 border-t transition-colors ${
+        isLight ? 'border-slate-200 bg-slate-50/60' : 'border-slate-800/80 bg-[#030d1d]'
+      }`}>
         <div className="max-w-7xl mx-auto space-y-12">
           <div className="text-center max-w-2xl mx-auto space-y-3">
-            <span className="text-xs font-mono font-bold text-emerald-400 tracking-widest uppercase">
+            <span className={`text-xs font-mono font-bold tracking-widest uppercase ${
+              isLight ? 'text-emerald-600' : 'text-emerald-400'
+            }`}>
               // OPERATING PIPELINE
             </span>
-            <h2 className="text-3xl sm:text-4xl font-extrabold text-white">
+            <h2 className={`text-3xl sm:text-4xl font-extrabold ${isLight ? 'text-slate-900' : 'text-white'}`}>
               How CyberGuard AI Secures BPUT Digital Assets
             </h2>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-            <div className="p-5 rounded-2xl bg-[#051322] border border-slate-800 space-y-3">
-              <span className="text-2xl font-black font-mono text-cyan-400">01</span>
-              <h4 className="text-base font-bold text-white">Signal Ingestion</h4>
-              <p className="text-xs text-slate-400 leading-relaxed">
+            <div className={`p-5 rounded-2xl border space-y-3 ${
+              isLight ? 'bg-white border-slate-200 shadow-sm' : 'bg-[#051322] border-slate-800'
+            }`}>
+              <span className={`text-2xl font-black font-mono ${isLight ? 'text-cyan-600' : 'text-cyan-400'}`}>01</span>
+              <h4 className={`text-base font-bold ${isLight ? 'text-slate-900' : 'text-white'}`}>Signal Ingestion</h4>
+              <p className={`text-xs leading-relaxed ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
                 Telemetry streams into the SOC from DNS resolvers, campus mail gateways, edge WAF proxies, and endpoint sensors.
               </p>
             </div>
 
-            <div className="p-5 rounded-2xl bg-[#051322] border border-slate-800 space-y-3">
-              <span className="text-2xl font-black font-mono text-emerald-400">02</span>
-              <h4 className="text-base font-bold text-white">Multi-Engine AI Triage</h4>
-              <p className="text-xs text-slate-400 leading-relaxed">
+            <div className={`p-5 rounded-2xl border space-y-3 ${
+              isLight ? 'bg-white border-slate-200 shadow-sm' : 'bg-[#051322] border-slate-800'
+            }`}>
+              <span className={`text-2xl font-black font-mono ${isLight ? 'text-emerald-600' : 'text-emerald-400'}`}>02</span>
+              <h4 className={`text-base font-bold ${isLight ? 'text-slate-900' : 'text-white'}`}>Multi-Engine AI Triage</h4>
+              <p className={`text-xs leading-relaxed ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
                 Parallel inference classifies threat vectors across phishing, audio deepfake clones, and malicious Tor ingress.
               </p>
             </div>
 
-            <div className="p-5 rounded-2xl bg-[#051322] border border-slate-800 space-y-3">
-              <span className="text-2xl font-black font-mono text-indigo-400">03</span>
-              <h4 className="text-base font-bold text-white">XAI Evidence Scoring</h4>
-              <p className="text-xs text-slate-400 leading-relaxed">
+            <div className={`p-5 rounded-2xl border space-y-3 ${
+              isLight ? 'bg-white border-slate-200 shadow-sm' : 'bg-[#051322] border-slate-800'
+            }`}>
+              <span className={`text-2xl font-black font-mono ${isLight ? 'text-indigo-600' : 'text-indigo-400'}`}>03</span>
+              <h4 className={`text-base font-bold ${isLight ? 'text-slate-900' : 'text-white'}`}>XAI Evidence Scoring</h4>
+              <p className={`text-xs leading-relaxed ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
                 Explainable AI maps concrete feature weights and risk confidence factors for immediate SOC analyst inspection.
               </p>
             </div>
 
-            <div className="p-5 rounded-2xl bg-[#051322] border border-slate-800 space-y-3">
-              <span className="text-2xl font-black font-mono text-amber-400">04</span>
-              <h4 className="text-base font-bold text-white">Containment & Rescue</h4>
-              <p className="text-xs text-slate-400 leading-relaxed">
+            <div className={`p-5 rounded-2xl border space-y-3 ${
+              isLight ? 'bg-white border-slate-200 shadow-sm' : 'bg-[#051322] border-slate-800'
+            }`}>
+              <span className={`text-2xl font-black font-mono ${isLight ? 'text-amber-600' : 'text-amber-400'}`}>04</span>
+              <h4 className={`text-base font-bold ${isLight ? 'text-slate-900' : 'text-white'}`}>Containment & Rescue</h4>
+              <p className={`text-xs leading-relaxed ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
                 Dynamic containment actions quarantine compromised credentials, block malicious IPs, and dispatch automated alerts.
               </p>
             </div>
@@ -846,44 +881,58 @@ export default function CyberRadarPortal({
       </section>
 
       {/* About & Contact Section */}
-      <section id="about" className="relative z-20 py-16 px-6 sm:px-10 border-t border-slate-800/80 bg-[#020b18]">
+      <section id="about" className={`relative z-20 py-16 px-6 sm:px-10 border-t transition-colors ${
+        isLight ? 'border-slate-200 bg-white' : 'border-slate-800/80 bg-[#020b18]'
+      }`}>
         <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
           
           <div className="space-y-4">
-            <span className="text-xs font-mono font-bold text-cyan-400 tracking-widest uppercase">
+            <span className={`text-xs font-mono font-bold tracking-widest uppercase ${
+              isLight ? 'text-cyan-600' : 'text-cyan-400'
+            }`}>
               // ABOUT BPUT INNOVATION SUBMISSION
             </span>
-            <h2 className="text-3xl sm:text-4xl font-extrabold text-white">
+            <h2 className={`text-3xl sm:text-4xl font-extrabold ${isLight ? 'text-slate-900' : 'text-white'}`}>
               Pioneered for BPUT Cyber Resilience
             </h2>
-            <p className="text-sm text-slate-300 leading-relaxed">
+            <p className={`text-sm leading-relaxed ${isLight ? 'text-slate-600' : 'text-slate-300'}`}>
               CyberGuard AI was developed by TeamSecure to provide an autonomous, privacy-preserving defense perimeter for BPUT students, faculty, and state university infrastructure against emerging AI-generated cyber warfare.
             </p>
             <div className="flex flex-wrap gap-3 pt-2">
-              <span className="px-3 py-1 rounded-full bg-cyan-950/40 border border-cyan-500/30 text-xs font-mono text-cyan-300">
+              <span className={`px-3 py-1 rounded-full text-xs font-mono font-semibold ${
+                isLight ? 'bg-slate-100 border border-slate-300 text-slate-800' : 'bg-cyan-950/40 border border-cyan-500/30 text-cyan-300'
+              }`}>
                 TeamSecure-GITA
               </span>
-              <span className="px-3 py-1 rounded-full bg-emerald-950/40 border border-emerald-500/30 text-xs font-mono text-emerald-300">
+              <span className={`px-3 py-1 rounded-full text-xs font-mono font-semibold ${
+                isLight ? 'bg-emerald-50 border border-emerald-300 text-emerald-800' : 'bg-emerald-950/40 border border-emerald-500/30 text-emerald-300'
+              }`}>
                 ODISHA CYBER DEFENSE INITIATIVE
               </span>
             </div>
           </div>
 
-          <div id="contact" className="p-6 sm:p-8 rounded-2xl bg-[#061525] border border-slate-700/80 space-y-5">
-            <h3 className="text-lg font-bold text-white flex items-center gap-2">
-              <Mail size={18} className="text-cyan-400" />
+          <div id="contact" className={`p-6 sm:p-8 rounded-2xl border space-y-5 ${
+            isLight ? 'bg-slate-50 border-slate-200 shadow-md' : 'bg-[#061525] border-slate-700/80 shadow-lg'
+          }`}>
+            <h3 className={`text-lg font-bold flex items-center gap-2 ${isLight ? 'text-slate-900' : 'text-white'}`}>
+              <Mail size={18} className={isLight ? 'text-cyan-600' : 'text-cyan-400'} />
               <span>SOC Operations & Contact</span>
             </h3>
-            <p className="text-xs text-slate-400 leading-relaxed">
+            <p className={`text-xs leading-relaxed ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
               Have an urgent security incident to report or need authorization credentials for the BPUT SOC operations room?
             </p>
-            <div className="space-y-3 text-xs font-mono text-slate-300">
-              <div className="flex items-center gap-2.5 p-3 rounded-xl bg-[#030d19] border border-slate-800">
-                <Mail size={15} className="text-cyan-400 shrink-0" />
+            <div className="space-y-3 text-xs font-mono">
+              <div className={`flex items-center gap-2.5 p-3 rounded-xl border ${
+                isLight ? 'bg-white border-slate-200 text-slate-700' : 'bg-[#030d19] border-slate-800 text-slate-300'
+              }`}>
+                <Mail size={15} className={isLight ? 'text-cyan-600 shrink-0' : 'text-cyan-400 shrink-0'} />
                 <span>teamsecure.project@gmail.com</span>
               </div>
-              <div className="flex items-center gap-2.5 p-3 rounded-xl bg-[#030d19] border border-slate-800">
-                <Shield size={15} className="text-emerald-400 shrink-0" />
+              <div className={`flex items-center gap-2.5 p-3 rounded-xl border ${
+                isLight ? 'bg-white border-slate-200 text-slate-700' : 'bg-[#030d19] border-slate-800 text-slate-300'
+              }`}>
+                <Shield size={15} className={isLight ? 'text-emerald-600 shrink-0' : 'text-emerald-400 shrink-0'} />
                 <span>BPUT Incident Response Desk: 24/7 Monitored</span>
               </div>
             </div>
@@ -899,23 +948,27 @@ export default function CyberRadarPortal({
       </section>
 
       {/* Footer System Status Bar */}
-      <footer className="relative z-20 w-full px-5 sm:px-10 py-4 border-t border-slate-800/80 bg-[#010712] backdrop-blur-md flex flex-col sm:flex-row flex-wrap items-center justify-between text-[11px] sm:text-xs font-mono text-slate-400 gap-2 sm:gap-4 text-center sm:text-left">
+      <footer className={`relative z-20 w-full px-5 sm:px-10 py-4 border-t backdrop-blur-md flex flex-col sm:flex-row flex-wrap items-center justify-between text-[11px] sm:text-xs font-mono gap-2 sm:gap-4 text-center sm:text-left transition-colors ${
+        isLight ? 'border-slate-200 bg-slate-100/95 text-slate-600' : 'border-slate-800/80 bg-[#010712] text-slate-400'
+      }`}>
         <div className="flex items-center justify-center sm:justify-start gap-3 sm:gap-6 flex-wrap">
           <span className="flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+            <span className={`w-1.5 h-1.5 rounded-full ${isLight ? 'bg-emerald-600' : 'bg-emerald-400'}`} />
             BPUT CYBER DEFENSE INITIATIVE
           </span>
-          <span className="hidden sm:inline text-slate-700">|</span>
-          <span className="text-slate-500">
+          <span className={`hidden sm:inline ${isLight ? 'text-slate-300' : 'text-slate-700'}`}>|</span>
+          <span className={isLight ? 'text-slate-500' : 'text-slate-500'}>
             LOCAL & DISTRIBUTED HYBRID SENSORS (v2.4)
           </span>
         </div>
 
         <div className="flex items-center justify-center sm:justify-end gap-3 sm:gap-5 flex-wrap">
-          <span className="text-slate-500">Authenticated access required</span>
+          <span className={isLight ? 'text-slate-500' : 'text-slate-500'}>Authenticated access required</span>
           <button 
             onClick={handleLaunch} 
-            className="text-cyan-400 hover:text-cyan-300 font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+            className={`font-semibold flex items-center gap-1 transition-colors cursor-pointer ${
+              isLight ? 'text-cyan-700 hover:text-cyan-800' : 'text-cyan-400 hover:text-cyan-300'
+            }`}
           >
             <span>Open Command View</span>
             <ChevronRight size={13} />

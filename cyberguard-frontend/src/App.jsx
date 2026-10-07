@@ -73,6 +73,30 @@ export default function App() {
   const [demoSeeded, setDemoSeeded] = useState(false);
   const [routingInfo, setRoutingInfo] = useState(null);
   const [googleRedirectError, setGoogleRedirectError] = useState(null);
+  const [themeMode, setThemeMode] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('cyberguard_theme');
+      if (saved) return saved;
+      if (window.location.search.includes('mode=judge') || window.location.search.includes('theme=white')) return 'judge-white';
+    }
+    return 'dark';
+  });
+
+  const handleThemeToggle = (newTheme) => {
+    const next = typeof newTheme === 'string' ? newTheme : (themeMode === 'dark' ? 'judge-white' : 'dark');
+    setThemeMode(next);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('cyberguard_theme', next);
+      document.documentElement.setAttribute('data-theme', next);
+    }
+  };
+
+  React.useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.setAttribute('data-theme', themeMode);
+    }
+  }, [themeMode]);
+
   const authFailureHandled = React.useRef(false);
   const apiBaseUrl = getApiBaseUrl();
 
@@ -339,6 +363,8 @@ export default function App() {
           onQuickLogin={handleQuickLogin}
           onVerifyOtp={handleVerifyOtp}
           onVerifyPasskey={handleVerifyPasskey}
+          themeMode={themeMode}
+          onThemeToggle={handleThemeToggle}
         />
       </LanguageProvider>
     );
@@ -370,6 +396,8 @@ export default function App() {
         onLogout={() => { setSession(null); setViewMode('portal'); }}
         mobileMenuOpen={mobileMenuOpen}
         setMobileMenuOpen={setMobileMenuOpen}
+        themeMode={themeMode}
+        onToggleTheme={handleThemeToggle}
       />
 
       <div className="workspace-shell flex flex-1 relative overflow-x-hidden">

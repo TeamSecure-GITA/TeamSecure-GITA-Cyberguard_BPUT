@@ -30,6 +30,7 @@ const THREAT_ARCS = [
 
 export default function CyberGlobe({ onOpenWorkspace, onSelectBadge, themeMode = 'dark' }) {
   const isLight = themeMode === 'judge-white' || themeMode === 'light';
+  const isLightRef = useRef(isLight);
   const canvasRef = useRef(null);
   const [activeBadge, setActiveBadge] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -37,6 +38,10 @@ export default function CyberGlobe({ onOpenWorkspace, onSelectBadge, themeMode =
   const lastMousePos = useRef({ x: 0, y: 0 });
   const animFrameRef = useRef(null);
   const rotationRef = useRef({ x: 0.22, y: 0.4 });
+
+  useEffect(() => {
+    isLightRef.current = isLight;
+  }, [isLight]);
 
   useEffect(() => {
     rotationRef.current = rotation;
@@ -77,6 +82,7 @@ export default function CyberGlobe({ onOpenWorkspace, onSelectBadge, themeMode =
 
       ctx.clearRect(0, 0, width, height);
 
+      const light = isLightRef.current;
       const rotY = rotationRef.current.y;
       const rotX = rotationRef.current.x;
 
@@ -104,10 +110,17 @@ export default function CyberGlobe({ onOpenWorkspace, onSelectBadge, themeMode =
 
       // 1. Deep Atmospheric Outer Halo
       const outerGlow = ctx.createRadialGradient(cx, cy, radius * 0.75, cx, cy, radius * 1.38);
-      outerGlow.addColorStop(0, 'rgba(6, 182, 212, 0)');
-      outerGlow.addColorStop(0.65, 'rgba(6, 182, 212, 0.08)');
-      outerGlow.addColorStop(0.85, 'rgba(16, 185, 129, 0.2)');
-      outerGlow.addColorStop(1, 'rgba(6, 182, 212, 0)');
+      if (light) {
+        outerGlow.addColorStop(0, 'rgba(6, 182, 212, 0)');
+        outerGlow.addColorStop(0.65, 'rgba(14, 165, 233, 0.08)');
+        outerGlow.addColorStop(0.85, 'rgba(16, 185, 129, 0.16)');
+        outerGlow.addColorStop(1, 'rgba(6, 182, 212, 0)');
+      } else {
+        outerGlow.addColorStop(0, 'rgba(6, 182, 212, 0)');
+        outerGlow.addColorStop(0.65, 'rgba(6, 182, 212, 0.08)');
+        outerGlow.addColorStop(0.85, 'rgba(16, 185, 129, 0.2)');
+        outerGlow.addColorStop(1, 'rgba(6, 182, 212, 0)');
+      }
       ctx.fillStyle = outerGlow;
       ctx.beginPath();
       ctx.arc(cx, cy, radius * 1.38, 0, Math.PI * 2);
@@ -122,10 +135,17 @@ export default function CyberGlobe({ onOpenWorkspace, onSelectBadge, themeMode =
         cy,
         radius
       );
-      sphereGradient.addColorStop(0, 'rgba(7, 30, 58, 0.95)');
-      sphereGradient.addColorStop(0.55, 'rgba(3, 18, 38, 0.95)');
-      sphereGradient.addColorStop(0.9, 'rgba(1, 10, 22, 0.98)');
-      sphereGradient.addColorStop(1, 'rgba(6, 182, 212, 0.3)');
+      if (light) {
+        sphereGradient.addColorStop(0, 'rgba(255, 255, 255, 0.98)');
+        sphereGradient.addColorStop(0.55, 'rgba(240, 249, 255, 0.95)');
+        sphereGradient.addColorStop(0.9, 'rgba(219, 234, 254, 0.92)');
+        sphereGradient.addColorStop(1, 'rgba(14, 165, 233, 0.45)');
+      } else {
+        sphereGradient.addColorStop(0, 'rgba(7, 30, 58, 0.95)');
+        sphereGradient.addColorStop(0.55, 'rgba(3, 18, 38, 0.95)');
+        sphereGradient.addColorStop(0.9, 'rgba(1, 10, 22, 0.98)');
+        sphereGradient.addColorStop(1, 'rgba(6, 182, 212, 0.3)');
+      }
       ctx.fillStyle = sphereGradient;
       ctx.beginPath();
       ctx.arc(cx, cy, radius, 0, Math.PI * 2);
@@ -148,7 +168,7 @@ export default function CyberGlobe({ onOpenWorkspace, onSelectBadge, themeMode =
             started = false;
           }
         }
-        ctx.strokeStyle = 'rgba(6, 182, 212, 0.18)';
+        ctx.strokeStyle = light ? 'rgba(2, 132, 199, 0.24)' : 'rgba(6, 182, 212, 0.18)';
         ctx.lineWidth = 1 * (window.devicePixelRatio || 2);
         ctx.stroke();
       });
@@ -430,9 +450,19 @@ export default function CyberGlobe({ onOpenWorkspace, onSelectBadge, themeMode =
 
             {/* Inner background gradient */}
             <radialGradient id="shieldBg" cx="50%" cy="40%" r="60%">
-              <stop offset="0%" stopColor="#042c3d" stopOpacity="0.95" />
-              <stop offset="70%" stopColor="#021424" stopOpacity="0.98" />
-              <stop offset="100%" stopColor="#010c17" stopOpacity="1" />
+              {isLight ? (
+                <>
+                  <stop offset="0%" stopColor="#ffffff" stopOpacity="0.98" />
+                  <stop offset="70%" stopColor="#f0fdf4" stopOpacity="0.98" />
+                  <stop offset="100%" stopColor="#e0f2fe" stopOpacity="1" />
+                </>
+              ) : (
+                <>
+                  <stop offset="0%" stopColor="#042c3d" stopOpacity="0.95" />
+                  <stop offset="70%" stopColor="#021424" stopOpacity="0.98" />
+                  <stop offset="100%" stopColor="#010c17" stopOpacity="1" />
+                </>
+              )}
             </radialGradient>
 
             {/* Inner neon border gradient */}
@@ -479,7 +509,9 @@ export default function CyberGlobe({ onOpenWorkspace, onSelectBadge, themeMode =
             fontFamily="Space Grotesk, system-ui, sans-serif"
             letterSpacing="-1.5"
             style={{
-              filter: 'drop-shadow(0 0 16px rgba(0, 230, 153, 0.95)) drop-shadow(0 0 4px #00f5ff)',
+              filter: isLight 
+                ? 'drop-shadow(0 0 10px rgba(5, 150, 105, 0.8))'
+                : 'drop-shadow(0 0 16px rgba(0, 230, 153, 0.95)) drop-shadow(0 0 4px #00f5ff)',
             }}
           >
             C
@@ -487,7 +519,11 @@ export default function CyberGlobe({ onOpenWorkspace, onSelectBadge, themeMode =
         </svg>
 
         {/* Floating Mini Status Chip */}
-        <div className="absolute -bottom-3 flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-[#031525]/90 border border-emerald-400/50 text-[10px] font-mono font-bold text-emerald-300 shadow-[0_0_15px_rgba(16,185,129,0.4)]">
+        <div className={`absolute -bottom-3 flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border text-[10px] font-mono font-bold ${
+          isLight
+            ? 'bg-white/95 border-emerald-500/50 text-emerald-700 shadow-md'
+            : 'bg-[#031525]/90 border-emerald-400/50 text-emerald-300 shadow-[0_0_15px_rgba(16,185,129,0.4)]'
+        }`}>
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
           <span>CYBERGUARD</span>
         </div>

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Bell, Search, UserCheck, Orbit, LogOut, Menu, X } from 'lucide-react';
+import { Bell, Search, UserCheck, Orbit, LogOut, Menu, X, Sun, Moon } from 'lucide-react';
 
 export default function Header({ 
   userRole, 
@@ -10,6 +10,8 @@ export default function Header({
   onLogout,
   mobileMenuOpen = false,
   setMobileMenuOpen,
+  themeMode = 'dark',
+  onToggleTheme,
 }) {
   const [query, setQuery] = useState('');
   const submitSearch = (event) => { event.preventDefault(); onSearch?.(query); };
@@ -83,6 +85,51 @@ export default function Header({
           </span>
           <span className="font-semibold">[ CYBERGUARD WORKSPACE READY ]</span>
         </div>
+
+        {/* Theme Mode Toggle Pill: Cyber SOC vs Judge Presentation */}
+        <div className={`hidden md:inline-flex items-center p-0.5 rounded-full border text-[10px] font-mono font-semibold transition-all shrink-0 ${
+          themeMode === 'judge-white'
+            ? 'bg-slate-100 border-slate-300 text-slate-700'
+            : 'bg-[#041424] border-cyan-500/30 text-cyan-300'
+        }`}>
+          <button
+            type="button"
+            onClick={() => onToggleTheme?.('dark')}
+            className={`px-2 py-0.5 rounded-full transition-all cursor-pointer ${
+              themeMode !== 'judge-white'
+                ? 'bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+            title="Cyber SOC Dark Mode"
+          >
+            ⚡ Cyber SOC
+          </button>
+          <button
+            type="button"
+            onClick={() => onToggleTheme?.('judge-white')}
+            className={`px-2 py-0.5 rounded-full transition-all cursor-pointer ${
+              themeMode === 'judge-white'
+                ? 'bg-slate-900 text-white font-bold shadow-sm'
+                : 'text-slate-400 hover:text-white'
+            }`}
+            title="Judge Presentation White Mode"
+          >
+            👨‍⚖️ Judge Mode
+          </button>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => onToggleTheme?.(themeMode === 'dark' ? 'judge-white' : 'dark')}
+          className={`w-7 h-7 rounded-full border flex items-center justify-center transition-all cursor-pointer shrink-0 ${
+            themeMode === 'judge-white'
+              ? 'border-slate-300 bg-white text-slate-700 hover:text-amber-600'
+              : 'border-slate-700/80 bg-slate-900/60 hover:bg-slate-800/80 text-slate-300 hover:text-amber-300'
+          }`}
+          title={themeMode === 'judge-white' ? 'Switch to Cyber SOC Dark Mode' : 'Switch to Judge White Mode'}
+        >
+          {themeMode === 'judge-white' ? <Moon size={13} /> : <Sun size={13} />}
+        </button>
 
         {/* Role Badge */}
         <div className="role-chip shrink-0">
