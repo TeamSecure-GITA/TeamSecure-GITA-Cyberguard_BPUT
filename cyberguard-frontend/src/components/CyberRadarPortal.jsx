@@ -478,6 +478,7 @@ export default function CyberRadarPortal({
           <button
             type="button"
             id="header-soc-login-btn"
+            aria-label="SOC Login"
             onClick={() => setShowAuthModal(true)}
             className={`flex items-center gap-1.5 sm:gap-2 px-3.5 sm:px-4 py-1.5 sm:py-2 rounded-full border text-xs sm:text-sm font-medium transition-all cursor-pointer shrink-0 ${
               isLight
