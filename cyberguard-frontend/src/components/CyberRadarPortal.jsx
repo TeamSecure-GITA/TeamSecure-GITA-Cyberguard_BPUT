@@ -25,6 +25,7 @@ import {
 import LanguageToggle from './LanguageToggle';
 import CyberGlobe from './CyberGlobe';
 import WatchDemoModal from './WatchDemoModal';
+import CyberVideoPlayerBar from './CyberVideoPlayerBar';
 import { getApiBaseUrl } from '../apiConfig';
 import { loginWithGoogle, formatFirebaseAuthError } from '../firebase';
 
@@ -66,13 +67,30 @@ export default function CyberRadarPortal({
   currentLang,
   onLanguageChange,
   apiBaseUrl: propApiBaseUrl,
+  themeMode: propThemeMode = 'dark',
+  onThemeToggle,
 }) {
   const apiBaseUrl = propApiBaseUrl || getApiBaseUrl();
 
   const [activeNav, setActiveNav] = useState('home');
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showDemoModal, setShowDemoModal] = useState(false);
-  const [themeMode, setThemeMode] = useState('dark');
+  const [showVideoBar, setShowVideoBar] = useState(true);
+  const [themeMode, setThemeMode] = useState(propThemeMode || 'dark');
+
+  React.useEffect(() => {
+    if (propThemeMode) {
+      setThemeMode(propThemeMode);
+    }
+  }, [propThemeMode]);
+
+  const toggleTheme = (targetTheme) => {
+    const next = targetTheme || (themeMode === 'dark' ? 'judge-white' : 'dark');
+    setThemeMode(next);
+    onThemeToggle?.(next);
+  };
+
+  const isLight = themeMode === 'judge-white' || themeMode === 'light';
 
   // Authentication states
   const [loginUsername, setLoginUsername] = useState('analyst');
