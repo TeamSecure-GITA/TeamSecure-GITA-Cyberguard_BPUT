@@ -636,25 +636,33 @@ export default function CyberRadarPortal({
 
       </main>
 
-      </main>
-
       {/* =========================================================================
           3. BOTTOM FEATURE CARDS DOCK (Exact 4 columns matching reference screenshot)
           ========================================================================= */}
-      <section className="relative z-20 w-full border-t border-cyan-500/15 bg-[#030d1d]/85 backdrop-blur-xl">
+      <section className={`relative z-20 w-full border-t backdrop-blur-xl transition-colors ${
+        isLight
+          ? 'border-slate-200 bg-white/95'
+          : 'border-cyan-500/15 bg-[#030d1d]/85'
+      }`}>
         <div className="max-w-7xl mx-auto px-6 sm:px-10 py-6 sm:py-8">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 lg:gap-8">
             
             {/* Card 1: Real-time Detection */}
             <div className="flex items-start gap-4 group">
-              <div className="w-12 h-12 rounded-2xl bg-cyan-950/70 border border-cyan-500/40 text-cyan-400 flex items-center justify-center shrink-0 shadow-[0_0_20px_rgba(6,182,212,0.3)] group-hover:scale-105 group-hover:border-cyan-300 transition-all">
-                <Zap size={22} className="text-cyan-400" />
+              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-all group-hover:scale-105 ${
+                isLight
+                  ? 'bg-cyan-50 border border-cyan-200 text-cyan-600 shadow-sm'
+                  : 'bg-cyan-950/70 border border-cyan-500/40 text-cyan-400 shadow-[0_0_20px_rgba(6,182,212,0.3)] group-hover:border-cyan-300'
+              }`}>
+                <Zap size={22} className={isLight ? 'text-cyan-600' : 'text-cyan-400'} />
               </div>
               <div className="flex flex-col">
-                <h4 className="text-sm font-bold text-white group-hover:text-cyan-300 transition-colors">
+                <h4 className={`text-sm font-bold transition-colors ${
+                  isLight ? 'text-slate-900 group-hover:text-cyan-700' : 'text-white group-hover:text-cyan-300'
+                }`}>
                   Real-time Detection
                 </h4>
-                <p className="text-xs text-slate-400 leading-relaxed mt-1">
+                <p className={`text-xs leading-relaxed mt-1 ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
                   Identify threats as they emerge across multiple channels.
                 </p>
               </div>
@@ -662,14 +670,20 @@ export default function CyberRadarPortal({
 
             {/* Card 2: AI-Powered Analysis */}
             <div className="flex items-start gap-4 group">
-              <div className="w-12 h-12 rounded-2xl bg-blue-950/70 border border-blue-500/40 text-blue-400 flex items-center justify-center shrink-0 shadow-[0_0_20px_rgba(59,130,246,0.3)] group-hover:scale-105 group-hover:border-blue-300 transition-all">
-                <Brain size={22} className="text-blue-400" />
+              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-all group-hover:scale-105 ${
+                isLight
+                  ? 'bg-blue-50 border border-blue-200 text-blue-600 shadow-sm'
+                  : 'bg-blue-950/70 border border-blue-500/40 text-blue-400 shadow-[0_0_20px_rgba(59,130,246,0.3)] group-hover:border-blue-300'
+              }`}>
+                <Brain size={22} className={isLight ? 'text-blue-600' : 'text-blue-400'} />
               </div>
               <div className="flex flex-col">
-                <h4 className="text-sm font-bold text-white group-hover:text-blue-300 transition-colors">
+                <h4 className={`text-sm font-bold transition-colors ${
+                  isLight ? 'text-slate-900 group-hover:text-blue-700' : 'text-white group-hover:text-blue-300'
+                }`}>
                   AI-Powered Analysis
                 </h4>
-                <p className="text-xs text-slate-400 leading-relaxed mt-1">
+                <p className={`text-xs leading-relaxed mt-1 ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
                   Leverage machine learning and behavioral intelligence.
                 </p>
               </div>
@@ -677,14 +691,20 @@ export default function CyberRadarPortal({
 
             {/* Card 3: Actionable Insights */}
             <div className="flex items-start gap-4 group">
-              <div className="w-12 h-12 rounded-2xl bg-purple-950/70 border border-purple-500/40 text-purple-400 flex items-center justify-center shrink-0 shadow-[0_0_20px_rgba(168,85,247,0.3)] group-hover:scale-105 group-hover:border-purple-300 transition-all">
-                <ShieldCheck size={22} className="text-purple-400" />
+              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-all group-hover:scale-105 ${
+                isLight
+                  ? 'bg-purple-50 border border-purple-200 text-purple-600 shadow-sm'
+                  : 'bg-purple-950/70 border border-purple-500/40 text-purple-400 shadow-[0_0_20px_rgba(168,85,247,0.3)] group-hover:border-purple-300'
+              }`}>
+                <ShieldCheck size={22} className={isLight ? 'text-purple-600' : 'text-purple-400'} />
               </div>
               <div className="flex flex-col">
-                <h4 className="text-sm font-bold text-white group-hover:text-purple-300 transition-colors">
+                <h4 className={`text-sm font-bold transition-colors ${
+                  isLight ? 'text-slate-900 group-hover:text-purple-700' : 'text-white group-hover:text-purple-300'
+                }`}>
                   Actionable Insights
                 </h4>
-                <p className="text-xs text-slate-400 leading-relaxed mt-1">
+                <p className={`text-xs leading-relaxed mt-1 ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
                   Get clear risk scores and next-step recommendations.
                 </p>
               </div>
@@ -692,14 +712,20 @@ export default function CyberRadarPortal({
 
             {/* Card 4: Secure & Private */}
             <div className="flex items-start gap-4 group">
-              <div className="w-12 h-12 rounded-2xl bg-emerald-950/70 border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0 shadow-[0_0_20px_rgba(16,185,129,0.3)] group-hover:scale-105 group-hover:border-emerald-300 transition-all">
-                <Database size={22} className="text-emerald-400" />
+              <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-all group-hover:scale-105 ${
+                isLight
+                  ? 'bg-emerald-50 border border-emerald-200 text-emerald-600 shadow-sm'
+                  : 'bg-emerald-950/70 border border-emerald-500/40 text-emerald-400 shadow-[0_0_20px_rgba(16,185,129,0.3)] group-hover:border-emerald-300'
+              }`}>
+                <Database size={22} className={isLight ? 'text-emerald-600' : 'text-emerald-400'} />
               </div>
               <div className="flex flex-col">
-                <h4 className="text-sm font-bold text-white group-hover:text-emerald-300 transition-colors">
+                <h4 className={`text-sm font-bold transition-colors ${
+                  isLight ? 'text-slate-900 group-hover:text-emerald-700' : 'text-white group-hover:text-emerald-300'
+                }`}>
                   Secure & Private
                 </h4>
-                <p className="text-xs text-slate-400 leading-relaxed mt-1">
+                <p className={`text-xs leading-relaxed mt-1 ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
                   Your data stays yours, with local-first processing.
                 </p>
               </div>
