@@ -20,7 +20,6 @@ import {
   Eye,
   EyeOff,
   User,
-  Sparkles,
 } from 'lucide-react';
 import LanguageToggle from './LanguageToggle';
 import CyberGlobe from './CyberGlobe';
@@ -93,12 +92,11 @@ export default function CyberRadarPortal({
   const isLight = themeMode === 'judge-white' || themeMode === 'light';
 
   // Authentication states
-  const [loginUsername, setLoginUsername] = useState('analyst');
-  const [loginPassword, setLoginPassword] = useState('CyberGuard@Analyst2026!');
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
-  const [activePreset, setActivePreset] = useState('analyst');
   const [authError, setAuthError] = useState(null);
   const [otpChallenge, setOtpChallenge] = useState(null);
   const [otp, setOtp] = useState('');
@@ -109,20 +107,6 @@ export default function CyberRadarPortal({
   const [requestState, setRequestState] = useState(null);
   const [requestLoading, setRequestLoading] = useState(false);
   const [authModalTab, setAuthModalTab] = useState('login');
-
-  const DEMO_PRESETS = [
-    { label: 'Analyst', role: 'analyst', username: 'analyst', password: 'CyberGuard@Analyst2026!', badge: 'Triage' },
-    { label: 'Lead', role: 'lead', username: 'lead', password: 'CyberGuard@Lead2026!', badge: 'Ops' },
-    { label: 'Admin', role: 'admin', username: 'admin', password: 'CyberGuard@Admin2026!', badge: 'Full SOC' },
-    { label: 'Head Admin', role: 'head_admin', username: 'teamsecure.project@gmail.com', password: '&S=CNMS+X%^&6-JrSLn-3o8bR$B^', badge: 'Root' },
-  ];
-
-  const handleApplyPreset = (preset) => {
-    setLoginUsername(preset.username);
-    setLoginPassword(preset.password);
-    setActivePreset(preset.role);
-    setAuthError(null);
-  };
 
   const handleGoogleLogin = async () => {
     setGoogleLoading(true);
@@ -882,54 +866,17 @@ export default function CyberRadarPortal({
                       <div className="border-t border-slate-700/60 w-full" />
                     </div>
 
-                    {/* Quick Demo Credentials Presets */}
-                    <div className="space-y-1.5 p-2 rounded-xl bg-slate-900/60 border border-slate-800">
-                      <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 px-0.5">
-                        <span className="flex items-center gap-1">
-                          <Sparkles size={11} className="text-cyan-400" />
-                          <span>1-CLICK DEMO ROLES:</span>
-                        </span>
-                        <span className="text-emerald-400 text-[9px] font-semibold">Auto-fills Form</span>
-                      </div>
-                      <div className="grid grid-cols-4 gap-1">
-                        {DEMO_PRESETS.map((p) => {
-                          const isSelected = activePreset === p.role;
-                          return (
-                            <button
-                              key={p.role}
-                              type="button"
-                              onClick={() => handleApplyPreset(p)}
-                              className={`py-1 px-1 rounded-lg border text-[10px] font-mono font-semibold transition-all text-center cursor-pointer truncate ${
-                                isSelected
-                                  ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_10px_rgba(6,182,212,0.3)]'
-                                  : 'border-slate-700/80 bg-slate-800/40 hover:bg-slate-700/50 text-slate-300 hover:text-white hover:border-slate-600'
-                              }`}
-                              title={`${p.label} (${p.badge}): ${p.username}`}
-                            >
-                              {p.label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
                     {/* Credentials Form */}
                     <form onSubmit={handleManualLogin} className="space-y-2.5">
                       <div>
                         <label className="block text-[10px] sm:text-[11px] font-mono text-slate-300 mb-1 flex items-center justify-between">
                           <span>USERNAME OR EMAIL</span>
-                          {activePreset && (
-                            <span className="text-cyan-400 text-[9px] lowercase">preset: {activePreset}</span>
-                          )}
                         </label>
                         <div className="relative">
                           <input
                             type="text"
                             value={loginUsername}
-                            onChange={(e) => {
-                              setLoginUsername(e.target.value);
-                              setActivePreset(null);
-                            }}
+                            onChange={(e) => setLoginUsername(e.target.value)}
                             placeholder="username or email"
                             className="w-full pl-8 pr-3 py-1.5 rounded-lg bg-[#040c17] border border-slate-700 text-white font-mono text-xs focus:border-cyan-500 focus:outline-none transition-colors"
                             required
@@ -944,10 +891,7 @@ export default function CyberRadarPortal({
                           <input
                             type={showPassword ? 'text' : 'password'}
                             value={loginPassword}
-                            onChange={(e) => {
-                              setLoginPassword(e.target.value);
-                              setActivePreset(null);
-                            }}
+                            onChange={(e) => setLoginPassword(e.target.value)}
                             placeholder="Enter password or select demo role above"
                             className="w-full pl-8 pr-8 py-1.5 rounded-lg bg-[#040c17] border border-slate-700 text-white font-mono text-xs focus:border-cyan-500 focus:outline-none transition-colors"
                             required

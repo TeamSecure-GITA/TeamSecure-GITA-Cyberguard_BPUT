@@ -4,7 +4,9 @@ import { getAnalytics, isSupported } from "firebase/analytics";
 import {
   getAuth,
   GoogleAuthProvider,
+  getRedirectResult,
   signInWithPopup,
+  signInWithRedirect,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   sendPasswordResetEmail,
@@ -57,8 +59,12 @@ export const formatFirebaseAuthError = (error) => {
       return 'Google sign-in was cancelled by closing the popup window.';
     case 'auth/popup-blocked':
       return 'Google sign-in popup was blocked by your browser. Please allow popups for this site.';
+    case 'auth/operation-not-allowed':
+      return 'Google sign-in is not enabled for this Firebase project. Enable the Google provider in Firebase Authentication settings.';
+    case 'auth/network-request-failed':
+      return 'Could not reach Google/Firebase authentication. Check your internet connection and try again.';
     case 'auth/unauthorized-domain':
-      return 'This origin is not in the Firebase Authorized Domains list. Please add localhost in Firebase Console.';
+      return `This site is not authorized for Firebase sign-in. Add ${typeof window !== 'undefined' ? window.location.hostname : 'this domain'} to Firebase Authorized Domains.`;
     case 'auth/too-many-requests':
       return 'Access temporarily disabled due to many failed attempts. Try again later or reset password.';
     default:
@@ -108,11 +114,31 @@ const bridgeFirebaseSession = async (user, apiBaseUrl) => {
 };
 
 /**
- * Sign in using Google popup via Firebase and bridge with CyberGuard session.
+ * Sign in with Google via Firebase and bridge with CyberGuard session.
+ * Redirect sign-in is used when the browser blocks the popup.
  */
 export const loginWithGoogle = async (apiBaseUrl) => {
-  const result = await signInWithPopup(auth, googleProvider);
-  return await bridgeFirebaseSession(result.user, apiBaseUrl);
+  try {
+    const result = await signInWithPopup(auth, googleProvider);
+    return await bridgeFirebaseSession(result.user, apiBaseUrl);
+  } catch (error) {
+    if (error.code !== 'auth/popup-blocked') throw error;
+    await signInWithRedirect(auth, googleProvider);
+    return null;
+  }
+};
+
+let googleRedirectSessionPromise;
+export const completeGoogleRedirect = (apiBaseUrl) => {
+  if (!googleRedirectSessionPromise) {
+    googleRedirectSessionPromise = getRedirectResult(auth)
+      .then((result) => result ? bridgeFirebaseSession(result.user, apiBaseUrl) : null)
+      .catch((error) => {
+        googleRedirectSessionPromise = null;
+        throw error;
+      });
+  }
+  return googleRedirectSessionPromise;
 };
 
 /**

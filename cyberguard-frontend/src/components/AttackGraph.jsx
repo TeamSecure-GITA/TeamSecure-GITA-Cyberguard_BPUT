@@ -6,6 +6,8 @@ import { getApiBaseUrl } from '../apiConfig';
 import 'reactflow/dist/style.css';
 
 const apiBaseUrl = getApiBaseUrl();
+const EMPTY_NODE_TYPES = {};
+const EMPTY_EDGE_TYPES = {};
 
 const initialNodes = [
   { id: '1', position: { x: 50, y: 120 }, data: { label: 'Attacker (Threat Origin)' }, style: { background: '#ef4444', color: '#fff', borderRadius: '8px', border: '1px solid #b91c1c', fontWeight: 'bold', fontSize: '11px' } },
@@ -296,7 +298,13 @@ export default function AttackGraph({ accessToken }) {
               <RefreshCw size={16} className="animate-spin" /> Inferring graph connections...
             </div>
           )}
-          <ReactFlow nodes={graph.nodes} edges={graph.edges} fitView>
+          <ReactFlow
+            nodes={graph.nodes}
+            edges={graph.edges}
+            nodeTypes={EMPTY_NODE_TYPES}
+            edgeTypes={EMPTY_EDGE_TYPES}
+            fitView
+          >
             <Background color="#1e293b" gap={18} size={1} />
             <Controls />
           </ReactFlow>

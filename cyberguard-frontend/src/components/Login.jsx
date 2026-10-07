@@ -1,33 +1,20 @@
 import React, { useState } from 'react';
 import axios from 'axios';
-import { ArrowLeft, Lock, LogIn, Shield, Eye, EyeOff, User, Sparkles } from 'lucide-react';
+import { ArrowLeft, Lock, LogIn, Shield, Eye, EyeOff, User } from 'lucide-react';
 
 import { getApiBaseUrl } from '../apiConfig';
 import { loginWithGoogle, formatFirebaseAuthError } from '../firebase';
 
-export default function Login({ onLogin, onReturnToPortal }) {
+export default function Login({ onLogin, onReturnToPortal, googleAuthError }) {
   const apiBaseUrl = getApiBaseUrl();
-  const [username, setUsername] = useState('analyst');
-  const [password, setPassword] = useState('CyberGuard@Analyst2026!');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [activePreset, setActivePreset] = useState('analyst');
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
 
-  const DEMO_PRESETS = [
-    { label: 'Analyst', role: 'analyst', username: 'analyst', password: 'CyberGuard@Analyst2026!' },
-    { label: 'Lead', role: 'lead', username: 'lead', password: 'CyberGuard@Lead2026!' },
-    { label: 'Admin', role: 'admin', username: 'admin', password: 'CyberGuard@Admin2026!' },
-    { label: 'Head Admin', role: 'head_admin', username: 'teamsecure.project@gmail.com', password: '&S=CNMS+X%^&6-JrSLn-3o8bR$B^' },
-  ];
-
-  const handleApplyPreset = (preset) => {
-    setUsername(preset.username);
-    setPassword(preset.password);
-    setActivePreset(preset.role);
-    setError(null);
-  };
+  const displayedError = googleAuthError || error;
 
   const handleGoogleSignIn = async () => {
     setGoogleLoading(true);
@@ -50,11 +37,17 @@ export default function Login({ onLogin, onReturnToPortal }) {
     setLoading(true);
     setError(null);
     try {
-      const response = await axios.post(`${apiBaseUrl}/api/v1/auth/login`, { username, password });
+      const response = await axios.post(
+        `${apiBaseUrl}/api/v1/auth/login`,
+        { username, password },
+        { timeout: 90000 },
+      );
       onLogin(response.data);
     } catch (requestError) {
       if (!requestError.response) {
-        setError(`Cannot reach backend server (${apiBaseUrl}). Ensure the backend is running.`);
+        setError(requestError.code === 'ECONNABORTED'
+          ? `The backend at ${apiBaseUrl} did not respond in time. Check that the API is healthy and try again.`
+          : `Cannot reach backend server at ${apiBaseUrl}. Check that the API is running and that its URL is correct.`);
       } else if (requestError.response.status === 401) {
         setError(requestError.response.data?.detail || 'Invalid username or password.');
       } else if (requestError.response.status === 502 || requestError.response.status === 503) {
@@ -127,53 +120,15 @@ export default function Login({ onLogin, onReturnToPortal }) {
           <div className="border-t border-slate-700/60 w-full" />
         </div>
 
-        {/* Demo Role Presets */}
-        <div className="space-y-1.5 p-2.5 rounded-xl bg-slate-900/60 border border-slate-800">
-          <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 px-0.5">
-            <span className="flex items-center gap-1">
-              <Sparkles size={11} className="text-cyan-400" />
-              <span>TEST DEMO ROLES:</span>
-            </span>
-            <span className="text-emerald-400 text-[9px] font-semibold">1-Click Auto Fill</span>
-          </div>
-          <div className="grid grid-cols-4 gap-1.5">
-            {DEMO_PRESETS.map((p) => {
-              const isSelected = activePreset === p.role;
-              return (
-                <button
-                  key={p.role}
-                  type="button"
-                  onClick={() => handleApplyPreset(p)}
-                  className={`py-1 px-1 rounded-lg border text-[10px] font-mono font-semibold transition-all text-center cursor-pointer truncate ${
-                    isSelected
-                      ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-[0_0_10px_rgba(6,182,212,0.3)]'
-                      : 'border-slate-700/80 bg-slate-800/40 hover:bg-slate-700/50 text-slate-300 hover:text-white hover:border-slate-600'
-                  }`}
-                >
-                  {p.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
         {/* Credentials Form */}
         <form onSubmit={submit} className="space-y-3">
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1 flex items-center justify-between">
-              <span>Username or Email</span>
-              {activePreset && (
-                <span className="text-cyan-400 text-[10px] font-mono lowercase">preset: {activePreset}</span>
-              )}
-            </label>
+            <label className="block text-xs font-semibold text-slate-300 mb-1">Username or Email</label>
             <div className="relative">
               <input
                 value={username}
-                onChange={(event) => {
-                  setUsername(event.target.value);
-                  setActivePreset(null);
-                }}
-                placeholder="analyst / user@example.com"
+                onChange={(event) => setUsername(event.target.value)}
+                placeholder="username or email"
                 className="w-full pl-9 pr-3 py-2 bg-[#040c17] border border-slate-700 rounded-lg text-sm text-white focus:border-cyan-500 focus:outline-none transition-colors"
                 required
               />
@@ -187,10 +142,7 @@ export default function Login({ onLogin, onReturnToPortal }) {
               <input
                 type={showPassword ? 'text' : 'password'}
                 value={password}
-                onChange={(event) => {
-                  setPassword(event.target.value);
-                  setActivePreset(null);
-                }}
+                onChange={(event) => setPassword(event.target.value)}
                 placeholder="Password or select demo role above"
                 className="w-full pl-9 pr-9 py-2 bg-[#040c17] border border-slate-700 rounded-lg text-sm text-white focus:border-cyan-500 focus:outline-none transition-colors"
                 required
@@ -207,9 +159,9 @@ export default function Login({ onLogin, onReturnToPortal }) {
             </div>
           </div>
 
-          {error && (
+          {displayedError && (
             <p role="alert" className="text-xs text-rose-300 bg-rose-950/40 border border-rose-500/30 p-2.5 rounded-lg animate-in fade-in">
-              {error}
+              {displayedError}
             </p>
           )}
 

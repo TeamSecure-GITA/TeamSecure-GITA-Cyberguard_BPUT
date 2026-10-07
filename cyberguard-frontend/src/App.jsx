@@ -7,7 +7,6 @@ import ThreatChart from './components/ThreatChart';
 import IncidentTable from './components/IncidentTable';
 import ThreatInspector from './components/ThreatInspector';
 import XaiModal from './components/XaiModal';
-import AttackGraph from './components/AttackGraph';
 import SystemHealth from './components/SystemHealth';
 import ComplianceTab from './components/ComplianceTab';
 import LanguageToggle from './components/LanguageToggle';
@@ -40,6 +39,9 @@ import PolicyEnginePanel from './components/PolicyEnginePanel';
 import AccountRescueCenter from './components/AccountRescueCenter';
 import Login from './components/Login';
 import { LanguageProvider } from './i18n';
+import { completeGoogleRedirect, formatFirebaseAuthError } from './firebase';
+
+const AttackGraph = React.lazy(() => import('./components/AttackGraph'));
 
 export default function App() {
   const getInitialViewMode = () => {
@@ -70,8 +72,31 @@ export default function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [demoSeeded, setDemoSeeded] = useState(false);
   const [routingInfo, setRoutingInfo] = useState(null);
+  const [googleRedirectError, setGoogleRedirectError] = useState(null);
   const authFailureHandled = React.useRef(false);
   const apiBaseUrl = getApiBaseUrl();
+
+  React.useEffect(() => {
+    let active = true;
+    completeGoogleRedirect(apiBaseUrl)
+      .then((approvedSession) => {
+        if (!active || !approvedSession) return;
+        authFailureHandled.current = false;
+        setSession(approvedSession);
+        setViewMode('workspace');
+        setActiveTab('dashboard');
+      })
+      .catch((error) => {
+        console.error('Google redirect sign-in error:', error);
+        if (active) {
+          setGoogleRedirectError(formatFirebaseAuthError(error));
+          setViewMode('login');
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [apiBaseUrl]);
 
   const sessionRef = React.useRef(session);
   React.useEffect(() => {
@@ -110,7 +135,11 @@ export default function App() {
   }, []);
 
   const handleQuickLogin = async (username, password) => {
-    const response = await axios.post(`${apiBaseUrl}/api/v1/auth/login`, { username, password });
+    const response = await axios.post(
+      `${apiBaseUrl}/api/v1/auth/login`,
+      { username, password },
+      { timeout: 90000 },
+    );
     if (!response.data.requires_otp) {
       authFailureHandled.current = false;
       setSession(response.data);
@@ -268,6 +297,7 @@ export default function App() {
     return (
       <LanguageProvider language={language}>
         <Login
+          googleAuthError={googleRedirectError}
           onLogin={(approvedSession) => {
             authFailureHandled.current = false;
             setSession(approvedSession);
@@ -401,8 +431,17 @@ export default function App() {
              />
             </>
           )}
-{activeTab === 'graph' && <AttackGraph accessToken={session?.access_token} />}
-{activeTab === 'inspector' && <ThreatInspector accessToken={session?.access_token} />}
+{activeTab === 'graph' && (
+  <React.Suspense fallback={<p role="status">Loading attack graph…</p>}>
+    <AttackGraph accessToken={session?.access_token} />
+  </React.Suspense>
+)}
+{activeTab === 'inspector' && (
+  <ThreatInspector
+    accessToken={session?.access_token}
+    onIncidentCreated={() => setRefreshKey((value) => value + 1)}
+  />
+)}
 {activeTab === 'compliance' && <ComplianceTab accessToken={session?.access_token} />}
 {activeTab === 'notifications' && <NotificationsPanel accessToken={session?.access_token} workload={{ incidents, analysts: [{ username: session?.user?.username || 'analyst', role: session?.user?.role || 'analyst' }] }} />}
 {activeTab === 'admin' && <AdminConsole accessToken={session?.access_token} routeData={routingInfo} />}

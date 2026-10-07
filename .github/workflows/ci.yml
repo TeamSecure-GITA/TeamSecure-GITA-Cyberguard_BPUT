@@ -43,7 +43,7 @@ jobs:
           echo "CYBERGUARD_ENABLE_PRETRAINED_MEDIA=false" >> "$GITHUB_ENV"
       - run: npm ci
       - run: npm run lint
-      - run: npm run build
+      - run: VITE_API_URL=https://build-validation.invalid npm run build
       - run: npx playwright install --with-deps chromium
       - name: Start test API
         working-directory: cyberguard-backend

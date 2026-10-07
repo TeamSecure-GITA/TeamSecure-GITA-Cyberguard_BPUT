@@ -1,3 +1,7 @@
+param(
+    [switch]$RequireDeploymentChecks
+)
+
 $ErrorActionPreference = 'Continue'
 $script:results = @()
 $root = $PSScriptRoot
@@ -33,13 +37,26 @@ Invoke-VerificationStep 'Frontend lint' {
 
 Invoke-VerificationStep 'Frontend production build' {
     Push-Location (Join-Path $root 'cyberguard-frontend')
-    try { npm.cmd run build } finally { Pop-Location }
+    $previousApiUrl = $env:VITE_API_URL
+    try {
+        if (-not $env:VITE_API_URL) {
+            $env:VITE_API_URL = 'https://build-validation.invalid'
+        }
+        npm.cmd run build
+    } finally {
+        if ($null -eq $previousApiUrl) {
+            Remove-Item Env:VITE_API_URL -ErrorAction SilentlyContinue
+        } else {
+            $env:VITE_API_URL = $previousApiUrl
+        }
+        Pop-Location
+    }
 }
 
 Invoke-VerificationStep 'Render YAML and AI runtime config' {
     Push-Location $root
     try {
-        python -c "import yaml; data=yaml.safe_load(open('render.yaml', encoding='utf-8')); service=data['services'][0]; env={item['key']:item.get('value') for item in service['envVars']}; assert 'requirements-models.txt' in service['buildCommand']; assert env['CYBERGUARD_ENABLE_PRETRAINED_MEDIA']=='true'; assert env['CYBERGUARD_ENABLE_RDAP']=='true'"
+        python -c "import yaml; data=yaml.safe_load(open('render.yaml', encoding='utf-8')); service=next(item for item in data['services'] if item['type']=='web'); env={item['key']:item for item in service['envVars']}; redis=next(item for item in data['services'] if item['type']=='keyvalue'); assert service['plan']=='free'; assert 'requirements-models.txt' not in service['buildCommand']; assert env['CYBERGUARD_ENABLE_PRETRAINED_MEDIA']['value']=='false'; assert env['CYBERGUARD_ENABLE_RDAP']['value']=='true'; assert env['CYBERGUARD_DB_PATH']['value'].startswith('/tmp/'); assert env['CYBERGUARD_REDIS_URL']['fromService']['name']==redis['name']; assert redis['plan']=='free' and redis['ipAllowList']==[]; assert env['CYBERGUARD_FRONTEND_ORIGINS']['value']==env['CYBERGUARD_PUBLIC_APP_URL']['value']"
     } finally { Pop-Location }
 }
 
@@ -61,7 +78,12 @@ if ($env:API_URL) {
     }
 }
 else {
-    $script:results += 'SKIP  Deployed API health (set API_URL to enable)'
+    if ($RequireDeploymentChecks) {
+        $script:results += 'FAIL  Deployed API health (set API_URL to enable)'
+    }
+    else {
+        $script:results += 'SKIP  Deployed API health (set API_URL to enable)'
+    }
 }
 
 if ($env:CYBERGUARD_FRONTEND_URL) {
@@ -76,7 +98,12 @@ if ($env:CYBERGUARD_FRONTEND_URL) {
     }
 }
 else {
-    $script:results += 'SKIP  Playwright frontend smoke test (set CYBERGUARD_FRONTEND_URL to enable)'
+    if ($RequireDeploymentChecks) {
+        $script:results += 'FAIL  Playwright frontend smoke test (set CYBERGUARD_FRONTEND_URL to enable)'
+    }
+    else {
+        $script:results += 'SKIP  Playwright frontend smoke test (set CYBERGUARD_FRONTEND_URL to enable)'
+    }
 }
 
 $reportPath = Join-Path $root 'release-report.txt'

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { Banknote, BrainCircuit, Globe2, KeyRound, Network, Scale, Users } from 'lucide-react';
 
@@ -19,20 +19,16 @@ export default function RoadmapCoveragePanel({ apiBaseUrl, accessToken, userRole
   const [ticketDescription, setTicketDescription] = useState('');
   const [identityTarget, setIdentityTarget] = useState('');
   const [endpointTarget, setEndpointTarget] = useState('');
-  const [loadedSelectionKey, setLoadedSelectionKey] = useState(null);
-  const loadSequence = useRef(0);
+  const [busy, setBusy] = useState(Boolean(accessToken));
   const [featureErrors, setFeatureErrors] = useState({});
   const selected = incidents[0] || null;
   const selectedId = selected?.id || null;
   const incidentId = selected?.database_id || null;
-  const selectionKey = `${apiBaseUrl}:${accessToken || ''}:${incidentId ?? 'none'}:${selectedId ?? 'none'}`;
-  const busy = Boolean(accessToken) && loadedSelectionKey !== selectionKey;
   const headers = { Authorization: `Bearer ${accessToken}` };
 
   useEffect(() => {
     if (!accessToken) return undefined;
     const requestHeaders = { Authorization: `Bearer ${accessToken}` };
-    const sequence = ++loadSequence.current;
     let active = true;
     const requests = [
       ['integrations', axios.get(`${apiBaseUrl}/api/v1/integrations/status`, { headers: requestHeaders })],
@@ -63,10 +59,10 @@ export default function RoadmapCoveragePanel({ apiBaseUrl, accessToken, userRole
       if (errors.integrations) setIntegrationError(errors.integrations);
       else setIntegrationError(null);
     }).finally(() => {
-      if (sequence === loadSequence.current) setLoadedSelectionKey(selectionKey);
+      if (active) setBusy(false);
     });
     return () => { active = false; };
-  }, [accessToken, apiBaseUrl, incidentId, selectedId, selectionKey]);
+  }, [accessToken, apiBaseUrl, incidentId, selectedId]);
 
   const generateHoneytokens = async () => {
     if (!incidentId) {
@@ -145,7 +141,7 @@ export default function RoadmapCoveragePanel({ apiBaseUrl, accessToken, userRole
   const loadStatus = busy ? 'SYNCING' : !accessToken ? 'AUTH REQUIRED' : hasFeatureErrors ? 'DEGRADED' : !incidentId ? 'NO INCIDENT' : 'LIVE DATA';
 
   return <section className="glass-panel p-5 xl:col-span-2">
-    <div className="panel-heading"><div><div className="eyebrow flex items-center gap-2"><BrainCircuit size={13} /> Roadmap coverage</div><h3>Advanced SOC decision support</h3></div><span className="text-[10px] text-cyan-300">{loadStatus}</span></div>
+    <div className="panel-heading"><div><div className="eyebrow flex items-center gap-2"><BrainCircuit size={13} /> Roadmap coverage</div><h3>Advanced SOC decision support</h3></div><span key={loadStatus} className="text-[10px] text-cyan-300">{loadStatus}</span></div>
     {hasFeatureErrors && <div role="alert" className="mt-3 rounded-lg border border-rose-500/30 bg-rose-500/5 p-3 text-xs text-rose-200"><strong>Some roadmap data could not be loaded:</strong><ul className="mt-1 list-disc pl-5">{Object.entries(featureErrors).filter(([, message]) => message).map(([feature, message]) => <li key={feature}>{feature}: {message}</li>)}</ul></div>}
     {!incidentId && <p className="mt-3 text-xs text-amber-200">Select or create an incident to load incident-specific economics, attacker-resource estimates, jurisdiction, and honeytoken plans. Preview values are not substituted for live data.</p>}
     <div className="flex flex-wrap items-center gap-2 mt-4"><span className="text-[10px] text-slate-400">Providers: honeytokens {providers?.honeytokens?.configured ? 'ready' : 'not configured'} · CVE feed {providers?.cve_feed?.configured ? 'ready' : 'not configured'} · tenant exchange {providers?.tenant_immunity?.configured ? 'ready' : 'not configured'}</span><button type="button" onClick={generateHoneytokens} disabled={!incidentId || providerAction} className="px-2 py-1 rounded border border-amber-500/30 text-[10px] text-amber-200 disabled:opacity-40">Generate simulated canary plan</button><button type="button" onClick={deployHoneytokens} disabled={!incidentId || !data.honeytokens?.tokens?.length || userRole !== 'head_admin' || providerAction || !providers?.honeytokens?.configured} className="px-2 py-1 rounded border border-amber-500/30 text-[10px] text-amber-200 disabled:opacity-40">Deploy canaries</button><button type="button" onClick={syncCves} disabled={userRole !== 'head_admin' || providerAction || !providers?.cve_feed?.configured} className="px-2 py-1 rounded border border-fuchsia-500/30 text-[10px] text-fuchsia-200 disabled:opacity-40">Sync CVE feed</button><button type="button" onClick={publishImmunity} disabled={userRole !== 'head_admin' || providerAction || !providers?.tenant_immunity?.configured} className="px-2 py-1 rounded border border-cyan-500/30 text-[10px] text-cyan-200 disabled:opacity-40">Publish shared immunity</button>{integrationMessage && <span role="status" className="text-[10px] text-emerald-300">{integrationMessage}</span>}</div>

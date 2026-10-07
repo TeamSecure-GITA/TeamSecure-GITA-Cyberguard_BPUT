@@ -4,7 +4,7 @@ import axios from 'axios';
 import { getApiBaseUrl } from '../apiConfig';
 import LiveMediaSession from './LiveMediaSession';
 
-export default function ThreatInspector({ accessToken }) {
+export default function ThreatInspector({ accessToken, onIncidentCreated }) {
   const [activeSubTab, setActiveSubTab] = useState('email');
   const [incidentCountry, setIncidentCountry] = useState('');
   const [inputText, setInputText] = useState('');
@@ -115,6 +115,7 @@ export default function ThreatInspector({ accessToken }) {
         setAssistantResult(null);
         setComplaintDraft(null);
         setScanStage('ready');
+        if (response.data.incident_id) onIncidentCreated?.(response.data.incident_id);
       }
     } catch {
       setError('Failed to connect to CYBERGUARD AI Engine. Ensure FastAPI backend is running on port 8000.');
@@ -457,14 +458,23 @@ export default function ThreatInspector({ accessToken }) {
                 <p className="mt-1 text-[11px] text-violet-200/80">{analysisResult.video_audio_analysis.reason}</p>
               )}
               {analysisResult.audio_video_synchronization && (
-                <p className="mt-1 text-[10px] text-violet-200/60">{analysisResult.audio_video_synchronization.reason}</p>
+                <p className="mt-1 text-[10px] text-violet-200/60">
+                  {analysisResult.audio_video_synchronization.status === 'analyzed'
+                    ? `Experimental sync proxy · correlation ${analysisResult.audio_video_synchronization.correlation} · peak offset ${analysisResult.audio_video_synchronization.peak_offset_ms} ms · ${analysisResult.audio_video_synchronization.interpretation}`
+                    : analysisResult.audio_video_synchronization.reason}
+                </p>
               )}
             </div>
           )}
           {analysisResult.known_contact_comparison && (
             <div className="rounded-lg border border-amber-700/50 bg-amber-950/20 p-3 text-xs text-amber-100">
               <strong>{analysisResult.known_contact_comparison.contact_name}</strong>
-              <span> · sender {analysisResult.known_contact_comparison.sender_match === null ? 'not present' : analysisResult.known_contact_comparison.sender_match ? 'matches' : 'does not match'} · vocabulary similarity {Math.round(analysisResult.known_contact_comparison.vocabulary_similarity * 100)}%</span>
+              <span> · sender {analysisResult.known_contact_comparison.sender_match === null ? 'not present' : analysisResult.known_contact_comparison.sender_match ? 'matches' : 'does not match'}</span>
+              {analysisResult.known_contact_comparison.style_comparison_status === 'compared' ? (
+                <span> · lexical overlap {Math.round(analysisResult.known_contact_comparison.vocabulary_similarity * 100)}% · script {analysisResult.known_contact_comparison.dominant_message_script || 'unknown'} vs profile {analysisResult.known_contact_comparison.dominant_profile_script || 'unknown'}</span>
+              ) : (
+                <span> · writing-style comparison inconclusive ({analysisResult.known_contact_comparison.message_word_count} words)</span>
+              )}
               <p className="mt-1 text-[11px] text-amber-200/80">{analysisResult.known_contact_comparison.caveat}</p>
             </div>
           )}

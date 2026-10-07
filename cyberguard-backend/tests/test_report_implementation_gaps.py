@@ -63,6 +63,28 @@ def test_source_location_metadata_is_validated_and_preserved_for_incidents():
         main.normalize_residency_metadata({"source_location": {"country": "IN", "lat": 100, "lng": 78.9}})
 
 
+@pytest.mark.parametrize("password_value", [None, ""])
+def test_demo_password_must_be_configured_to_enable_demo_credentials(
+    monkeypatch,
+    tmp_path,
+    password_value,
+):
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "demo-passwords.sqlite")
+    if password_value is None:
+        monkeypatch.delenv("CYBERGUARD_DEMO_ANALYST_PASSWORD", raising=False)
+    else:
+        monkeypatch.setenv("CYBERGUARD_DEMO_ANALYST_PASSWORD", password_value)
+
+    main.initialize_database()
+
+    with main.get_db() as db:
+        account = db.execute(
+            "SELECT status FROM users WHERE lower(username) = 'analyst' AND role = 'analyst'"
+        ).fetchone()
+
+    assert account is None or account["status"] == "disabled"
+
+
 def test_insider_risk_uses_observed_application_audit_events(monkeypatch, tmp_path):
     monkeypatch.setattr(main, "DB_PATH", tmp_path / "insider-audit.sqlite")
     main.initialize_database()

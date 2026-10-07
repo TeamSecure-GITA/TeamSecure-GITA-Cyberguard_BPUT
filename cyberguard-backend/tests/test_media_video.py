@@ -65,6 +65,81 @@ def test_video_analysis_localizes_faces_and_scores_temporal_variance(monkeypatch
     assert any(item["name"] == "Temporal Deepfake Score Variance" for item in result["indicators"])
 
 
+def test_audio_video_synchronization_reports_bounded_signal_correlation_without_authenticity_claim():
+    audio_energy = np.random.default_rng(12).uniform(0.05, 0.9, 50).tolist()
+    mouth_motion = [None, None, *audio_energy[:-2]]
+
+    result = media_engine._assess_audio_video_synchronization(audio_energy, mouth_motion)
+
+    assert result["status"] == "analyzed"
+    assert result["correlation"] > 0.99
+    assert result["peak_offset_ms"] == 400
+    assert result["paired_samples"] == 50
+    assert "not a validated lip-sync detector" in result["interpretation"]
+
+
+def test_audio_video_synchronization_is_inconclusive_for_constant_or_short_signals():
+    constant = media_engine._assess_audio_video_synchronization(
+        [0.2] * 20,
+        [0.1] * 20,
+    )
+    short = media_engine._assess_audio_video_synchronization(
+        [0.1] * 9,
+        [0.2] * 9,
+    )
+
+    assert constant["status"] == "inconclusive"
+    assert short["status"] == "inconclusive"
+
+
+def test_video_sync_energy_is_consumed_and_sync_proxy_is_returned(monkeypatch):
+    frame = np.full((64, 64, 3), 120, dtype=np.uint8)
+
+    class Capture:
+        def get(self, property_id):
+            return {
+                cv2.CAP_PROP_FRAME_COUNT: 1,
+                cv2.CAP_PROP_FRAME_WIDTH: 64,
+                cv2.CAP_PROP_FRAME_HEIGHT: 64,
+            }[property_id]
+
+        def set(self, property_id, value):
+            return None
+
+        def read(self):
+            return True, frame.copy()
+
+        def release(self):
+            return None
+
+    class FaceDetector:
+        def empty(self):
+            return True
+
+    monkeypatch.setattr(cv2, "VideoCapture", lambda _: Capture())
+    monkeypatch.setattr(cv2, "CascadeClassifier", lambda _: FaceDetector(), raising=False)
+    monkeypatch.setattr(deepfake_models, "analyze_pretrained", lambda *_: None)
+    monkeypatch.setattr(media_engine, "_measure_video_mouth_motion", lambda _: {
+        "status": "measured",
+        "mouth_motion": [0.1, 0.3, 0.2, 0.6, 0.4, 0.8, 0.1, 0.5, 0.9, 0.2, 0.7, 0.3],
+    })
+    energy = [0.2, 0.1, 0.3, 0.5, 0.4, 0.8, 0.2, 0.5, 0.9, 0.1, 0.7, 0.3]
+    monkeypatch.setattr(media_engine, "_analyze_video_audio", lambda _: {
+        "status": "analyzed",
+        "score": 20,
+        "method": "test-audio",
+        "reasons": [],
+        "indicators": [],
+        "max_seconds": 10,
+        "_sync_energy": energy,
+    })
+
+    result = media_engine.analyze_video(b"synthetic video bytes")
+
+    assert result["audio_video_synchronization"]["status"] == "analyzed"
+    assert "_sync_energy" not in result["audio_analysis"]
+
+
 def test_video_analysis_samples_a_bounded_spread_across_long_clips(monkeypatch):
     frame = np.full((64, 64, 3), 120, dtype=np.uint8)
 

@@ -10,16 +10,57 @@ import math
 import time
 from pathlib import Path
 from statistics import median
+from typing import Mapping
 
 from media_engine import analyze_media
 
 
 NON_DEEPFAKE_METHODS = {"media-fallback", "metadata-fallback", "qr-decoder"}
+IMAGE_SUFFIXES = {"bmp", "gif", "jpeg", "jpg", "png", "tif", "tiff", "webp"}
+AUDIO_SUFFIXES = {"aac", "aif", "aiff", "flac", "m4a", "mp3", "oga", "ogg", "wav"}
+VIDEO_SUFFIXES = {"avi", "m4v", "mkv", "mov", "mp4", "webm"}
 
 
-def calculate_metrics(rows: list[dict], threshold: float = 50) -> dict:
+def _validate_threshold(threshold: float) -> None:
     if not math.isfinite(threshold) or not 0 <= threshold <= 100:
         raise ValueError("Threshold must be between 0 and 100")
+
+
+def _modality(path: Path) -> str:
+    suffix = path.suffix.lower().lstrip(".")
+    if suffix in IMAGE_SUFFIXES:
+        return "image"
+    if suffix in AUDIO_SUFFIXES:
+        return "audio"
+    if suffix in VIDEO_SUFFIXES:
+        return "video"
+    return "unknown"
+
+
+def _group_by_modality(rows: list[dict], dataset_name: str) -> dict[str, list[dict]]:
+    groups: dict[str, list[dict]] = {}
+    for row in rows:
+        groups.setdefault(row["modality"], []).append(row)
+    for modality, samples in groups.items():
+        if {int(row["label"]) for row in samples} != {0, 1}:
+            raise ValueError(f"{dataset_name} {modality} data must contain both real and fake samples.")
+    return groups
+
+
+def calculate_metrics(rows: list[dict], threshold: float | Mapping[str, float] = 50) -> dict:
+    if isinstance(threshold, Mapping):
+        for modality_threshold in threshold.values():
+            _validate_threshold(modality_threshold)
+        if any(row.get("modality") not in threshold for row in rows):
+            raise ValueError("A calibrated threshold is required for every media modality.")
+        thresholds = threshold
+        reported_threshold = dict(threshold)
+    else:
+        _validate_threshold(threshold)
+        thresholds = None
+        reported_threshold = threshold
+    if not rows:
+        raise ValueError("Evaluation data must contain at least one sample.")
     labels = [int(row["label"]) for row in rows]
     if set(labels) != {0, 1}:
         raise ValueError("Evaluation data must contain both real and fake samples (labels 0 and 1)")
@@ -27,7 +68,10 @@ def calculate_metrics(rows: list[dict], threshold: float = 50) -> dict:
     if any(not math.isfinite(score) for score in raw_scores):
         raise ValueError("Evaluation scores must be finite numbers")
     scores = [max(0.0, min(100.0, score)) for score in raw_scores]
-    predictions = [int(score >= threshold) for score in scores]
+    predictions = [
+        int(score >= (thresholds[row["modality"]] if thresholds is not None else threshold))
+        for score, row in zip(scores, rows)
+    ]
     tn = sum(label == 0 and prediction == 0 for label, prediction in zip(labels, predictions))
     fp = sum(label == 0 and prediction == 1 for label, prediction in zip(labels, predictions))
     fn = sum(label == 1 and prediction == 0 for label, prediction in zip(labels, predictions))
@@ -63,7 +107,7 @@ def calculate_metrics(rows: list[dict], threshold: float = 50) -> dict:
 
     return {
         "samples": len(rows),
-        "threshold": threshold,
+        "threshold": reported_threshold,
         "confusion_matrix": {"tn": tn, "fp": fp, "fn": fn, "tp": tp},
         "accuracy": (tp + tn) / len(rows),
         "precision": precision,
@@ -140,6 +184,7 @@ def _score_dataset(root: Path) -> list[dict]:
                 raise ValueError(f"Media detector returned no finite numeric score for {path}")
             rows.append({
                 "label": label,
+                "modality": _modality(path),
                 "score": result["score"],
                 "latency_ms": elapsed,
                 "method": method,
@@ -157,23 +202,66 @@ def evaluate(
     if calibration_root is not None and root.resolve() == calibration_root.resolve():
         raise ValueError("Calibration and final evaluation datasets must be separate directories")
     test_rows = _score_dataset(root)
-    selected_threshold = threshold
-    calibration = None
+    test_groups = _group_by_modality(test_rows, "Final evaluation")
+    selected_threshold: float | dict[str, float] = threshold
+    calibration_by_modality = None
     if calibration_root is not None:
         calibration_rows = _score_dataset(calibration_root)
-        calibration = select_threshold(calibration_rows, max_false_positive_rate)
-        selected_threshold = calibration["threshold"]
+        calibration_groups = _group_by_modality(calibration_rows, "Calibration")
+        if set(calibration_groups) != set(test_groups):
+            raise ValueError("Calibration and final evaluation datasets must contain the same media modalities.")
+        calibration_by_modality = {
+            modality: select_threshold(rows, max_false_positive_rate)
+            for modality, rows in calibration_groups.items()
+        }
+        thresholds_by_modality = {
+            modality: result["threshold"]
+            for modality, result in calibration_by_modality.items()
+        }
+        selected_threshold = (
+            next(iter(thresholds_by_modality.values()))
+            if len(thresholds_by_modality) == 1
+            else thresholds_by_modality
+        )
+
+    per_modality = {}
+    for modality, rows in test_groups.items():
+        modality_threshold = (
+            selected_threshold[modality]
+            if isinstance(selected_threshold, Mapping)
+            else selected_threshold
+        )
+        per_modality[modality] = {
+            **calculate_metrics(rows, modality_threshold),
+            "median_latency_ms": median(row["latency_ms"] for row in rows),
+            "p95_latency_ms": sorted(row["latency_ms"] for row in rows)[
+                max(0, math.ceil(len(rows) * 0.95) - 1)
+            ],
+            "methods": sorted({row["method"] for row in rows}),
+            "pretrained_outputs": sum(row["pretrained"] for row in rows),
+            "calibration": (
+                calibration_by_modality[modality]
+                if calibration_by_modality
+                else None
+            ),
+        }
 
     result = calculate_metrics(test_rows, selected_threshold)
     result.update({
         "dataset": str(root),
-        "threshold_source": "separate_calibration_dataset" if calibration else "fixed_cutoff",
-        "calibration": calibration,
+        "threshold_source": "separate_calibration_dataset" if calibration_by_modality else "fixed_cutoff",
+        "calibration": (
+            next(iter(calibration_by_modality.values()))
+            if calibration_by_modality and len(calibration_by_modality) == 1
+            else calibration_by_modality
+        ),
         "score_interpretation": "Detector risk scores and selected decision threshold are not probabilities or proof of authenticity.",
         "median_latency_ms": median(row["latency_ms"] for row in test_rows),
         "p95_latency_ms": sorted(row["latency_ms"] for row in test_rows)[max(0, math.ceil(len(test_rows) * 0.95) - 1)],
         "methods": sorted({row["method"] for row in test_rows}),
         "pretrained_outputs": sum(row["pretrained"] for row in test_rows),
+        "modalities": sorted(test_groups),
+        "per_modality": per_modality,
     })
     return result
 

@@ -1,6 +1,10 @@
+from datetime import datetime, timedelta, timezone
+import json
+
 import pytest
 from fastapi import HTTPException
 
+import detection_engine
 import main
 from network_ingestion import normalize_network_events
 
@@ -35,6 +39,60 @@ def test_zeek_and_suricata_records_normalize_to_flow_telemetry():
     assert normalized["flows"][1]["destination_port"] == 53
     assert normalized["flows"][1]["bytes_out"] == 900
     assert normalized["flows"][1]["signature"] == "DNS policy event"
+    assert normalized["flows"][1]["event_type"] == "alert"
+
+
+def test_suricata_alert_severity_is_preserved_and_scored_as_bounded_evidence():
+    normalized = normalize_network_events({
+        "events": [
+            {
+                "event_type": "alert",
+                "src_ip": "10.0.0.5",
+                "dest_ip": "8.8.8.8",
+                "proto": "tcp",
+                "alert": {
+                    "signature": "ET MALWARE C2 callback",
+                    "signature_id": 2026001,
+                    "category": "A Network Trojan was detected",
+                    "severity": 1,
+                    "action": "allowed",
+                },
+            },
+            {
+                "event_type": "alert",
+                "alert": {
+                    "signature": "ET MALWARE C2 callback",
+                    "severity": 2,
+                },
+            },
+        ]
+    })
+
+    score, reasons, indicators = detection_engine.analyze_technical_activity(
+        json.dumps(normalized),
+        "network",
+    )
+
+    assert score == 60
+    assert len(indicators) == 1
+    assert indicators[0]["name"] == "Suricata IDS Alert"
+    assert indicators[0]["weight"] == 45
+    assert indicators[0]["signature"] == "ET MALWARE C2 callback"
+    assert indicators[0]["severity"] == "critical"
+    assert indicators[0]["category"] == "A Network Trojan was detected"
+    assert indicators[0]["action"] == "allowed"
+    assert any("a critical severity IDS alert" in reason for reason in reasons)
+
+
+def test_network_alert_without_recognized_severity_is_not_scored_as_sensor_evidence():
+    score, reasons, indicators = detection_engine.analyze_technical_activity(
+        '{"events":[{"event_type":"alert","signature":"unrated alert","signature_severity":"urgent"}]}',
+        "network",
+    )
+
+    assert score == 15
+    assert reasons == []
+    assert indicators == []
 
 
 def test_network_ingestion_creates_incident_for_port_scan_batch(tmp_path, monkeypatch):
@@ -85,6 +143,30 @@ def test_network_ingestion_accepts_benign_flow_without_opening_incident(tmp_path
     assert result["status"] == "accepted"
     assert result["detected"] is False
     assert result["incident_id"] is None
+
+
+def test_network_ingestion_detects_aggregated_scan_ports_and_beacon_timestamps(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "aggregated-network-ingestion.sqlite")
+    main.initialize_database()
+    payload = {
+        "events": [{
+            "src_ip": "10.0.0.5",
+            "dest_ip": "8.8.8.8",
+            "proto": "tcp",
+            "destination_ports": list(range(20, 32)),
+            "timestamps": [
+                (datetime(2026, 10, 1, 10, tzinfo=timezone.utc) + timedelta(seconds=60 * index)).isoformat()
+                for index in range(5)
+            ],
+        }]
+    }
+
+    result = main.ingest_network_telemetry(payload, {"username": "analyst", "role": "analyst"})
+    names = {item["name"] for item in result["assessment"]["indicators"]}
+
+    assert result["status"] == "incident_created"
+    assert "Flow Port-Scan Breadth" in names
+    assert "Regular Flow Beaconing" in names
 
 
 def test_network_ingestion_rejects_invalid_and_oversized_batches():

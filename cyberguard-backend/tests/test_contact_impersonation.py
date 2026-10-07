@@ -56,6 +56,54 @@ def test_contact_style_profile_requires_multiple_examples():
         build_style_profile(["one example", "another example"])
 
 
+def test_contact_style_profile_extracts_multilingual_words_and_scripts():
+    samples = [
+        "ମୁଁ ଆସନ୍ତାକାଲି ଦଳକୁ ଖସଡ଼ା ପଠାଇବି। ଦୟାକରି ମଧ୍ୟାହ୍ନ ପୂର୍ବରୁ ଟିପ୍ପଣୀ ଦେଖନ୍ତୁ।",
+        "ମୁଁ ଆଜି ଦଳକୁ ଖସଡ଼ା ପଠାଇବି। ଦୟାକରି ମଧ୍ୟାହ୍ନ ପୂର୍ବରୁ ଟିପ୍ପଣୀ ଦେଖନ୍ତୁ।",
+        "ମୁଁ କାଲି ଦଳକୁ ଟିପ୍ପଣୀ ପଠାଇବି। ଦୟାକରି ମଧ୍ୟାହ୍ନ ପୂର୍ବରୁ ଖସଡ଼ା ଦେଖନ୍ତୁ।",
+    ]
+    profile = build_style_profile(samples)
+
+    matching = compare_contact_message(
+        f"From: Jane Doe <jane@bput.ac.in>\n\n{samples[0]}",
+        ["jane@bput.ac.in"],
+        profile,
+    )
+    different_script = compare_contact_message(
+        "From: Jane Doe <jane@bput.ac.in>\n\n"
+        "Tomorrow the team will receive my complete draft for review before lunch. "
+        "Please send your detailed comments when you have finished checking everything.",
+        ["jane@bput.ac.in"],
+        profile,
+    )
+
+    assert profile["script_distribution"]["ORIYA"] > 0.95
+    assert matching["dominant_profile_script"] == "ORIYA"
+    assert matching["dominant_message_script"] == "ORIYA"
+    assert matching["risk_score"] == 0
+    assert different_script["dominant_message_script"] == "LATIN"
+    assert any(item["name"] == "Known Contact Script Deviation" for item in different_script["indicators"])
+
+
+def test_short_message_reports_inconclusive_style_without_script_penalty():
+    profile = build_style_profile([
+        "ମୁଁ ଆସନ୍ତାକାଲି ଦଳକୁ ଖସଡ଼ା ପଠାଇବି। ଦୟାକରି ଟିପ୍ପଣୀ ଦେଖନ୍ତୁ।",
+        "ମୁଁ ଆଜି ଦଳକୁ ଖସଡ଼ା ପଠାଇବି। ଦୟାକରି ଟିପ୍ପଣୀ ଦେଖନ୍ତୁ।",
+        "ମୁଁ କାଲି ଦଳକୁ ଟିପ୍ପଣୀ ପଠାଇବି। ଦୟାକରି ଖସଡ଼ା ଦେଖନ୍ତୁ।",
+    ])
+
+    result = compare_contact_message(
+        "From: Jane Doe <jane@bput.ac.in>\n\nThanks, okay.",
+        ["jane@bput.ac.in"],
+        profile,
+    )
+
+    assert result["style_comparison_status"] == "insufficient_text"
+    assert result["message_word_count"] == 2
+    assert result["risk_score"] == 0
+    assert result["indicators"] == []
+
+
 def test_contact_profiles_are_private_and_used_by_impersonation_analysis(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "DB_PATH", tmp_path / "known-contacts.db")
     main.initialize_database()
@@ -80,6 +128,8 @@ def test_contact_profiles_are_private_and_used_by_impersonation_analysis(tmp_pat
     result = main.analyze_threat(request, analyst)
 
     assert result["assessment"]["known_contact_comparison"]["sender_match"] is False
+    assert result["assessment"]["known_contact_comparison"]["style_comparison_status"] == "compared"
+    assert result["assessment"]["known_contact_comparison"]["dominant_message_script"] == "LATIN"
     assert any(item["name"] == "Known Contact Sender Mismatch" for item in result["assessment"]["indicators"])
     with pytest.raises(HTTPException) as error:
         main.apply_known_contact_comparison({}, "impersonation", request.payload, request.metadata, lead)
