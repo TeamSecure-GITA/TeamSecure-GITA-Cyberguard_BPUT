@@ -1188,6 +1188,14 @@ export default function CyberRadarPortal({
           </div>
         </div>
       )}
+
+      {/* Floating Video Player Bar (matches reference screenshot layout & controls) */}
+      <CyberVideoPlayerBar
+        isOpen={showVideoBar}
+        onClose={() => setShowVideoBar(false)}
+        onOpenFullDemo={() => setShowDemoModal(true)}
+        themeMode={themeMode}
+      />
     </div>
   );
 }
