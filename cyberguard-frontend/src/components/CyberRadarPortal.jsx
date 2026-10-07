@@ -236,10 +236,6 @@ export default function CyberRadarPortal({
     }
   };
 
-  const toggleTheme = () => {
-    setThemeMode((prev) => (prev === 'dark' ? 'high-contrast' : 'dark'));
-  };
-
   const scrollToSection = (sectionId) => {
     setActiveNav(sectionId);
     const element = document.getElementById(sectionId);
@@ -249,17 +245,21 @@ export default function CyberRadarPortal({
   };
 
   return (
-    <div className={`cyber-portal-root relative min-h-screen bg-[#020b18] text-slate-100 flex flex-col justify-between overflow-x-hidden ${themeMode === 'high-contrast' ? 'brightness-110 contrast-125' : ''}`}>
+    <div className={`cyber-portal-root relative min-h-screen flex flex-col justify-between overflow-x-hidden transition-colors duration-300 ${
+      isLight ? 'bg-slate-50 text-slate-900 theme-judge-white' : 'bg-[#020b18] text-slate-100'
+    }`}>
       {/* Background ambient lighting and cyber wave elements */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
         {/* Subtle grid pattern */}
-        <div className="cyber-matrix-grid absolute inset-0 opacity-[0.06]" />
+        <div className={`cyber-matrix-grid absolute inset-0 ${isLight ? 'opacity-[0.03] invert' : 'opacity-[0.06]'}`} />
         
         {/* Glowing cyan/teal ambient aura positioned around the right globe */}
         <div 
           className="absolute top-1/3 right-[8%] -translate-y-1/2 w-[700px] h-[700px] rounded-full blur-[160px] pointer-events-none"
           style={{
-            background: 'radial-gradient(circle, rgba(6, 182, 212, 0.22) 0%, rgba(16, 185, 129, 0.18) 40%, rgba(14, 165, 233, 0.06) 70%, transparent 80%)'
+            background: isLight 
+              ? 'radial-gradient(circle, rgba(14, 165, 233, 0.14) 0%, rgba(16, 185, 129, 0.1) 40%, transparent 75%)'
+              : 'radial-gradient(circle, rgba(6, 182, 212, 0.22) 0%, rgba(16, 185, 129, 0.18) 40%, rgba(14, 165, 233, 0.06) 70%, transparent 80%)'
           }}
         />
 
@@ -267,20 +267,41 @@ export default function CyberRadarPortal({
         <div 
           className="absolute -bottom-36 -left-36 w-[560px] h-[560px] rounded-full blur-[170px] pointer-events-none"
           style={{
-            background: 'radial-gradient(circle, rgba(3, 105, 161, 0.18) 0%, transparent 75%)'
+            background: isLight 
+              ? 'radial-gradient(circle, rgba(2, 132, 199, 0.08) 0%, transparent 70%)'
+              : 'radial-gradient(circle, rgba(3, 105, 161, 0.18) 0%, transparent 75%)'
           }}
         />
 
         {/* Ambient top light streaks */}
-        <div className="absolute top-0 inset-x-0 h-[1px] bg-gradient-to-r from-transparent via-cyan-500/30 to-transparent" />
+        <div className={`absolute top-0 inset-x-0 h-[1px] ${
+          isLight ? 'bg-gradient-to-r from-transparent via-cyan-500/20 to-transparent' : 'bg-gradient-to-r from-transparent via-cyan-500/30 to-transparent'
+        }`} />
       </div>
+
+      {/* Optional Judge Presentation Mode Notification Banner */}
+      {isLight && (
+        <div className="w-full bg-gradient-to-r from-cyan-600 via-emerald-600 to-blue-600 text-white px-4 py-1.5 text-center text-xs font-mono font-semibold flex items-center justify-center gap-2 shadow-sm z-30">
+          <span>🎓 JUDGE PRESENTATION MODE — High-Contrast Architectural Evaluation View</span>
+          <button
+            onClick={() => toggleTheme('dark')}
+            className="ml-2 px-2 py-0.5 rounded bg-white/20 hover:bg-white/30 text-[11px] underline cursor-pointer"
+          >
+            Switch to Cyber SOC Dark
+          </button>
+        </div>
+      )}
 
       {/* =========================================================================
           1. TOP NAVIGATION BAR (Exact visual layout matching reference screenshot)
           ========================================================================= */}
-      <header className="relative z-30 w-full px-5 sm:px-10 py-4 flex items-center justify-between border-b border-cyan-500/10 backdrop-blur-md bg-[#020b18]/70">
+      <header className={`relative z-30 w-full px-5 sm:px-10 py-4 flex items-center justify-between border-b backdrop-blur-md transition-colors ${
+        isLight
+          ? 'border-slate-200/90 bg-white/90 shadow-sm'
+          : 'border-cyan-500/10 bg-[#020b18]/70'
+      }`}>
         
-        {/* Brand Logo: Shield with "C" + "CyberGuard AI" */}
+        {/* Brand Logo: Shield with "C" + "Cyberguard AI" */}
         <div 
           onClick={() => scrollToSection('home')}
           className="flex items-center gap-3 cursor-pointer group select-none"
@@ -325,17 +346,23 @@ export default function CyberRadarPortal({
           </div>
           
           {/* Brand Typography */}
-          <span className="text-lg sm:text-xl font-bold tracking-tight text-white flex items-center gap-1.5">
-            CyberGuard <span className="font-bold text-cyan-400">AI</span>
+          <span className={`text-lg sm:text-xl font-bold tracking-tight flex items-center gap-1.5 ${
+            isLight ? 'text-slate-900' : 'text-white'
+          }`}>
+            Cyberguard <span className="font-bold text-cyan-400">AI</span>
           </span>
         </div>
 
         {/* Center Navigation Links: Home, Features, How It Works, About, Contact */}
-        <nav className="hidden md:flex items-center gap-7 lg:gap-9 text-sm font-medium text-slate-300">
+        <nav className={`hidden md:flex items-center gap-7 lg:gap-9 text-sm font-medium ${
+          isLight ? 'text-slate-600' : 'text-slate-300'
+        }`}>
           <button
             onClick={() => scrollToSection('home')}
             className={`relative py-1 transition-colors cursor-pointer ${
-              activeNav === 'home' ? 'text-white font-semibold' : 'text-slate-300 hover:text-white'
+              activeNav === 'home' 
+                ? (isLight ? 'text-slate-900 font-bold' : 'text-white font-semibold')
+                : (isLight ? 'text-slate-500 hover:text-slate-900' : 'text-slate-300 hover:text-white')
             }`}
           >
             <span>Home</span>
@@ -347,7 +374,9 @@ export default function CyberRadarPortal({
           <button
             onClick={() => scrollToSection('features')}
             className={`relative py-1 transition-colors cursor-pointer ${
-              activeNav === 'features' ? 'text-white font-semibold' : 'text-slate-300 hover:text-white'
+              activeNav === 'features' 
+                ? (isLight ? 'text-slate-900 font-bold' : 'text-white font-semibold')
+                : (isLight ? 'text-slate-500 hover:text-slate-900' : 'text-slate-300 hover:text-white')
             }`}
           >
             <span>Features</span>
@@ -359,7 +388,9 @@ export default function CyberRadarPortal({
           <button
             onClick={() => scrollToSection('how-it-works')}
             className={`relative py-1 transition-colors cursor-pointer ${
-              activeNav === 'how-it-works' ? 'text-white font-semibold' : 'text-slate-300 hover:text-white'
+              activeNav === 'how-it-works' 
+                ? (isLight ? 'text-slate-900 font-bold' : 'text-white font-semibold')
+                : (isLight ? 'text-slate-500 hover:text-slate-900' : 'text-slate-300 hover:text-white')
             }`}
           >
             <span>How It Works</span>
@@ -371,7 +402,9 @@ export default function CyberRadarPortal({
           <button
             onClick={() => scrollToSection('about')}
             className={`relative py-1 transition-colors cursor-pointer ${
-              activeNav === 'about' ? 'text-white font-semibold' : 'text-slate-300 hover:text-white'
+              activeNav === 'about' 
+                ? (isLight ? 'text-slate-900 font-bold' : 'text-white font-semibold')
+                : (isLight ? 'text-slate-500 hover:text-slate-900' : 'text-slate-300 hover:text-white')
             }`}
           >
             <span>About</span>
@@ -383,7 +416,9 @@ export default function CyberRadarPortal({
           <button
             onClick={() => scrollToSection('contact')}
             className={`relative py-1 transition-colors cursor-pointer ${
-              activeNav === 'contact' ? 'text-white font-semibold' : 'text-slate-300 hover:text-white'
+              activeNav === 'contact' 
+                ? (isLight ? 'text-slate-900 font-bold' : 'text-white font-semibold')
+                : (isLight ? 'text-slate-500 hover:text-slate-900' : 'text-slate-300 hover:text-white')
             }`}
           >
             <span>Contact</span>
@@ -393,31 +428,73 @@ export default function CyberRadarPortal({
           </button>
         </nav>
 
-        {/* Right Controls: [ 🌐 EN ⌵ ] [ ☀️ ] [ 🛡️ SOC Login ] */}
-        <div className="flex items-center gap-2.5 sm:gap-3.5">
+        {/* Right Controls: [ 🌐 EN ⌵ ] [ ⚡ Cyber SOC | 👨‍⚖️ Judge Mode ] [ ☀️/🌙 ] [ ⬡ SOC (head_admin) ] */}
+        <div className="flex items-center gap-2.5 sm:gap-3">
           {/* Language Selector Pill */}
           <LanguageToggle currentLang={currentLang} onToggle={onLanguageChange} variant="pill" />
 
-          {/* Theme Mode Toggle Button */}
+          {/* Quick Mode Toggle Pill: Cyber SOC vs Judge Presentation */}
+          <div className={`hidden sm:inline-flex items-center p-0.5 rounded-full border text-[11px] font-mono font-semibold transition-all ${
+            isLight 
+              ? 'bg-slate-100 border-slate-300 text-slate-700' 
+              : 'bg-[#041424] border-cyan-500/30 text-cyan-300'
+          }`}>
+            <button
+              type="button"
+              onClick={() => toggleTheme('dark')}
+              className={`px-2.5 py-1 rounded-full transition-all cursor-pointer ${
+                !isLight 
+                  ? 'bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-bold shadow-[0_0_10px_rgba(6,182,212,0.5)]' 
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="Cyber SOC Mode (Dark room defense operations)"
+            >
+              ⚡ Cyber SOC
+            </button>
+            <button
+              type="button"
+              onClick={() => toggleTheme('judge-white')}
+              className={`px-2.5 py-1 rounded-full transition-all cursor-pointer ${
+                isLight 
+                  ? 'bg-slate-900 text-white font-bold shadow-sm' 
+                  : 'text-slate-400 hover:text-white'
+              }`}
+              title="Judge Presentation Mode (Executive white evaluation view)"
+            >
+              👨‍⚖️ Judge Mode
+            </button>
+          </div>
+
+          {/* Theme Mode Toggle Icon Button */}
           <button
             type="button"
-            onClick={toggleTheme}
-            className="w-8 h-8 rounded-full border border-slate-700/80 bg-slate-900/60 hover:bg-slate-800/80 text-slate-300 hover:text-amber-300 flex items-center justify-center transition-all cursor-pointer shadow-sm"
-            title="Toggle Visual Display Theme"
+            onClick={() => toggleTheme()}
+            className={`w-8 h-8 rounded-full border flex items-center justify-center transition-all cursor-pointer shadow-sm ${
+              isLight
+                ? 'border-slate-300 bg-white text-slate-700 hover:text-amber-600 hover:bg-slate-50'
+                : 'border-slate-700/80 bg-slate-900/60 hover:bg-slate-800/80 text-slate-300 hover:text-amber-300'
+            }`}
+            title={isLight ? 'Switch to Cyber SOC Dark Mode' : 'Switch to Judge White Mode'}
           >
-            {themeMode === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+            {isLight ? <Moon size={15} /> : <Sun size={15} />}
           </button>
 
-          {/* SOC Login Pill Button */}
+          {/* SOC Login Pill Button (matching screenshot: ⬡ SOC (head_admin)) */}
           <button
             type="button"
             id="header-soc-login-btn"
             onClick={() => setShowAuthModal(true)}
-            className="flex items-center gap-1.5 sm:gap-2 px-3.5 sm:px-4 py-1.5 sm:py-2 rounded-full border border-cyan-500/50 bg-[#071d30]/70 hover:bg-cyan-950/60 text-xs sm:text-sm font-medium text-cyan-300 hover:text-white hover:border-cyan-400 transition-all shadow-[0_0_18px_rgba(6,182,212,0.2)] hover:shadow-[0_0_25px_rgba(6,182,212,0.4)] cursor-pointer shrink-0"
+            className={`flex items-center gap-1.5 sm:gap-2 px-3.5 sm:px-4 py-1.5 sm:py-2 rounded-full border text-xs sm:text-sm font-medium transition-all cursor-pointer shrink-0 ${
+              isLight
+                ? 'border-cyan-600 bg-cyan-50 text-cyan-900 hover:bg-cyan-100 shadow-sm'
+                : 'border-cyan-500/50 bg-[#071d30]/70 hover:bg-cyan-950/60 text-cyan-300 hover:text-white hover:border-cyan-400 shadow-[0_0_18px_rgba(6,182,212,0.2)] hover:shadow-[0_0_25px_rgba(6,182,212,0.4)]'
+            }`}
             title="SOC Operator Sign In"
           >
-            <Shield size={14} className="text-cyan-400" />
-            <span>{currentSession ? `SOC (${currentSession.user?.role || 'Lead'})` : 'SOC Login'}</span>
+            <Shield size={14} className={isLight ? 'text-cyan-700' : 'text-cyan-400'} />
+            <span className="font-mono font-semibold">
+              {currentSession ? `SOC (${currentSession.user?.role || 'head_admin'})` : 'SOC (head_admin)'}
+            </span>
           </button>
         </div>
       </header>
@@ -431,16 +508,20 @@ export default function CyberRadarPortal({
         <div className="flex-1 max-w-xl flex flex-col items-start text-left z-20 space-y-6">
           
           {/* Eyebrow Pill Tag: [ ● THREAT INTELLIGENCE  ● REAL-TIME  ● AI POWERED ] */}
-          <div className="inline-flex items-center gap-2 sm:gap-3 px-3.5 py-1.5 rounded-full border border-emerald-500/30 bg-[#041a23]/80 backdrop-blur-md shadow-[0_0_18px_rgba(16,185,129,0.15)] font-mono text-[10px] sm:text-[11px] font-semibold tracking-wider text-emerald-400">
+          <div className={`inline-flex items-center gap-2 sm:gap-3 px-3.5 py-1.5 rounded-full border font-mono text-[10px] sm:text-[11px] font-semibold tracking-wider transition-colors ${
+            isLight
+              ? 'border-emerald-300 bg-emerald-50 text-emerald-800 shadow-sm'
+              : 'border-emerald-500/30 bg-[#041a23]/80 text-emerald-400 backdrop-blur-md shadow-[0_0_18px_rgba(16,185,129,0.15)]'
+          }`}>
             <span className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#34d399]" />
+              <span className={`w-2 h-2 rounded-full ${isLight ? 'bg-emerald-600' : 'bg-emerald-400 shadow-[0_0_8px_#34d399]'}`} />
               THREAT INTELLIGENCE
             </span>
-            <span className="text-emerald-500/40">●</span>
+            <span className={isLight ? 'text-emerald-300' : 'text-emerald-500/40'}>●</span>
             <span className="flex items-center gap-1.5">
               REAL-TIME
             </span>
-            <span className="text-emerald-500/40">●</span>
+            <span className={isLight ? 'text-emerald-300' : 'text-emerald-500/40'}>●</span>
             <span className="flex items-center gap-1.5">
               AI POWERED
             </span>
@@ -449,16 +530,24 @@ export default function CyberRadarPortal({
           {/* Main Hero Headline */}
           <h1
             aria-label="See the signal before it spreads."
-            className="text-4xl sm:text-5xl lg:text-[62px] font-black tracking-tight text-white leading-[1.08]"
+            className={`text-4xl sm:text-5xl lg:text-[62px] font-black tracking-tight leading-[1.08] ${
+              isLight ? 'text-slate-900' : 'text-white'
+            }`}
           >
             See the signal <br />
-            <span className="text-[#00e699] font-black drop-shadow-[0_0_35px_rgba(0,230,153,0.55)]">
+            <span className={`font-black ${
+              isLight
+                ? 'text-emerald-600 drop-shadow-sm'
+                : 'text-[#00e699] drop-shadow-[0_0_35px_rgba(0,230,153,0.55)]'
+            }`}>
               before it spreads.
             </span>
           </h1>
 
           {/* Subtitle Description */}
-          <p className="text-base sm:text-lg text-slate-300/90 leading-relaxed font-normal max-w-lg">
+          <p className={`text-base sm:text-lg leading-relaxed font-normal max-w-lg ${
+            isLight ? 'text-slate-600' : 'text-slate-300/90'
+          }`}>
             CyberGuard AI turns suspicious links, messages, senders, and synthetic media clues into a clear risk picture and structured next moves.
           </p>
 
@@ -469,7 +558,11 @@ export default function CyberRadarPortal({
             <button
               id="hero-open-workspace-btn"
               onClick={handleLaunch}
-              className="group relative inline-flex items-center justify-center gap-2.5 px-6 sm:px-8 py-3.5 sm:py-4 rounded-xl font-bold text-[#011e17] text-sm sm:text-base transition-all duration-300 shadow-[0_0_35px_rgba(0,230,153,0.5)] hover:shadow-[0_0_50px_rgba(0,245,255,0.7)] hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+              className={`group relative inline-flex items-center justify-center gap-2.5 px-6 sm:px-8 py-3.5 sm:py-4 rounded-xl font-bold text-sm sm:text-base transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] cursor-pointer ${
+                isLight
+                  ? 'text-slate-950 shadow-lg shadow-emerald-500/30 hover:shadow-emerald-500/50'
+                  : 'text-[#011e17] shadow-[0_0_35px_rgba(0,230,153,0.5)] hover:shadow-[0_0_50px_rgba(0,245,255,0.7)]'
+              }`}
               style={{
                 background: 'linear-gradient(135deg, #00e699 0%, #00d2a8 50%, #06b6d4 100%)',
               }}
@@ -489,11 +582,20 @@ export default function CyberRadarPortal({
             <button
               type="button"
               id="hero-watch-demo-btn"
-              onClick={() => setShowDemoModal(true)}
-              className="inline-flex items-center justify-center gap-2.5 px-5 sm:px-6 py-3.5 sm:py-4 rounded-xl font-medium text-white text-sm sm:text-base border border-slate-700/80 bg-slate-900/60 hover:bg-slate-800/80 hover:border-cyan-500/50 backdrop-blur-md shadow-md transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+              onClick={() => {
+                setShowVideoBar(true);
+                setShowDemoModal(true);
+              }}
+              className={`inline-flex items-center justify-center gap-2.5 px-5 sm:px-6 py-3.5 sm:py-4 rounded-xl font-medium text-sm sm:text-base border backdrop-blur-md shadow-md transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] cursor-pointer ${
+                isLight
+                  ? 'bg-white border-slate-300 text-slate-800 hover:bg-slate-100 shadow-slate-200/80'
+                  : 'border-slate-700/80 bg-slate-900/60 hover:bg-slate-800/80 hover:border-cyan-500/50 text-white'
+              }`}
             >
-              <div className="w-5 h-5 rounded-full border border-white/60 flex items-center justify-center pl-0.5">
-                <Play size={10} className="fill-white text-white" />
+              <div className={`w-5 h-5 rounded-full border flex items-center justify-center pl-0.5 ${
+                isLight ? 'border-slate-700 bg-slate-800 text-white' : 'border-white/60'
+              }`}>
+                <Play size={10} className={`fill-current ${isLight ? 'text-white' : 'text-white'}`} />
               </div>
               <span>Watch demo</span>
             </button>
@@ -502,12 +604,14 @@ export default function CyberRadarPortal({
 
           {/* Privacy Footnote Badge: [ 🔒 Privacy by design | Local-first analysis with restricted telemetry fallback. ] */}
           <div className="pt-3 flex items-start gap-2.5 max-w-md">
-            <div className="p-1 rounded-md bg-emerald-500/10 text-emerald-400 mt-0.5 shrink-0">
+            <div className={`p-1 rounded-md mt-0.5 shrink-0 ${
+              isLight ? 'bg-emerald-100 text-emerald-800' : 'bg-emerald-500/10 text-emerald-400'
+            }`}>
               <Lock size={15} />
             </div>
             <div className="flex flex-col text-xs leading-snug">
-              <span className="font-semibold text-slate-200">Privacy by design</span>
-              <span className="text-slate-400 text-[11px]">
+              <span className={`font-semibold ${isLight ? 'text-slate-900' : 'text-slate-200'}`}>Privacy by design</span>
+              <span className={`text-[11px] ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
                 Local-first analysis with restricted telemetry fallback.
               </span>
             </div>
@@ -519,12 +623,18 @@ export default function CyberRadarPortal({
         <div className="flex-1 w-full max-w-full lg:max-w-[580px] flex items-center justify-center relative">
           <CyberGlobe 
             onOpenWorkspace={handleLaunch} 
+            themeMode={themeMode}
             onSelectBadge={(badgeId) => {
               if (badgeId === 'url' || badgeId === 'ip') handleLaunch();
-              else setShowDemoModal(true);
+              else {
+                setShowVideoBar(true);
+                setShowDemoModal(true);
+              }
             }} 
           />
         </div>
+
+      </main>
 
       </main>
 
