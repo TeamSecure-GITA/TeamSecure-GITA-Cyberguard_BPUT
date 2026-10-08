@@ -6,6 +6,7 @@ import MostTargeted from './components/MostTargeted';
 import ThreatChart from './components/ThreatChart';
 import IncidentTable from './components/IncidentTable';
 import ThreatInspector from './components/ThreatInspector';
+import OperationsWorkspace from './components/OperationsWorkspace';
 import XaiModal from './components/XaiModal';
 import SystemHealth from './components/SystemHealth';
 import ComplianceTab from './components/ComplianceTab';
@@ -472,6 +473,7 @@ export default function App() {
     <AttackGraph accessToken={session?.access_token} />
   </React.Suspense>
 )}
+{activeTab === 'operations' && <OperationsWorkspace accessToken={session?.access_token} incidents={incidents} />}
 {activeTab === 'inspector' && (
   <ThreatInspector
     accessToken={session?.access_token}

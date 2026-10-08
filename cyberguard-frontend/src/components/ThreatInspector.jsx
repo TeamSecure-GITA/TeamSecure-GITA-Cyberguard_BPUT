@@ -104,7 +104,7 @@ export default function ThreatInspector({ accessToken, onIncidentCreated }) {
           ...(activeSubTab === 'impersonation' && selectedContactId ? { known_contact_id: Number(selectedContactId) } : {}),
         };
         response = await axios.post(`${apiBaseUrl}/api/v1/analyze`, {
-          category: activeSubTab,
+          category: activeSubTab === 'auto' ? undefined : activeSubTab,
           payload: inputText,
           metadata: Object.keys(metadata).length ? metadata : undefined,
         }, config);
@@ -253,7 +253,7 @@ export default function ThreatInspector({ accessToken, onIncidentCreated }) {
       <div className="inspector-source-label"><span>01</span> Choose an analysis channel <small>{tabs.length} sources available</small></div>
       <div className="inspector-source-grid">
         {[
-          ['email', 'Email', Mail], ['email_file', 'EML Inspect', Mail], ['url', 'URL', Link], ['website', 'Website', Globe], ['image', 'Image', Upload],
+          ['auto', 'Auto Detect', Search], ['email', 'Email', Mail], ['email_file', 'EML Inspect', Mail], ['url', 'URL', Link], ['website', 'Website', Globe], ['image', 'Image', Upload],
           ['audio', 'Audio', Video], ['video', 'Video', Video], ['system_logs', 'Logs', FileText],
         ].map(([id, label, Icon]) => <button key={id} type="button" onClick={() => { setActiveSubTab(id); setAnalysisResult(null); setSelectedFile(null); setInputText(''); }} className={`source-card ${activeSubTab === id ? 'source-card-active' : ''}`}><Icon size={17} /><span>{label}</span><small>{activeSubTab === id ? 'selected' : 'inspect'}</small></button>)}
       </div>
@@ -410,6 +410,19 @@ export default function ThreatInspector({ accessToken, onIncidentCreated }) {
       {analysisResult && (
         <div className="inspector-results mt-6 p-4 bg-slate-900/80 border border-slate-700 rounded-xl space-y-3 animate-in fade-in">
           <div className="inspector-source-label"><span>03</span> Assessment result <small>Explainable evidence returned</small></div>
+          {analysisResult.classification && (
+            <div className="rounded-lg border border-cyan-500/25 bg-cyan-950/20 p-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">Auto-routed to {analysisResult.category}</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {analysisResult.classification.candidates.map((candidate) => (
+                  <span key={candidate.category} className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-[10px] text-slate-200">
+                    {candidate.category} · {candidate.score} ranking points
+                  </span>
+                ))}
+              </div>
+              <p className="mt-2 text-[10px] text-slate-400">{analysisResult.classification.calibration}</p>
+            </div>
+          )}
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-slate-400">FASTAPI ENGINE ASSESSMENT</span>
             <span

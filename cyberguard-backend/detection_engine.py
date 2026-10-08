@@ -94,6 +94,57 @@ def model_signal(payload: str) -> tuple[int, dict | None]:
     return score, indicator
 
 
+def predict_threat_category(payload: str) -> dict:
+    """Route unlabelled text to a likely analysis path and expose alternatives.
+
+    This intentionally uses transparent input-shape and keyword evidence until a
+    labelled, multi-class training corpus is available; the scores are rankings,
+    not calibrated probabilities.
+    """
+    text = payload.lower()
+    scores = {
+        "phishing": 10,
+        "url": 5,
+        "impersonation": 5,
+        "ato": 0,
+        "network": 0,
+        "system_logs": 0,
+        "malware": 0,
+    }
+    if re.search(r"https?://|www\.", text):
+        scores["url"] += 40
+        scores["phishing"] += 20
+    if re.search(r"(?:from|reply-to|return-path):|subject:", text):
+        scores["phishing"] += 35
+    if re.search(r"\b(?:otp|password|verify|account suspended|payment|urgent|upi|gift card)\b", text):
+        scores["phishing"] += 25
+    if re.search(r"\b(?:ceo|director|registrar|principal|police|cbi|official|bank)\b", text):
+        scores["impersonation"] += 30
+    if re.search(r"\b(?:login|failed|token|session|device|mfa|authentication|spray)\b", text):
+        scores["ato"] += 35
+    if re.search(r"\b(?:src_ip|dst_ip|src_port|dst_port|bytes_in|bytes_out|tcp|udp|flow)\b", text):
+        scores["network"] += 55
+    if re.search(r"\b(?:eventid|event_id|syslog|powershell|process|service installed|auditd)\b", text):
+        scores["system_logs"] += 50
+    if re.search(r"\b(?:eicar|ransomware|powershell encoded|macro|malware|sha256)\b", text):
+        scores["malware"] += 45
+
+    ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+    best_category, best_score = ranked[0]
+    denominator = sum(max(score, 1) for _, score in ranked[:3])
+    candidates = [
+        {"category": category, "score": round(max(score, 1) / denominator * 100)}
+        for category, score in ranked[:3]
+    ]
+    return {
+        "category": best_category,
+        "candidates": candidates,
+        "method": "transparent_text_routing_rules",
+        "calibration": "Candidate scores are relative rankings, not probabilities.",
+        "confidence": "medium" if best_score >= 35 else "low",
+    }
+
+
 def model_feature_attribution(payload: str, limit: int = 5) -> dict:
     """Explain a linear text-model margin without presenting terms as causal evidence."""
     if TEXT_MODEL is None:
@@ -933,7 +984,7 @@ def evaluate_threat_payload(category: str, payload: str) -> dict:
         if regional_categories and any(language in regional_categories for language in ("Hindi/Hinglish", "Odia")):
             detection_method = f"{detection_method}+regional-language"
 
-    model_score, model_indicator = model_signal(payload)
+    model_score, model_indicator = (model_signal(payload) if category in {"email", "phishing", "sms", "social"} else (0, None))
     if model_indicator:
         indicators.append(model_indicator)
         if model_score >= TEXT_MODEL_THRESHOLD:
@@ -993,7 +1044,7 @@ def evaluate_threat_payload(category: str, payload: str) -> dict:
         "mitre_techniques": mitre_techniques,
         "signal_count": len(indicators),
         "explanation_summary": " ".join(reasons[:3]) or "No anomalous threat signatures detected.",
-        "scoring_formula": "bounded rule evidence + calibrated text/media/model signal; final score capped at 99",
+        "scoring_formula": "bounded rule evidence + modality-compatible uncalibrated model signal; final score capped at 99",
         "plain_language_explanation": plain_language or "This content did not trigger a strong scam pattern. Continue to verify unexpected requests through an official channel.",
         "regional_categories": regional_categories,
     }

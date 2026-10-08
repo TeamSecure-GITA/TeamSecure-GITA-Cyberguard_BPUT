@@ -175,6 +175,59 @@ def test_high_risk_recommendations_are_specific_to_threat_category(monkeypatch):
     assert all(any(action["id"] == "notify_soc" for action in actions) for actions in (url_actions, media_actions, ato_actions))
 
 
+def test_auto_category_router_prefers_structured_network_evidence():
+    result = detection_engine.predict_threat_category(
+        '{"src_ip":"10.0.0.4","dst_ip":"10.0.0.8","src_port":443,"bytes_out":9000}'
+    )
+
+    assert result["category"] == "network"
+    assert result["candidates"][0]["category"] == "network"
+    assert len(result["candidates"]) == 3
+    assert "not probabilities" in result["calibration"]
+
+
+def test_analyze_endpoint_accepts_missing_category_and_returns_candidates():
+    main.initialize_database()
+    response = main.analyze_threat(
+        main.ThreatAnalysisRequest(payload='{"src_ip":"10.0.0.4","dst_port":443,"bytes_out":9000}'),
+        {"username": "auto-router-test", "role": "analyst"},
+    )
+
+    assert response["category"] == "network"
+    assert response["assessment"]["classification"]["candidates"][0]["category"] == "network"
+
+
+def test_dashboard_metrics_include_all_scenario_categories(monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "dashboard-families.sqlite")
+    main.initialize_database()
+    now = "2026-10-08T00:00:00+00:00"
+    with main.get_db() as db:
+        db.executemany(
+            "INSERT INTO incidents (category, payload, risk_score, risk_level, assessment, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            [(category, "sample", 50, "Medium", "{}", now) for category in (
+                "email", "phishing", "image", "audio", "video", "deepfake", "ato", "auth_logs", "anomaly", "impersonation"
+            )],
+        )
+
+    metrics = main.dashboard_metrics({"username": "dashboard-test", "role": "analyst"})
+
+    assert metrics["phishingCount"] == 2
+    assert metrics["deepfakeCount"] == 4
+    assert metrics["atoCount"] == 3
+    assert metrics["impersonationCount"] == 1
+
+
+def test_text_model_is_not_applied_to_structured_or_media_categories(monkeypatch):
+    monkeypatch.setattr(
+        detection_engine,
+        "model_signal",
+        lambda _payload: (_ for _ in ()).throw(AssertionError("text model called for non-text category")),
+    )
+
+    for category in ("url", "network", "system_logs", "image", "audio", "video", "malware"):
+        detection_engine.evaluate_threat_payload(category, "routine evidence")
+
+
 def test_malware_signatures_cover_credential_dumping_script_download_and_persistence():
     samples = {
         "dump.bin": b"lsass.exe OpenProcess MiniDumpWriteDump",

@@ -16,7 +16,7 @@
   "false_positive_rate": 0.0,
   "roc_auc": 0.9925213438542548,
   "pr_auc": 0.9794868335749607,
-  "fit_time_ms": 173.9173999999366,
-  "median_latency_ms_per_sample": 0.36920000002282904,
-  "p95_latency_ms_per_sample": 0.8030999997572508
+  "fit_time_ms": 197.17129999980898,
+  "median_latency_ms_per_sample": 0.36705000002257293,
+  "p95_latency_ms_per_sample": 0.7152999999107124
 }

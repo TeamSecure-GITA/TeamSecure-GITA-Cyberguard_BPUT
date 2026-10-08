@@ -71,7 +71,7 @@ try:
 except ImportError:
     AsyncMongoClient = None
 
-from detection_engine import FALLBACK_TEXT_MODEL, TEXT_MODEL, adversarial_self_test, analyze_screenshot_brand_mismatches, evaluate_threat_payload
+from detection_engine import FALLBACK_TEXT_MODEL, TEXT_MODEL, adversarial_self_test, analyze_screenshot_brand_mismatches, evaluate_threat_payload, predict_threat_category
 from behavioral_baseline import baseline_key, login_sample, parse_login_event, score_login_deviation, successful_login
 from geoip_enrichment import lookup_country as lookup_geoip_country
 from malware_scanner import scan_artifact
@@ -2253,17 +2253,21 @@ def apply_known_contact_comparison(assessment: dict[str, Any], category: str, pa
 def analyze_threat(request: ThreatAnalysisRequest, user: dict[str, str] = Depends(current_user)):
     if not request.payload.strip():
         raise HTTPException(status_code=400, detail="Payload content cannot be empty.")
-    assessment = evaluate_threat_payload(request.category, request.payload)
-    assessment = apply_known_contact_comparison(assessment, request.category, request.payload, request.metadata, user)
-    if request.category.lower() in {"auth_logs", "ato"}:
+    classification = predict_threat_category(request.payload) if not request.category or request.category.lower() == "auto" else None
+    category = classification["category"] if classification else request.category.lower()
+    assessment = evaluate_threat_payload(category, request.payload)
+    assessment = apply_known_contact_comparison(assessment, category, request.payload, request.metadata, user)
+    if category in {"auth_logs", "ato"}:
         assessment = apply_user_login_baseline(assessment, request.payload, user)
     assessment["iocs"] = enrich_iocs(extract_iocs(request.payload))
-    incident_id = store_incident(request.category, request.payload, assessment, metadata=request.metadata)
-    persist_cyberguard_x(incident_id, {"id": incident_id, "category": request.category, "payload": request.payload, "risk_score": assessment["risk_score"], "risk_level": assessment["risk_level"], "assessment": assessment, "created_at": datetime.now(timezone.utc).isoformat()})
-    write_audit(user, "analyze", f"incident:{incident_id}", request.category)
+    if classification:
+        assessment["classification"] = classification
+    incident_id = store_incident(category, request.payload, assessment, metadata=request.metadata)
+    persist_cyberguard_x(incident_id, {"id": incident_id, "category": category, "payload": request.payload, "risk_score": assessment["risk_score"], "risk_level": assessment["risk_level"], "assessment": assessment, "created_at": datetime.now(timezone.utc).isoformat()})
+    write_audit(user, "analyze", f"incident:{incident_id}", category)
     if assessment["risk_level"] in ["High", "Critical"]:
         create_notification(user["username"], f"{assessment['risk_level']} threat detected", f"Incident INC-{incident_id:04d} requires review.", assessment["risk_level"])
-    return {"status": "success", "incident_id": incident_id, "category": request.category, "assessment": assessment, "user": user["username"]}
+    return {"status": "success", "incident_id": incident_id, "category": category, "classification": classification, "assessment": assessment, "user": user["username"]}
 
 
 @app.post("/api/v1/network/ingest")
@@ -3482,10 +3486,10 @@ def dashboard_metrics(user: dict[str, str] = Depends(current_user)):
         "criticalAlerts": critical,
         "activeIncidents": active,
         "safeRequests": safe,
-        "phishingCount": by_category.get("phishing", 0) + by_category.get("url", 0),
-        "deepfakeCount": by_category.get("deepfake", 0),
+        "phishingCount": sum(by_category.get(category, 0) for category in ("phishing", "email", "sms", "social", "url")),
+        "deepfakeCount": sum(by_category.get(category, 0) for category in ("deepfake", "image", "audio", "video")),
         "impersonationCount": by_category.get("impersonation", 0),
-        "atoCount": by_category.get("ato", 0) + by_category.get("auth_logs", 0),
+        "atoCount": sum(by_category.get(category, 0) for category in ("ato", "auth_logs", "anomaly")),
         "byCategory": by_category,
         "byLevel": by_level,
         "topTargets": summarize_dashboard_targets([dict(row) for row in target_rows]),

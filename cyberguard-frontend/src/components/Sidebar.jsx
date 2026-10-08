@@ -12,7 +12,8 @@ import {
   Orbit, 
   Radar,
   X,
-  Shield
+  Shield,
+  ClipboardList,
 } from 'lucide-react';
 
 export default function Sidebar({ 
@@ -30,6 +31,7 @@ export default function Sidebar({
     { id: 'intelligence', label: 'Intelligence Operations', icon: BrainCircuit },
     { id: 'live', label: 'XDR Fusion', icon: Radar },
     { id: 'graph', label: 'Attack Graph', icon: GitGraph },
+    { id: 'operations', label: 'Casework & Playbooks', icon: ClipboardList },
     { id: 'compliance', label: 'Compliance & Governance', icon: FileCheck },
     { id: 'notifications', label: 'Alert Inbox', icon: Bell },
     { id: 'admin', label: 'Administration', icon: Settings },

@@ -2,7 +2,7 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any, Literal
 
 class ThreatAnalysisRequest(BaseModel):
-    category: str
+    category: Optional[str] = None
     payload: str
     metadata: Optional[Dict[str, Any]] = None
 
