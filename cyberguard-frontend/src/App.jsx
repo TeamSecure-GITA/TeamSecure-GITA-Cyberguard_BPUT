@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import MetricCards from './components/MetricCards';
@@ -58,7 +58,11 @@ export default function App() {
   const [viewMode, setViewMode] = useState(getInitialViewMode); // 'portal', 'login', or 'workspace'
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedIncident, setSelectedIncident] = useState(null);
-  const [language, setLanguage] = useState('EN');
+  const [language, setLanguage] = useState(() => {
+    if (typeof window === 'undefined') return 'EN';
+    const savedLanguage = window.localStorage.getItem('cyberguard_language');
+    return ['EN', 'OD', 'HI'].includes(savedLanguage) ? savedLanguage : 'EN';
+  });
   const [session, setSession] = useState(null);
   const [metrics, setMetrics] = useState(null);
   const [incidents, setIncidents] = useState([]);
@@ -73,6 +77,10 @@ export default function App() {
   const [demoSeeded, setDemoSeeded] = useState(false);
   const [routingInfo, setRoutingInfo] = useState(null);
   const [googleRedirectError, setGoogleRedirectError] = useState(null);
+
+  useEffect(() => {
+    window.localStorage.setItem('cyberguard_language', language);
+  }, [language]);
   const [themeMode, setThemeMode] = useState(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('cyberguard_theme');

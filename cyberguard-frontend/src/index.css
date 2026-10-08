@@ -761,3 +761,1174 @@ textarea:focus, input:focus { box-shadow: 0 0 0 2px rgba(94, 215, 255, .12); }
     width: 100%;
   }
 }
+
+/* Dashboard prevention and response panels: a consistent, readable surface in both themes. */
+:root:not([data-theme="judge-white"]) .workspace > div:nth-child(6) > div > section,
+:root:not([data-theme="judge-white"]) .workspace > section:nth-child(7),
+:root:not([data-theme="judge-white"]) .workspace > div:nth-child(8) > section,
+:root:not([data-theme="judge-white"]) .workspace > div:nth-child(9) > section,
+.theme-dark .workspace > div:nth-child(6) > div > section,
+.theme-dark .workspace > section:nth-child(7),
+.theme-dark .workspace > div:nth-child(8) > section,
+.theme-dark .workspace > div:nth-child(9) > section {
+  min-width: 0;
+  overflow: hidden;
+  padding: clamp(16px, 1.5vw, 22px);
+  border: 1px solid rgba(90, 181, 211, .2);
+  border-radius: 16px;
+  background: linear-gradient(145deg, rgba(12, 31, 49, .98), rgba(7, 19, 33, .98));
+  box-shadow: 0 14px 34px rgba(0, 0, 0, .2), inset 0 1px rgba(255, 255, 255, .025);
+}
+
+.workspace > div:nth-child(6) > div > section > p.eyebrow,
+.workspace > div:nth-child(8) > section > p.eyebrow,
+.workspace > div:nth-child(9) > section > p.eyebrow {
+  margin: 0;
+  color: #43d8db;
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: .15em;
+  line-height: 1.5;
+  text-transform: uppercase;
+}
+
+.workspace > div:nth-child(6) > div > section > h2,
+.workspace > div:nth-child(8) > section > h2,
+.workspace > div:nth-child(9) > section > h2 {
+  margin-top: 5px;
+  color: #f3f8fc;
+  font-size: clamp(17px, 1.35vw, 21px);
+  font-weight: 720;
+  letter-spacing: -.035em;
+  line-height: 1.25;
+}
+
+.workspace > div:nth-child(6) > div > section > div,
+.workspace > section:nth-child(7) > div:not(.panel-heading),
+.workspace > div:nth-child(8) > section > div,
+.workspace > div:nth-child(9) > section > div {
+  min-width: 0;
+}
+
+/* Prevention decision metrics */
+.workspace > div:nth-child(6) > div:first-child > section > div.mt-4.grid > div {
+  min-width: 0;
+  border-color: rgba(104, 169, 195, .2);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, .035);
+  padding: 12px 13px;
+}
+
+.workspace > div:nth-child(6) > div:first-child > section > div.mt-4.grid > div > div:first-child {
+  color: #9bb0c2;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.workspace > div:nth-child(6) > div:first-child > section > div.mt-4.grid > div > div:last-child {
+  margin-top: 7px;
+  font-size: 19px;
+  line-height: 1.15;
+}
+
+.workspace > div:nth-child(6) > div:first-child > section > div.mt-4.rounded-lg {
+  border-color: rgba(245, 178, 70, .24);
+  border-radius: 11px;
+  background: rgba(245, 158, 11, .065);
+  line-height: 1.65;
+}
+
+.workspace > div:nth-child(6) > div:first-child > section > div.mt-3 {
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+/* Campaign details need to wrap hostile or unusually long submitted text safely. */
+.workspace > div:nth-child(6) > div:nth-child(2) > section > div.mt-4.rounded-lg {
+  border-radius: 11px;
+  padding: 12px 14px;
+}
+
+.workspace > div:nth-child(6) > div:nth-child(2) > section > div.mt-4.space-y-2 > div {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(106, 148, 174, .16);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, .025);
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Account rescue uses its own heading component. */
+.workspace > section:nth-child(7) .panel-heading {
+  align-items: center;
+  flex-wrap: wrap;
+  padding-bottom: 13px;
+}
+
+.workspace > section:nth-child(7) .panel-heading h3 {
+  font-size: clamp(18px, 1.4vw, 22px);
+  letter-spacing: -.035em;
+}
+
+.workspace > section:nth-child(7) .panel-heading > span,
+.workspace > section:nth-child(7) .panel-heading > div:last-child {
+  max-width: 100%;
+}
+
+.workspace > section:nth-child(7) > p,
+.workspace > section:nth-child(7) > div {
+  line-height: 1.65;
+}
+
+.workspace > section:nth-child(7) input,
+.workspace > section:nth-child(7) select,
+.workspace > section:nth-child(7) textarea,
+.workspace > div:nth-child(9) input,
+.workspace > div:nth-child(9) select,
+.workspace > div:nth-child(9) textarea {
+  min-width: 0;
+  max-width: 100%;
+  border-radius: 8px;
+}
+
+/* Keep the incident and policy tools usable when their option lists are large. */
+.workspace > div:nth-child(9) form {
+  min-width: 0;
+  gap: 12px;
+}
+
+.workspace > div:nth-child(9) label {
+  min-width: 0;
+  line-height: 1.45;
+}
+
+.workspace > div:nth-child(9) button,
+.workspace > section:nth-child(7) button {
+  min-height: 36px;
+  border-radius: 8px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+/* Judge mode keeps the same hierarchy with a quiet, high-contrast paper surface. */
+[data-theme="judge-white"] .workspace > div:nth-child(6) > div > section,
+[data-theme="judge-white"] .workspace > section:nth-child(7),
+[data-theme="judge-white"] .workspace > div:nth-child(8) > section,
+[data-theme="judge-white"] .workspace > div:nth-child(9) > section,
+.theme-judge-white .workspace > div:nth-child(6) > div > section,
+.theme-judge-white .workspace > section:nth-child(7),
+.theme-judge-white .workspace > div:nth-child(8) > section,
+.theme-judge-white .workspace > div:nth-child(9) > section {
+  border-color: #dce6ef;
+  background: linear-gradient(145deg, #fff, #f8fbfe);
+  box-shadow: 0 10px 26px rgba(31, 55, 79, .075), inset 0 1px #fff;
+}
+
+[data-theme="judge-white"] .workspace > div:nth-child(6) > div > section > p.eyebrow,
+[data-theme="judge-white"] .workspace > div:nth-child(8) > section > p.eyebrow,
+[data-theme="judge-white"] .workspace > div:nth-child(9) > section > p.eyebrow,
+.theme-judge-white .workspace > div:nth-child(6) > div > section > p.eyebrow,
+.theme-judge-white .workspace > div:nth-child(8) > section > p.eyebrow,
+.theme-judge-white .workspace > div:nth-child(9) > section > p.eyebrow {
+  color: #087f91;
+}
+
+[data-theme="judge-white"] .workspace > div:nth-child(6) > div > section > h2,
+[data-theme="judge-white"] .workspace > div:nth-child(8) > section > h2,
+[data-theme="judge-white"] .workspace > div:nth-child(9) > section > h2,
+.theme-judge-white .workspace > div:nth-child(6) > div > section > h2,
+.theme-judge-white .workspace > div:nth-child(8) > section > h2,
+.theme-judge-white .workspace > div:nth-child(9) > section > h2 {
+  color: #152d43;
+}
+
+[data-theme="judge-white"] .workspace > div:nth-child(6) > div:first-child > section > div.mt-4.grid > div,
+[data-theme="judge-white"] .workspace > div:nth-child(6) > div:nth-child(2) > section > div.mt-4.space-y-2 > div,
+.theme-judge-white .workspace > div:nth-child(6) > div:first-child > section > div.mt-4.grid > div,
+.theme-judge-white .workspace > div:nth-child(6) > div:nth-child(2) > section > div.mt-4.space-y-2 > div {
+  border-color: #e1e9f0;
+  background: #f5f8fb;
+}
+
+[data-theme="judge-white"] .workspace > div:nth-child(6) > div:first-child > section > div.mt-4.grid > div > div:first-child,
+.theme-judge-white .workspace > div:nth-child(6) > div:first-child > section > div.mt-4.grid > div > div:first-child {
+  color: #61758a;
+}
+
+@media (max-width: 767px) {
+  .workspace > div:nth-child(6) > div > section,
+  .workspace > section:nth-child(7),
+  .workspace > div:nth-child(8) > section,
+  .workspace > div:nth-child(9) > section {
+    padding: 15px;
+  }
+
+  .workspace > div:nth-child(6) > div:first-child > section > div.mt-4.grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+}
+
+/* Dark SOC portal presentation, scoped separately from Judge mode and workspace. */
+.cyber-portal-root:not(.theme-judge-white) {
+  color: #e6f4fb;
+  background:
+    radial-gradient(ellipse at 76% 24%, rgba(0, 183, 204, .13), transparent 34rem),
+    radial-gradient(ellipse at 6% 82%, rgba(6, 89, 130, .13), transparent 30rem),
+    linear-gradient(145deg, #020b18 0%, #031323 55%, #020914 100%) !important;
+}
+
+.cyber-portal-root:not(.theme-judge-white) > header {
+  position: sticky;
+  top: 0;
+  min-height: 64px;
+  padding: 10px clamp(20px, 4vw, 56px);
+  background: rgba(2, 11, 24, .88);
+  border-bottom-color: rgba(34, 211, 238, .16);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .18);
+  backdrop-filter: blur(18px);
+}
+
+.cyber-portal-root:not(.theme-judge-white) > header > div:first-child {
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.cyber-portal-root:not(.theme-judge-white) > header > div:first-child > div {
+  width: 30px;
+  height: 34px;
+}
+
+.cyber-portal-root:not(.theme-judge-white) > header > div:first-child > span {
+  font-size: 15px;
+}
+
+.cyber-portal-root:not(.theme-judge-white) > header nav {
+  gap: clamp(14px, 2.2vw, 30px);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.cyber-portal-root:not(.theme-judge-white) > header nav button {
+  padding-block: 5px;
+}
+
+.cyber-portal-root:not(.theme-judge-white) > header nav button > span:last-child {
+  bottom: -15px;
+}
+
+.cyber-portal-root:not(.theme-judge-white) > header > div:last-child {
+  gap: clamp(6px, .8vw, 10px);
+  white-space: nowrap;
+}
+
+.cyber-portal-root:not(.theme-judge-white) > header > div:last-child > div:nth-child(2) {
+  font-size: 9px;
+}
+
+.cyber-portal-root:not(.theme-judge-white) > header > div:last-child > div:nth-child(2) button {
+  padding-inline: 7px;
+  white-space: nowrap;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home {
+  width: min(100%, 1440px);
+  min-height: 0;
+  padding: clamp(28px, 4vw, 54px) clamp(24px, 5vw, 72px) clamp(30px, 4vw, 52px);
+  gap: clamp(20px, 3vw, 46px);
+  scroll-margin-top: 72px;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home > div:first-child {
+  max-width: 560px;
+  gap: clamp(16px, 2vw, 24px);
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home h1 {
+  font-size: clamp(2.5rem, 4vw, 3.65rem);
+  line-height: 1.02;
+  letter-spacing: -.055em;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home h1 span {
+  color: #00e6b1;
+  background: linear-gradient(90deg, #00e6a7 0%, #00d6d4 78%, #38d8ef 100%);
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 0 22px rgba(0, 230, 169, .25));
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home > div:first-child > p {
+  max-width: 500px;
+  color: #b2c7d5;
+  font-size: clamp(.9rem, 1.2vw, 1rem);
+  line-height: 1.65;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home > div:last-child {
+  flex: 0 1 570px;
+  height: clamp(390px, 39vw, 500px);
+  max-width: 570px;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home > div:last-child > div {
+  width: 100%;
+  height: 100% !important;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home > div:last-child > div > div:first-child {
+  width: min(78%, 420px);
+  height: min(78%, 420px);
+}
+
+.cyber-portal-root:not(.theme-judge-white) > div.fixed.bottom-4.inset-x-0[class*="max-w-3xl"] {
+  position: relative;
+  inset: auto;
+  width: min(520px, calc(100% - 36px));
+  margin: 20px auto;
+}
+
+.cyber-portal-root:not(.theme-judge-white) > button.fixed.bottom-4.left-1\/2 {
+  position: relative;
+  inset: auto;
+  transform: none;
+  margin: 20px auto;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home ~ section:first-of-type {
+  border-top-color: rgba(34, 211, 238, .18);
+  background: linear-gradient(180deg, rgba(4, 21, 38, .96), rgba(2, 11, 24, .98));
+  box-shadow: 0 -18px 48px rgba(0, 0, 0, .16);
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home ~ section:first-of-type > div {
+  width: min(100%, 1440px);
+  padding: 20px clamp(24px, 5vw, 72px);
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home ~ section:first-of-type > div > div {
+  gap: clamp(16px, 2.5vw, 36px);
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home ~ section:first-of-type > div > div > div {
+  min-width: 0;
+  padding: 4px 0;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home ~ section:first-of-type h4 {
+  font-size: 12px;
+  letter-spacing: -.01em;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home ~ section:first-of-type p {
+  color: #8ea7b8;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #features,
+.cyber-portal-root:not(.theme-judge-white) #how-it-works,
+.cyber-portal-root:not(.theme-judge-white) #about {
+  scroll-margin-top: 76px;
+  padding-block: clamp(56px, 7vw, 92px);
+}
+
+.cyber-portal-root:not(.theme-judge-white) #features {
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(6, 182, 212, .08), transparent 42rem),
+    linear-gradient(180deg, #04101e 0%, #061523 100%);
+}
+
+.cyber-portal-root:not(.theme-judge-white) #how-it-works {
+  background:
+    radial-gradient(ellipse at 50% 100%, rgba(16, 185, 129, .055), transparent 36rem),
+    #030d1a;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #about {
+  background:
+    radial-gradient(ellipse at 12% 55%, rgba(6, 182, 212, .07), transparent 32rem),
+    linear-gradient(145deg, #061524 0%, #030c18 100%);
+}
+
+.cyber-portal-root:not(.theme-judge-white) #features h2,
+.cyber-portal-root:not(.theme-judge-white) #how-it-works h2,
+.cyber-portal-root:not(.theme-judge-white) #about h2 {
+  color: #f2f8fc;
+  letter-spacing: -.04em;
+  line-height: 1.12;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #features > div > div:first-child > span,
+.cyber-portal-root:not(.theme-judge-white) #how-it-works > div > div:first-child > span,
+.cyber-portal-root:not(.theme-judge-white) #about > div > div:first-child > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 11px;
+  border: 1px solid rgba(34, 211, 238, .2);
+  border-radius: 999px;
+  background: rgba(6, 182, 212, .055);
+  font-size: 9px;
+  letter-spacing: .13em;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #features > div > div:first-child > p {
+  max-width: 690px;
+  margin-inline: auto;
+  color: #91a9bb;
+  line-height: 1.75;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #features > div > div:last-child {
+  gap: 18px;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #features > div,
+.cyber-portal-root:not(.theme-judge-white) #how-it-works > div,
+.cyber-portal-root:not(.theme-judge-white) #about > div {
+  width: min(100%, 1280px);
+}
+
+.cyber-portal-root:not(.theme-judge-white) #features > div > div:last-child > div,
+.cyber-portal-root:not(.theme-judge-white) #how-it-works > div > div:last-child > div {
+  position: relative;
+  min-height: 235px;
+  padding: clamp(20px, 2vw, 28px);
+  background: linear-gradient(145deg, rgba(7, 27, 45, .94), rgba(3, 15, 28, .92));
+  border-color: rgba(94, 215, 255, .17);
+  border-radius: 18px;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, .16);
+  transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #features > div > div:last-child > div {
+  min-height: 290px;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #features > div > div:last-child > div h3 {
+  color: #f1f8fc;
+  font-size: clamp(1rem, 1.15vw, 1.15rem);
+  line-height: 1.4;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #features > div > div:last-child > div p,
+.cyber-portal-root:not(.theme-judge-white) #how-it-works > div > div:last-child > div p {
+  color: #a0b5c4;
+  font-size: 12px;
+  line-height: 1.75;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #features > div > div:last-child > div > div:first-child {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06);
+}
+
+.cyber-portal-root:not(.theme-judge-white) #features > div > div:last-child > div > div:last-child {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid rgba(148, 180, 199, .12);
+  font-size: 10px;
+  letter-spacing: .035em;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #how-it-works > div > div:first-child {
+  margin-bottom: 4px;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #how-it-works > div > div:last-child {
+  gap: 18px;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #how-it-works > div > div:last-child > div {
+  min-height: 218px;
+  padding: 22px;
+  overflow: visible;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #how-it-works > div > div:last-child > div > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border: 1px solid rgba(94, 215, 255, .2);
+  border-radius: 14px;
+  background: rgba(6, 182, 212, .07);
+  font-size: 17px;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #how-it-works > div > div:last-child > div h4 {
+  color: #f1f8fc;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #how-it-works > div > div:last-child > div:not(:last-child)::after {
+  position: absolute;
+  top: 44px;
+  right: -19px;
+  z-index: 2;
+  width: 19px;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(34, 211, 238, .48), rgba(34, 211, 238, .08));
+  content: '';
+}
+
+.cyber-portal-root:not(.theme-judge-white) #features > div > div:last-child > div:hover,
+.cyber-portal-root:not(.theme-judge-white) #how-it-works > div > div:last-child > div:hover {
+  transform: translateY(-3px);
+  border-color: rgba(94, 215, 255, .38);
+  box-shadow: 0 18px 38px rgba(0, 0, 0, .24), 0 0 24px rgba(6, 182, 212, .07);
+}
+
+.cyber-portal-root:not(.theme-judge-white) #about > div {
+  gap: clamp(36px, 7vw, 96px);
+}
+
+.cyber-portal-root:not(.theme-judge-white) #about > div > div:first-child > p {
+  max-width: 590px;
+  color: #a8bac8;
+  font-size: 14px;
+  line-height: 1.85;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #about > div > div:first-child > div > span {
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 9px;
+  letter-spacing: .06em;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #contact {
+  position: relative;
+  padding: clamp(24px, 3vw, 36px);
+  background: linear-gradient(145deg, #071a2d, #041120);
+  border-color: rgba(94, 215, 255, .2);
+  border-radius: 20px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .22);
+}
+
+.cyber-portal-root:not(.theme-judge-white) #contact h3 {
+  color: #f1f8fc;
+  font-size: 18px;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #contact > p {
+  color: #9eb3c2;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #contact > div > div {
+  min-height: 46px;
+  background: rgba(2, 11, 24, .62);
+  border-color: rgba(148, 180, 199, .14);
+  transition: border-color .18s ease, background .18s ease;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #contact > div > div:hover {
+  background: rgba(6, 182, 212, .06);
+  border-color: rgba(34, 211, 238, .3);
+}
+
+.cyber-portal-root:not(.theme-judge-white) #contact > button {
+  min-height: 46px;
+  border: 1px solid rgba(52, 211, 153, .35);
+  box-shadow: 0 8px 24px rgba(16, 185, 129, .14);
+}
+
+.cyber-portal-root:not(.theme-judge-white) footer {
+  min-height: 66px;
+  padding: 16px clamp(20px, 4vw, 56px);
+  background: rgba(1, 7, 18, .96);
+  border-top-color: rgba(34, 211, 238, .14);
+  letter-spacing: .035em;
+}
+
+.cyber-portal-root:not(.theme-judge-white) footer button {
+  padding: 7px 10px;
+  border: 1px solid rgba(34, 211, 238, .16);
+  border-radius: 8px;
+  background: rgba(6, 182, 212, .055);
+}
+
+.cyber-portal-root:not(.theme-judge-white) :is(button, a):focus-visible {
+  outline: 2px solid #22d3ee;
+  outline-offset: 3px;
+}
+
+@media (max-width: 1100px) and (min-width: 768px) {
+  .cyber-portal-root:not(.theme-judge-white) > header {
+    flex-wrap: wrap;
+    padding-inline: 20px;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) > header > div:first-child {
+    order: 1;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) > header > div:last-child {
+    order: 2;
+    margin-left: auto;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) > header nav {
+    order: 3;
+    flex-basis: 100%;
+    justify-content: center;
+    padding: 4px 0 2px;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) > header nav {
+    gap: 14px;
+    font-size: 11px;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) #home {
+    padding-inline: 28px;
+    gap: 12px;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) #home > div:last-child {
+    flex-basis: 48%;
+    height: 400px;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) #how-it-works > div > div:last-child > div:nth-child(2)::after {
+    display: none;
+  }
+}
+
+@media (min-width: 768px) {
+  .cyber-portal-root:not(.theme-judge-white) #hero-open-workspace-btn,
+  .cyber-portal-root:not(.theme-judge-white) #hero-watch-demo-btn {
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 767px) {
+  .cyber-portal-root:not(.theme-judge-white) > header {
+    min-height: 58px;
+    padding: 9px 16px;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) > header > div:first-child > div {
+    width: 27px;
+    height: 31px;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) > header > div:first-child > span {
+    font-size: 14px;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) > header > div:last-child {
+    gap: 7px;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) > header > div:last-child > div:nth-child(2) {
+    display: none;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) #home {
+    padding: 38px 22px 34px;
+    gap: 20px;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) #home > div:first-child {
+    gap: 18px;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) #home h1 {
+    font-size: clamp(2.25rem, 9vw, 3.4rem);
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) #home > div:first-child > p {
+    font-size: .9rem;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) #home .inline-flex.items-center.gap-2 {
+    max-width: 100%;
+    flex-wrap: wrap;
+    font-size: 8px;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) #home > div:last-child {
+    flex: none;
+    width: 100%;
+    height: min(92vw, 410px);
+    margin-top: -12px;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) #home > div:last-child > div {
+    transform: scale(.88);
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) #home ~ section:first-of-type > div {
+    padding: 20px 22px;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) #features,
+  .cyber-portal-root:not(.theme-judge-white) #how-it-works,
+  .cyber-portal-root:not(.theme-judge-white) #about {
+    padding: 54px 22px;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) #features > div > div:last-child > div {
+    min-height: 0;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) #how-it-works > div > div:last-child > div {
+    min-height: 0;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) #how-it-works > div > div:last-child > div::after {
+    display: none;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) #about > div {
+    gap: 34px;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) footer {
+    padding: 18px 16px;
+    line-height: 1.7;
+  }
+}
+
+/* Landing page sizing tuned to the supplied CyberGuard reference. */
+.cyber-portal-root:not(.theme-judge-white) > header {
+  min-height: 58px;
+  padding-block: 7px;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home {
+  padding: clamp(26px, 2.2vw, 32px) 24px;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home > div:first-child {
+  gap: clamp(16px, 1.35vw, 19px);
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home > div:last-child {
+  height: clamp(350px, 36vw, 440px);
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home ~ section:first-of-type > div {
+  padding-block: 14px;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home ~ section:first-of-type > div > div > div {
+  align-items: center;
+  gap: 12px;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home ~ section:first-of-type > div > div > div > div:first-child {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home ~ section:first-of-type h4 {
+  font-size: 13px;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home ~ section:first-of-type p {
+  font-size: 10px;
+}
+
+@media (max-width: 767px) {
+  .cyber-portal-root:not(.theme-judge-white) #home {
+    min-height: 0;
+    padding: 38px 22px 34px;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) #home > div:last-child {
+    height: min(88vw, 390px);
+  }
+}
+
+/* Consistent workspace styling for Cyber SOC and Judge presentation modes. */
+:root:not([data-theme="judge-white"]) .app-shell {
+  background:
+    radial-gradient(ellipse at 82% 4%, rgba(16, 119, 163, .13), transparent 36rem),
+    linear-gradient(145deg, #06111f 0%, #081827 54%, #06111c 100%);
+}
+
+:root:not([data-theme="judge-white"]) .app-header {
+  min-height: 72px;
+  background: rgba(5, 16, 29, .94);
+  border-bottom-color: rgba(94, 215, 255, .15);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .2);
+}
+
+:root:not([data-theme="judge-white"]) .utility-bar {
+  background: rgba(3, 10, 19, .82);
+  border-bottom-color: rgba(119, 151, 181, .13);
+}
+
+:root:not([data-theme="judge-white"]) .app-header .header-status {
+  color: #7fe4bd;
+  background: rgba(13, 54, 49, .4);
+  border-color: rgba(104, 224, 174, .24);
+}
+
+:root:not([data-theme="judge-white"]) .app-sidebar {
+  background: linear-gradient(180deg, rgba(6, 19, 33, .96), rgba(5, 15, 27, .96));
+  border-right-color: rgba(119, 151, 181, .14);
+}
+
+:root:not([data-theme="judge-white"]) .app-sidebar .nav-item {
+  min-height: 42px;
+  border-radius: 10px;
+}
+
+:root:not([data-theme="judge-white"]) .workspace {
+  padding: clamp(16px, 1.8vw, 28px) !important;
+  background:
+    radial-gradient(ellipse at 90% 0%, rgba(20, 119, 161, .07), transparent 34rem),
+    transparent;
+}
+
+:root:not([data-theme="judge-white"]) .workspace .command-hero {
+  min-height: 204px;
+  padding: clamp(24px, 2.4vw, 34px);
+  border-radius: 18px;
+  border-color: rgba(94, 215, 255, .22);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .2), inset 0 1px 0 rgba(255, 255, 255, .035);
+}
+
+:root:not([data-theme="judge-white"]) .workspace .health-card {
+  min-height: 78px;
+  border: 1px solid rgba(119, 151, 181, .17);
+  border-radius: 13px;
+  background: linear-gradient(145deg, rgba(13, 30, 48, .94), rgba(7, 19, 32, .92));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .14), inset 0 1px 0 rgba(255, 255, 255, .025);
+}
+
+:root:not([data-theme="judge-white"]) .workspace .health-card p:last-child {
+  color: #edf6fa;
+}
+
+:root:not([data-theme="judge-white"]) .workspace .bg-cardBg,
+:root:not([data-theme="judge-white"]) .workspace .glass-panel,
+:root:not([data-theme="judge-white"]) .workspace .panel,
+:root:not([data-theme="judge-white"]) .workspace [class*="bg-cardBg"] {
+  border-color: rgba(119, 151, 181, .17);
+  border-radius: 14px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .14), inset 0 1px 0 rgba(255, 255, 255, .025);
+}
+
+:root:not([data-theme="judge-white"]) .workspace .panel-heading {
+  border-bottom-color: rgba(119, 151, 181, .15);
+}
+
+:root:not([data-theme="judge-white"]) .workspace input,
+:root:not([data-theme="judge-white"]) .workspace select,
+:root:not([data-theme="judge-white"]) .workspace textarea {
+  border-radius: 9px;
+}
+
+:root:not([data-theme="judge-white"]) .workspace button:focus-visible,
+:root:not([data-theme="judge-white"]) .workspace input:focus-visible,
+:root:not([data-theme="judge-white"]) .workspace select:focus-visible,
+:root:not([data-theme="judge-white"]) .workspace textarea:focus-visible {
+  outline: 2px solid #5ed7ff;
+  outline-offset: 2px;
+}
+
+[data-theme="judge-white"] .app-shell,
+.theme-judge-white .app-shell {
+  background:
+    radial-gradient(ellipse at 88% 0%, rgba(14, 165, 233, .065), transparent 38rem),
+    #f3f6fa !important;
+}
+
+[data-theme="judge-white"] .app-header,
+.theme-judge-white .app-header {
+  min-height: 72px;
+  background: rgba(255, 255, 255, .97) !important;
+  border-bottom-color: #dbe4ee !important;
+  box-shadow: 0 4px 18px rgba(15, 23, 42, .06);
+}
+
+[data-theme="judge-white"] .utility-bar,
+.theme-judge-white .utility-bar {
+  color: #64748b;
+  background: rgba(255, 255, 255, .96);
+  border-bottom-color: #e2e8f0;
+}
+
+[data-theme="judge-white"] .utility-bar > div:last-child,
+.theme-judge-white .utility-bar > div:last-child {
+  background: #fff;
+  border-color: #dbe4ee;
+}
+
+[data-theme="judge-white"] .app-header button[title="Cyber SOC Dark Mode"],
+.theme-judge-white .app-header button[title="Cyber SOC Dark Mode"] {
+  color: #64748b !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+[data-theme="judge-white"] .app-header button[title="Judge Presentation White Mode"],
+.theme-judge-white .app-header button[title="Judge Presentation White Mode"] {
+  color: #fff !important;
+  background: #0f172a !important;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .18) !important;
+}
+
+[data-theme="judge-white"] .app-header .header-status,
+.theme-judge-white .app-header .header-status {
+  color: #047857 !important;
+  background: #ecfdf5 !important;
+  border-color: #a7f3d0 !important;
+}
+
+[data-theme="judge-white"] .app-sidebar,
+.theme-judge-white .app-sidebar {
+  background: linear-gradient(180deg, #fff, #f8fafc) !important;
+  border-right-color: #dbe4ee !important;
+}
+
+[data-theme="judge-white"] .app-sidebar .nav-item,
+.theme-judge-white .app-sidebar .nav-item {
+  min-height: 42px;
+  border-radius: 10px;
+}
+
+[data-theme="judge-white"] .workspace,
+.theme-judge-white .workspace {
+  background:
+    radial-gradient(ellipse at 92% 0%, rgba(14, 165, 233, .05), transparent 35rem),
+    transparent !important;
+}
+
+[data-theme="judge-white"] .workspace .command-hero,
+.theme-judge-white .workspace .command-hero {
+  min-height: 204px;
+  padding: clamp(24px, 2.4vw, 34px);
+  border-radius: 18px;
+  border-color: #cbd8e5 !important;
+  background: linear-gradient(120deg, #fff 0%, #eff8fc 66%, #f1fbf6 100%) !important;
+  box-shadow: 0 14px 34px rgba(15, 23, 42, .075);
+}
+
+[data-theme="judge-white"] .workspace .health-card,
+.theme-judge-white .workspace .health-card {
+  min-height: 78px;
+  border-color: #dbe4ee !important;
+  border-radius: 13px;
+  background: linear-gradient(145deg, #fff, #f8fafc) !important;
+  box-shadow: 0 5px 16px rgba(15, 23, 42, .045);
+}
+
+[data-theme="judge-white"] .workspace .bg-cardBg,
+[data-theme="judge-white"] .workspace .glass-panel,
+[data-theme="judge-white"] .workspace .panel,
+[data-theme="judge-white"] .workspace [class*="bg-cardBg"],
+.theme-judge-white .workspace .bg-cardBg,
+.theme-judge-white .workspace .glass-panel,
+.theme-judge-white .workspace .panel,
+.theme-judge-white .workspace [class*="bg-cardBg"] {
+  border-color: #dbe4ee !important;
+  border-radius: 14px;
+  box-shadow: 0 5px 16px rgba(15, 23, 42, .045) !important;
+}
+
+[data-theme="judge-white"] .workspace .panel-heading,
+.theme-judge-white .workspace .panel-heading {
+  border-bottom-color: #e2e8f0;
+}
+
+[data-theme="judge-white"] .workspace input,
+[data-theme="judge-white"] .workspace select,
+[data-theme="judge-white"] .workspace textarea,
+.theme-judge-white .workspace input,
+.theme-judge-white .workspace select,
+.theme-judge-white .workspace textarea {
+  border-radius: 9px;
+  background-color: #fff;
+}
+
+[data-theme="judge-white"] .workspace button:focus-visible,
+[data-theme="judge-white"] .workspace input:focus-visible,
+[data-theme="judge-white"] .workspace select:focus-visible,
+[data-theme="judge-white"] .workspace textarea:focus-visible,
+.theme-judge-white .workspace button:focus-visible,
+.theme-judge-white .workspace input:focus-visible,
+.theme-judge-white .workspace select:focus-visible,
+.theme-judge-white .workspace textarea:focus-visible {
+  outline: 2px solid #0284c7;
+  outline-offset: 2px;
+}
+
+@media (max-width: 767px) {
+  :root:not([data-theme="judge-white"]) .workspace .command-hero,
+  [data-theme="judge-white"] .workspace .command-hero,
+  .theme-judge-white .workspace .command-hero {
+    min-height: 0;
+    padding: 20px;
+    border-radius: 15px;
+  }
+}
+
+/* Keep the portal hero and capability strip aligned identically in both modes. */
+.cyber-portal-root:not(.theme-judge-white) > header,
+.cyber-portal-root.theme-judge-white > header {
+  height: 58px;
+  min-height: 58px;
+  padding-block: 7px;
+  align-items: center;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home,
+.cyber-portal-root.theme-judge-white #home {
+  flex: 0 0 auto;
+  width: min(100%, 1440px);
+  min-height: 0;
+  padding: clamp(28px, 2.5vw, 36px) 24px;
+  gap: clamp(24px, 3vw, 42px);
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home > div:first-child,
+.cyber-portal-root.theme-judge-white #home > div:first-child {
+  max-width: 560px;
+  gap: 20px;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home > div:first-child > :not([hidden]) ~ :not([hidden]),
+.cyber-portal-root.theme-judge-white #home > div:first-child > :not([hidden]) ~ :not([hidden]) {
+  margin-top: 0;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home h1,
+.cyber-portal-root.theme-judge-white #home h1 {
+  font-size: clamp(2.5rem, 4vw, 3.65rem);
+  line-height: 1.02;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home > div:first-child > p,
+.cyber-portal-root.theme-judge-white #home > div:first-child > p {
+  max-width: 500px;
+  font-size: clamp(.9rem, 1.2vw, 1rem);
+  line-height: 1.65;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home > div:last-child,
+.cyber-portal-root.theme-judge-white #home > div:last-child {
+  flex: 0 1 570px;
+  width: 100%;
+  max-width: 570px;
+  height: clamp(390px, 36vw, 440px);
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home > div:last-child > div,
+.cyber-portal-root.theme-judge-white #home > div:last-child > div {
+  width: 100%;
+  height: 100% !important;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home > div:last-child > div > div:first-child,
+.cyber-portal-root.theme-judge-white #home > div:last-child > div > div:first-child {
+  width: min(78%, 420px);
+  height: min(78%, 420px);
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home ~ section:first-of-type > div,
+.cyber-portal-root.theme-judge-white #home ~ section:first-of-type > div {
+  width: min(100%, 1440px);
+  padding: 14px clamp(24px, 5vw, 72px);
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home ~ section:first-of-type > div > div,
+.cyber-portal-root.theme-judge-white #home ~ section:first-of-type > div > div {
+  gap: clamp(16px, 2.5vw, 36px);
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home ~ section:first-of-type > div > div > div,
+.cyber-portal-root.theme-judge-white #home ~ section:first-of-type > div > div > div {
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 4px 0;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home ~ section:first-of-type h4,
+.cyber-portal-root.theme-judge-white #home ~ section:first-of-type h4 {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.cyber-portal-root:not(.theme-judge-white) #home ~ section:first-of-type p,
+.cyber-portal-root.theme-judge-white #home ~ section:first-of-type p {
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.cyber-portal-root.theme-judge-white > div.w-full.bg-gradient-to-r {
+  position: absolute;
+  inset: 66px 16px auto auto;
+  z-index: 50;
+  width: auto;
+  max-width: calc(100vw - 32px);
+  padding: 9px 12px;
+  border: 1px solid rgba(14, 165, 233, .2);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, .2);
+  font-size: 10px;
+}
+
+@media (max-width: 1023px) and (min-width: 768px) {
+  .cyber-portal-root:not(.theme-judge-white) #home,
+  .cyber-portal-root.theme-judge-white #home {
+    padding-inline: 28px;
+    gap: 18px;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) #home > div:last-child,
+  .cyber-portal-root.theme-judge-white #home > div:last-child {
+    height: 400px;
+  }
+}
+
+@media (max-width: 767px) {
+  .cyber-portal-root:not(.theme-judge-white) #home,
+  .cyber-portal-root.theme-judge-white #home {
+    flex: 0 0 auto;
+    width: 100%;
+    padding: 30px 22px 28px;
+    gap: 20px;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) #home > div:first-child,
+  .cyber-portal-root.theme-judge-white #home > div:first-child {
+    width: 100%;
+    max-width: none;
+    gap: 18px;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) #home > div:last-child,
+  .cyber-portal-root.theme-judge-white #home > div:last-child {
+    flex: none;
+    width: 100%;
+    height: min(88vw, 390px);
+    margin-top: -8px;
+  }
+
+  .cyber-portal-root:not(.theme-judge-white) #home ~ section:first-of-type > div,
+  .cyber-portal-root.theme-judge-white #home ~ section:first-of-type > div {
+    padding: 16px 22px;
+  }
+
+  .cyber-portal-root.theme-judge-white > div.w-full.bg-gradient-to-r {
+    display: none;
+  }
+}
