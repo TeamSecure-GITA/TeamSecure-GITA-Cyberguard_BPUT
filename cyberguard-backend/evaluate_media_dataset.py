@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from statistics import median
 from typing import Mapping
+from calibration_metrics import probability_calibration
 
 from media_engine import analyze_media
 
@@ -117,6 +118,7 @@ def calculate_metrics(rows: list[dict], threshold: float | Mapping[str, float] =
         "false_positive_rate": fp / max(negatives, 1),
         "roc_auc": concordant_pairs / max(positives * negatives, 1),
         "pr_auc": average_precision,
+        "calibration": probability_calibration(labels, [score / 100 for score in scores]),
     }
 
 

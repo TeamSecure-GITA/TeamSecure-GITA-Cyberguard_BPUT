@@ -1,46 +1,46 @@
 import React, { useEffect, useState } from 'react';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
-import MetricCards from './components/MetricCards';
-import MostTargeted from './components/MostTargeted';
-import ThreatChart from './components/ThreatChart';
-import IncidentTable from './components/IncidentTable';
-import ThreatInspector from './components/ThreatInspector';
-import OperationsWorkspace from './components/OperationsWorkspace';
-import XaiModal from './components/XaiModal';
-import SystemHealth from './components/SystemHealth';
-import ComplianceTab from './components/ComplianceTab';
 import LanguageToggle from './components/LanguageToggle';
-import CyberRadarPortal from './components/CyberRadarPortal';
 import { getApiBaseUrl } from './apiConfig';
 import axios from 'axios';
-import NotificationsPanel from './components/NotificationsPanel';
-import AdminConsole from './components/AdminConsole';
-import ThreatCards from './components/ThreatCards';
-import SystemView from './components/SystemView';
-import RiskGauge from './components/RiskGauge';
-import ThreatFeed from './components/ThreatFeed';
-import ThreatIntelligence from './components/ThreatIntelligence';
-import ThreatMap from './components/ThreatMap';
-import IdentityRiskHeatmap from './components/IdentityRiskHeatmap';
-import IocReputationFeed from './components/IocReputationFeed';
-import TrustScanner from './components/TrustScanner';
-import FrontierCapabilities from './components/FrontierCapabilities';
-import AdvancedDefenseLab from './components/AdvancedDefenseLab';
-import SpeculativeDefenseWidget from './components/SpeculativeDefenseWidget';
-import SecurityFusionCenter from './components/SecurityFusionCenter';
-import RoadmapCoveragePanel from './components/RoadmapCoveragePanel';
-import PreventionCenter from './components/PreventionCenter';
-import CampaignWatchlist from './components/CampaignWatchlist';
-import IdentityTrustPanel from './components/IdentityTrustPanel';
-import DeceptionPanel from './components/DeceptionPanel';
-import InsiderRiskPanel from './components/InsiderRiskPanel';
-import ContainmentQueue from './components/ContainmentQueue';
-import PolicyEnginePanel from './components/PolicyEnginePanel';
-import AccountRescueCenter from './components/AccountRescueCenter';
-import Login from './components/Login';
+const MetricCards = React.lazy(() => import('./components/MetricCards'));
+const MostTargeted = React.lazy(() => import('./components/MostTargeted'));
+const ThreatChart = React.lazy(() => import('./components/ThreatChart'));
+const IncidentTable = React.lazy(() => import('./components/IncidentTable'));
+const ThreatInspector = React.lazy(() => import('./components/ThreatInspector'));
+const OperationsWorkspace = React.lazy(() => import('./components/OperationsWorkspace'));
+const XaiModal = React.lazy(() => import('./components/XaiModal'));
+const SystemHealth = React.lazy(() => import('./components/SystemHealth'));
+const ComplianceTab = React.lazy(() => import('./components/ComplianceTab'));
+const CyberRadarPortal = React.lazy(() => import('./components/CyberRadarPortal'));
+const NotificationsPanel = React.lazy(() => import('./components/NotificationsPanel'));
+const AdminConsole = React.lazy(() => import('./components/AdminConsole'));
+const ThreatCards = React.lazy(() => import('./components/ThreatCards'));
+const SystemView = React.lazy(() => import('./components/SystemView'));
+const RiskGauge = React.lazy(() => import('./components/RiskGauge'));
+const ThreatFeed = React.lazy(() => import('./components/ThreatFeed'));
+const ThreatIntelligence = React.lazy(() => import('./components/ThreatIntelligence'));
+const ThreatMap = React.lazy(() => import('./components/ThreatMap'));
+const IdentityRiskHeatmap = React.lazy(() => import('./components/IdentityRiskHeatmap'));
+const IocReputationFeed = React.lazy(() => import('./components/IocReputationFeed'));
+const TrustScanner = React.lazy(() => import('./components/TrustScanner'));
+const FrontierCapabilities = React.lazy(() => import('./components/FrontierCapabilities'));
+const AdvancedDefenseLab = React.lazy(() => import('./components/AdvancedDefenseLab'));
+const SpeculativeDefenseWidget = React.lazy(() => import('./components/SpeculativeDefenseWidget'));
+const SecurityFusionCenter = React.lazy(() => import('./components/SecurityFusionCenter'));
+const RoadmapCoveragePanel = React.lazy(() => import('./components/RoadmapCoveragePanel'));
+const PreventionCenter = React.lazy(() => import('./components/PreventionCenter'));
+const CampaignWatchlist = React.lazy(() => import('./components/CampaignWatchlist'));
+const IdentityTrustPanel = React.lazy(() => import('./components/IdentityTrustPanel'));
+const DeceptionPanel = React.lazy(() => import('./components/DeceptionPanel'));
+const InsiderRiskPanel = React.lazy(() => import('./components/InsiderRiskPanel'));
+const ContainmentQueue = React.lazy(() => import('./components/ContainmentQueue'));
+const PolicyEnginePanel = React.lazy(() => import('./components/PolicyEnginePanel'));
+const AccountRescueCenter = React.lazy(() => import('./components/AccountRescueCenter'));
+const Login = React.lazy(() => import('./components/Login'));
 import { LanguageProvider } from './i18n';
-import { completeGoogleRedirect, formatFirebaseAuthError } from './firebase';
+import { formatFirebaseAuthError } from './firebaseErrors';
 
 const AttackGraph = React.lazy(() => import('./components/AttackGraph'));
 
@@ -110,8 +110,11 @@ export default function App() {
   const apiBaseUrl = getApiBaseUrl();
 
   React.useEffect(() => {
+    const redirectParams = new URLSearchParams(window.location.search);
+    if (redirectParams.get('authType') !== 'signInViaRedirect') return undefined;
     let active = true;
-    completeGoogleRedirect(apiBaseUrl)
+    import('./firebase')
+      .then(({ completeGoogleRedirect }) => completeGoogleRedirect(apiBaseUrl))
       .then((approvedSession) => {
         if (!active || !approvedSession) return;
         authFailureHandled.current = false;
@@ -329,21 +332,23 @@ export default function App() {
   if (viewMode === 'login') {
     return (
       <LanguageProvider language={language}>
-        <Login
-          googleAuthError={googleRedirectError}
-          onLogin={(approvedSession) => {
-            authFailureHandled.current = false;
-            setSession(approvedSession);
-            setViewMode('workspace');
-            setActiveTab('dashboard');
-          }}
-          onReturnToPortal={() => {
-            if (window.location.hash === '#login') {
-              window.history.pushState(null, '', window.location.pathname);
-            }
-            setViewMode('portal');
-          }}
-        />
+        <React.Suspense fallback={<p role="status">Loading authentication…</p>}>
+          <Login
+            googleAuthError={googleRedirectError}
+            onLogin={(approvedSession) => {
+              authFailureHandled.current = false;
+              setSession(approvedSession);
+              setViewMode('workspace');
+              setActiveTab('dashboard');
+            }}
+            onReturnToPortal={() => {
+              if (window.location.hash === '#login') {
+                window.history.pushState(null, '', window.location.pathname);
+              }
+              setViewMode('portal');
+            }}
+          />
+        </React.Suspense>
       </LanguageProvider>
     );
   }
@@ -352,29 +357,31 @@ export default function App() {
   if (viewMode === 'portal') {
     return (
       <LanguageProvider language={language}>
-        <CyberRadarPortal
-          apiBaseUrl={apiBaseUrl}
-          currentSession={session}
-          currentLang={language}
-          onLanguageChange={setLanguage}
-          onOpenLoginPage={() => setViewMode('login')}
-          onOpenWorkspace={() => {
-            if (session) {
+        <React.Suspense fallback={<p role="status">Loading CyberGuard…</p>}>
+          <CyberRadarPortal
+            apiBaseUrl={apiBaseUrl}
+            currentSession={session}
+            currentLang={language}
+            onLanguageChange={setLanguage}
+            onOpenLoginPage={() => setViewMode('login')}
+            onOpenWorkspace={() => {
+              if (session) {
+                setViewMode('workspace');
+                setActiveTab('dashboard');
+              }
+            }}
+            onApprovedSession={(approvedSession) => {
+              setSession(approvedSession);
               setViewMode('workspace');
               setActiveTab('dashboard');
-            }
-          }}
-          onApprovedSession={(approvedSession) => {
-            setSession(approvedSession);
-            setViewMode('workspace');
-            setActiveTab('dashboard');
-          }}
-          onQuickLogin={handleQuickLogin}
-          onVerifyOtp={handleVerifyOtp}
-          onVerifyPasskey={handleVerifyPasskey}
-          themeMode={themeMode}
-          onThemeToggle={handleThemeToggle}
-        />
+            }}
+            onQuickLogin={handleQuickLogin}
+            onVerifyOtp={handleVerifyOtp}
+            onVerifyPasskey={handleVerifyPasskey}
+            themeMode={themeMode}
+            onThemeToggle={handleThemeToggle}
+          />
+        </React.Suspense>
       </LanguageProvider>
     );
   }
@@ -420,6 +427,7 @@ export default function App() {
         />
         
         <main className={`workspace flex-1 p-3 sm:p-4 md:p-6 overflow-y-auto space-y-4 sm:space-y-6 max-w-full ${sidebarCollapsed ? 'workspace-sidebar-collapsed' : 'workspace-sidebar-expanded'}`}>
+          <React.Suspense fallback={<p role="status">Loading workspace…</p>}>
           <SystemHealth health={health} />
 
           {activeTab === 'dashboard' && (
@@ -499,16 +507,19 @@ export default function App() {
     </div>
   </div>
 )}
+          </React.Suspense>
 </main>
 </div>
 
 {selectedIncident && (
-  <XaiModal
-    incident={selectedIncident}
-    onClose={() => setSelectedIncident(null)}
-    userRole={session?.user?.role}
-    accessToken={session?.access_token}
-  />
+  <React.Suspense fallback={<p role="status">Loading incident explanation…</p>}>
+    <XaiModal
+      incident={selectedIncident}
+      onClose={() => setSelectedIncident(null)}
+      userRole={session?.user?.role}
+      accessToken={session?.access_token}
+    />
+  </React.Suspense>
 )}
       </div>
     </LanguageProvider>

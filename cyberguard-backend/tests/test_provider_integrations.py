@@ -2,6 +2,9 @@ import hashlib
 import hmac
 import json
 
+import pytest
+import requests
+
 import provider_integrations
 import production_integrations
 
@@ -114,6 +117,40 @@ def test_servicenow_ticket_request_contract(monkeypatch):
     assert captured["url"] == "https://snow.example.org/api/now/table/incident"
     assert captured["headers"]["Authorization"] == "Bearer snow-token"
     assert captured["json"]["urgency"] == "1"
+
+
+@pytest.mark.parametrize("status_code", [401, 403, 429, 503])
+def test_jira_http_failures_are_never_reported_as_success(monkeypatch, status_code):
+    monkeypatch.setenv("CYBERGUARD_JIRA_URL", "https://jira.example.org")
+    monkeypatch.setenv("CYBERGUARD_JIRA_EMAIL", "operator@example.org")
+    monkeypatch.setenv("CYBERGUARD_JIRA_TOKEN", "jira-token")
+    monkeypatch.setenv("CYBERGUARD_JIRA_PROJECT", "SOC")
+
+    class Response:
+        content = b'{"error":"provider rejected request"}'
+
+        def raise_for_status(self):
+            raise requests.HTTPError(f"provider HTTP {status_code}")
+
+    monkeypatch.setattr("production_integrations.requests.request", lambda *args, **kwargs: Response())
+
+    with pytest.raises(requests.HTTPError, match=f"HTTP {status_code}"):
+        production_integrations.create_ticket({"summary": "Test incident"})
+
+
+def test_jira_timeout_is_propagated_without_a_success_result(monkeypatch):
+    monkeypatch.setenv("CYBERGUARD_JIRA_URL", "https://jira.example.org")
+    monkeypatch.setenv("CYBERGUARD_JIRA_EMAIL", "operator@example.org")
+    monkeypatch.setenv("CYBERGUARD_JIRA_TOKEN", "jira-token")
+    monkeypatch.setenv("CYBERGUARD_JIRA_PROJECT", "SOC")
+
+    def timeout(*_args, **_kwargs):
+        raise requests.Timeout("provider request timed out")
+
+    monkeypatch.setattr("production_integrations.requests.request", timeout)
+
+    with pytest.raises(requests.Timeout, match="timed out"):
+        production_integrations.create_ticket({"summary": "Test incident"})
 
 
 def test_okta_identity_suspend_encodes_identity_and_uses_ssws(monkeypatch):

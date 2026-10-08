@@ -10,6 +10,7 @@ import wave
 
 import pytest
 import numpy as np
+import requests
 import main
 from fastapi import HTTPException, UploadFile
 
@@ -280,6 +281,24 @@ def test_provider_action_routes_require_confirmation_and_return_provider_status(
     assert endpoint_error.value.status_code == 409
     assert disable_provider_identity_route(ProviderIdentityDisableRequest(identity="user-1", confirmed=True), admin)["status"] == "suspended"
     assert isolate_provider_endpoint_route(ProviderEndpointIsolationRequest(endpoint_id="host-1", confirmed=True), admin)["status"] == "isolated"
+
+
+def test_provider_timeout_returns_gateway_error_without_success_audit(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "provider-timeout.sqlite")
+    initialize_database()
+    monkeypatch.setattr(main, "create_provider_ticket", lambda _payload: (_ for _ in ()).throw(requests.Timeout("timed out")))
+    admin = {"username": "root@example.org", "role": "head_admin"}
+
+    with pytest.raises(HTTPException) as error:
+        create_provider_ticket_route(ProviderTicketRequest(summary="Timeout test"), admin)
+
+    assert error.value.status_code == 502
+    with get_db() as db:
+        count = db.execute(
+            "SELECT COUNT(*) AS count FROM audit_logs WHERE action = ?",
+            ("integration_ticket_create",),
+        ).fetchone()["count"]
+    assert count == 0
 
 
 def test_jira_ticket_uses_api_token_basic_auth_and_requires_account_email(monkeypatch):

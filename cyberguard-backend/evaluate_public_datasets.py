@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 from statistics import median
 from typing import Any
+from calibration_metrics import probability_calibration
 
 try:
     import numpy as np
@@ -98,7 +99,8 @@ def evaluate(path: Path, seed: int = 42, threshold: float = 50) -> dict[str, Any
     ranked = sorted(zip(probabilities, test_labels), reverse=True)
     average_precision = sum((index + 1) for index, (_, label) in enumerate(ranked) if label) / max(positives * len(ranked), 1)
     sorted_latencies = sorted(sample_latencies)
-    return {"dataset": str(path), "samples": len(texts), "holdout_samples": len(test_labels), "backend": "scikit-learn" if SKLEARN_AVAILABLE else "stdlib-fallback", "decision_threshold": threshold, "confusion_matrix": {"tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp)}, "precision": precision, "recall": recall, "f1": f1, "false_positive_rate": fp / max(fp + tn, 1), "roc_auc": None if not SKLEARN_AVAILABLE else float(roc_auc_score(test_labels, probabilities)), "pr_auc": float(average_precision if not SKLEARN_AVAILABLE else average_precision_score(test_labels, probabilities)), "fit_time_ms": fit_time_ms, "median_latency_ms_per_sample": median(sample_latencies), "p95_latency_ms_per_sample": sorted_latencies[max(0, math.ceil(len(sorted_latencies) * 0.95) - 1)]}
+    calibration = probability_calibration(test_labels, probabilities)
+    return {"dataset": str(path), "samples": len(texts), "holdout_samples": len(test_labels), "backend": "scikit-learn" if SKLEARN_AVAILABLE else "stdlib-fallback", "decision_threshold": threshold, "confusion_matrix": {"tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp)}, "precision": precision, "recall": recall, "f1": f1, "false_positive_rate": fp / max(fp + tn, 1), "roc_auc": None if not SKLEARN_AVAILABLE else float(roc_auc_score(test_labels, probabilities)), "pr_auc": float(average_precision if not SKLEARN_AVAILABLE else average_precision_score(test_labels, probabilities)), "calibration": calibration, "fit_time_ms": fit_time_ms, "median_latency_ms_per_sample": median(sample_latencies), "p95_latency_ms_per_sample": sorted_latencies[max(0, math.ceil(len(sorted_latencies) * 0.95) - 1)]}
 
 
 if __name__ == "__main__":

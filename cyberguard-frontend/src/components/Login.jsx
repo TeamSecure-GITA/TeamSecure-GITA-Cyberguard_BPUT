@@ -3,7 +3,7 @@ import axios from 'axios';
 import { ArrowLeft, Lock, LogIn, Shield, Eye, EyeOff, User } from 'lucide-react';
 
 import { getApiBaseUrl } from '../apiConfig';
-import { loginWithGoogle, formatFirebaseAuthError } from '../firebase';
+import { formatFirebaseAuthError } from '../firebaseErrors';
 
 export default function Login({ onLogin, onReturnToPortal, googleAuthError }) {
   const apiBaseUrl = getApiBaseUrl();
@@ -20,6 +20,7 @@ export default function Login({ onLogin, onReturnToPortal, googleAuthError }) {
     setGoogleLoading(true);
     setError(null);
     try {
+      const { loginWithGoogle } = await import('../firebase');
       const session = await loginWithGoogle(apiBaseUrl);
       if (session) {
         onLogin(session);

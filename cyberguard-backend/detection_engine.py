@@ -13,7 +13,7 @@ from xml.etree import ElementTree
 from regional_scam_detector import analyze_regional_scam
 from dlp_engine import analyze_dlp
 
-import tldextract
+from domain_utils import extract_domain
 
 try:
     import joblib
@@ -247,7 +247,7 @@ def analyze_url_intelligence(payload: str) -> tuple[int, List[str], List[dict]]:
     for raw_url in urls:
         url = raw_url.rstrip(".,;:!?)]}")
         parsed_url = urlparse(url)
-        extracted = tldextract.extract(url)
+        extracted = extract_domain(url)
         host = extracted.fqdn or extracted.domain
         registered_domain = f"{extracted.domain}.{extracted.suffix}" if extracted.suffix else extracted.domain
         lexical_entropy = 0.0
@@ -306,7 +306,7 @@ def analyze_screenshot_brand_mismatches(text: str) -> list[dict[str, str]]:
         parsed = urlparse(candidate if "://" in candidate else f"https://{candidate}")
         hostname = (parsed.hostname or "").lower().rstrip(".")
         if hostname:
-            extracted = tldextract.extract(hostname)
+            extracted = extract_domain(hostname)
             domains.add((hostname, f"{extracted.domain}.{extracted.suffix}" if extracted.suffix else hostname))
 
     mismatches = []

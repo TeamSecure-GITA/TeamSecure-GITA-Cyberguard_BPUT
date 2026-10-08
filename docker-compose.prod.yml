@@ -57,7 +57,10 @@ services:
     environment:
       CYBERGUARD_DATABASE_URL: postgresql://${CYBERGUARD_POSTGRES_USER:-cyberguard}:${CYBERGUARD_POSTGRES_PASSWORD:?Set CYBERGUARD_POSTGRES_PASSWORD}@postgres:5432/${CYBERGUARD_POSTGRES_DB:-cyberguard}
       CYBERGUARD_REDIS_URL: redis://redis:6379/0
+      CYBERGUARD_BACKUP_PATH: /data/cyberguard-postgres.backup
     command: ["python", "worker.py"]
+    volumes:
+      - cyberguard-data:/data
     depends_on:
       backend:
         condition: service_healthy

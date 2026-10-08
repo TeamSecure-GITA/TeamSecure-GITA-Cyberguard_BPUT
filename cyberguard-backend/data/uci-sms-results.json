@@ -16,7 +16,85 @@
   "false_positive_rate": 0.0,
   "roc_auc": 0.9925213438542548,
   "pr_auc": 0.9794868335749607,
-  "fit_time_ms": 197.17129999980898,
-  "median_latency_ms_per_sample": 0.36705000002257293,
-  "p95_latency_ms_per_sample": 0.7152999999107124
+  "calibration": {
+    "method": "fixed_width_probability_bins",
+    "bin_count": 10,
+    "expected_calibration_error": 0.09382035179996977,
+    "brier_score": 0.031235167447397436,
+    "reliability_bins": [
+      {
+        "lower_bound": 0.0,
+        "upper_bound": 0.1,
+        "samples": 1057,
+        "mean_probability": 0.055229880180076345,
+        "observed_positive_rate": 0.001892147587511826
+      },
+      {
+        "lower_bound": 0.1,
+        "upper_bound": 0.2,
+        "samples": 141,
+        "mean_probability": 0.12939143091086044,
+        "observed_positive_rate": 0.0425531914893617
+      },
+      {
+        "lower_bound": 0.2,
+        "upper_bound": 0.3,
+        "samples": 22,
+        "mean_probability": 0.23773879030727263,
+        "observed_positive_rate": 0.45454545454545453
+      },
+      {
+        "lower_bound": 0.3,
+        "upper_bound": 0.4,
+        "samples": 13,
+        "mean_probability": 0.3312718343413276,
+        "observed_positive_rate": 0.6923076923076923
+      },
+      {
+        "lower_bound": 0.4,
+        "upper_bound": 0.5,
+        "samples": 21,
+        "mean_probability": 0.4495468531642026,
+        "observed_positive_rate": 0.9523809523809523
+      },
+      {
+        "lower_bound": 0.5,
+        "upper_bound": 0.6,
+        "samples": 33,
+        "mean_probability": 0.5612264025543323,
+        "observed_positive_rate": 1.0
+      },
+      {
+        "lower_bound": 0.6,
+        "upper_bound": 0.7,
+        "samples": 35,
+        "mean_probability": 0.6518509668488484,
+        "observed_positive_rate": 1.0
+      },
+      {
+        "lower_bound": 0.7,
+        "upper_bound": 0.8,
+        "samples": 43,
+        "mean_probability": 0.7413989541987582,
+        "observed_positive_rate": 1.0
+      },
+      {
+        "lower_bound": 0.8,
+        "upper_bound": 0.9,
+        "samples": 24,
+        "mean_probability": 0.8351866195115186,
+        "observed_positive_rate": 1.0
+      },
+      {
+        "lower_bound": 0.9,
+        "upper_bound": 1.0,
+        "samples": 5,
+        "mean_probability": 0.9198889054285889,
+        "observed_positive_rate": 1.0
+      }
+    ]
+  },
+  "fit_time_ms": 275.4592000001139,
+  "median_latency_ms_per_sample": 0.4212999997434963,
+  "p95_latency_ms_per_sample": 1.0827000000972475
 }

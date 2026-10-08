@@ -10,7 +10,7 @@ from urllib.parse import quote, urljoin, urlparse
 from typing import Any
 
 import requests
-import tldextract
+from domain_utils import extract_domain
 from requests.adapters import HTTPAdapter
 from detection_engine import BRAND_DOMAINS
 
@@ -65,7 +65,7 @@ class _PageIdentityParser(HTMLParser):
 
 
 def _registered_domain(hostname: str) -> str:
-    extracted = tldextract.extract(hostname)
+    extracted = extract_domain(hostname)
     return f"{extracted.domain}.{extracted.suffix}" if extracted.suffix else hostname.lower().rstrip(".")
 
 

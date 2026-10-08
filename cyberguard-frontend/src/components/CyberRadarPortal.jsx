@@ -26,7 +26,7 @@ import CyberGlobe from './CyberGlobe';
 import WatchDemoModal from './WatchDemoModal';
 import CyberVideoPlayerBar from './CyberVideoPlayerBar';
 import { getApiBaseUrl } from '../apiConfig';
-import { loginWithGoogle, formatFirebaseAuthError } from '../firebase';
+import { formatFirebaseAuthError } from '../firebaseErrors';
 
 const decodeBase64Url = (value) => {
   const padded = `${value}${'='.repeat((4 - (value.length % 4)) % 4)}`.replace(/-/g, '+').replace(/_/g, '/');
@@ -107,6 +107,7 @@ export default function CyberRadarPortal({
     setGoogleLoading(true);
     setAuthError(null);
     try {
+      const { loginWithGoogle } = await import('../firebase');
       const session = await loginWithGoogle(apiBaseUrl);
       if (session) {
         if (onApprovedSession) {
