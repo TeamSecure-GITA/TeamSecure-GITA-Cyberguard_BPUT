@@ -482,6 +482,16 @@ def initialize_database():
                 details TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS provider_action_requests (
+                idempotency_key TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                action TEXT NOT NULL,
+                request_hash TEXT NOT NULL,
+                status TEXT NOT NULL,
+                response_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS alert_outcomes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 incident_id INTEGER NOT NULL,
@@ -2346,20 +2356,20 @@ async def analyze_file(category: str = Form(...), file: UploadFile = File(...), 
     network_capture = None
     if is_pcap:
         try:
-            network_capture = analyze_pcap(content)
+            network_capture = await asyncio.to_thread(analyze_pcap, content)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         except RuntimeError as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
     is_image = content_type.startswith("image/") or filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"))
-    ocr_result = extract_image_text(content) if is_image else None
-    email_result = analyze_eml(content, scan_artifact) if is_eml else None
+    ocr_result = await asyncio.to_thread(extract_image_text, content) if is_image else None
+    email_result = await asyncio.to_thread(analyze_eml, content, scan_artifact) if is_eml else None
     payload = email_result["payload"] if email_result else json.dumps(network_capture) if network_capture else (content.decode("utf-8", errors="replace") if is_text else f"Uploaded {file.content_type or 'media'} file: {filename}")
     assessment = evaluate_threat_payload(category, payload)
     if category.lower() in {"auth_logs", "ato"}:
         assessment = apply_user_login_baseline(assessment, payload, user)
     if category.lower() == "malware":
-        malware_scan = scan_artifact(content, filename)
+        malware_scan = await asyncio.to_thread(scan_artifact, content, filename)
         assessment["malware_scan"] = malware_scan
         assessment["indicators"].extend(
             {
@@ -2458,7 +2468,9 @@ async def analyze_file(category: str = Form(...), file: UploadFile = File(...), 
         elif ocr_result.get("reason"):
             assessment["ocr_analysis"]["reason"] = ocr_result["reason"]
     if not is_text and not email_result and not network_capture:
-        media_result = analyze_media(content, file.content_type or "", filename, category)
+        media_result = await asyncio.to_thread(
+            analyze_media, content, file.content_type or "", filename, category
+        )
         assessment["risk_score"] = max(assessment["risk_score"], media_result["score"])
         assessment["indicators"].extend(media_result["indicators"])
         assessment["xai_explanation"] += " " + " ".join(media_result["reasons"])
@@ -2871,7 +2883,13 @@ async def roadmap_media_consistency(files: list[UploadFile] = File(...), user: d
     for file in files[:4]:
         content = await file.read()
         if content:
-            result = analyze_media(content, file.content_type or "", file.filename or "upload", "deepfake")
+            result = await asyncio.to_thread(
+                analyze_media,
+                content,
+                file.content_type or "",
+                file.filename or "upload",
+                "deepfake",
+            )
             result["media_type"] = file.content_type or file.filename or "unknown"
             results.append(result)
     return cross_modal_consistency(results)
@@ -2924,7 +2942,7 @@ async def media_trust(file: UploadFile = File(...), user: dict[str, str] = Depen
     if not (content_type.startswith(("image/", "audio/", "video/")) or filename.lower().endswith(supported_suffixes)):
         raise HTTPException(status_code=415, detail="Upload a supported image, audio, or video file.")
     try:
-        return analyze_trust_media(content, filename, content_type)
+        return await asyncio.to_thread(analyze_trust_media, content, filename, content_type)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=f"Media could not be inspected: {error}") from error
 
@@ -3634,47 +3652,123 @@ def integration_status(user: dict[str, str] = Depends(current_user)):
     ], "providers": provider_integration_status(), "production_actions": production_provider_status()}
 
 
-def run_production_integration(action: str, operation, user: dict[str, str]):
+def run_production_integration(
+    action: str,
+    operation,
+    user: dict[str, str],
+    idempotency_key: str,
+    request_payload: dict[str, Any],
+):
+    key = idempotency_key.strip()
+    if not re.fullmatch(r"[A-Za-z0-9._:-]{8,128}", key):
+        raise HTTPException(
+            status_code=400,
+            detail="Idempotency-Key must contain 8-128 letters, digits, '.', '_', ':', or '-'.",
+        )
+
+    request_hash = hashlib.sha256(
+        json.dumps(
+            {"action": action, "payload": request_payload},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as db:
+        inserted = db.execute(
+            "INSERT OR IGNORE INTO provider_action_requests "
+            "(idempotency_key, username, action, request_hash, status, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, 'processing', ?, ?)",
+            (key, user["username"], action, request_hash, now, now),
+        ).rowcount
+        record = db.execute(
+            "SELECT username, action, request_hash, status, response_json "
+            "FROM provider_action_requests WHERE idempotency_key = ?",
+            (key,),
+        ).fetchone()
+
+    if not record:
+        raise HTTPException(status_code=503, detail="Could not reserve the provider action idempotency key.")
+    if record["username"] != user["username"] or record["action"] != action or record["request_hash"] != request_hash:
+        raise HTTPException(status_code=409, detail="Idempotency-Key was already used for a different provider action.")
+    if not inserted:
+        if record["status"] == "completed" and record["response_json"]:
+            return json.loads(record["response_json"])
+        raise HTTPException(
+            status_code=409,
+            detail="A previous attempt with this Idempotency-Key did not complete cleanly. Check the provider state before submitting a new action.",
+        )
+
     try:
         result = operation()
-    except IntegrationNotConfigured as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
-    except requests.RequestException as error:
-        raise HTTPException(status_code=502, detail=f"{action} provider request failed: {error}") from error
-    except ValueError as error:
-        raise HTTPException(status_code=502, detail=f"{action} provider returned an invalid response: {error}") from error
+    except Exception as error:
+        now = datetime.now(timezone.utc).isoformat()
+        with get_db() as db:
+            db.execute(
+                "UPDATE provider_action_requests SET status = 'unknown', updated_at = ? "
+                "WHERE idempotency_key = ? AND status = 'processing'",
+                (now, key),
+            )
+            db.execute(
+                "INSERT INTO audit_logs (username, action, resource, details, created_at) VALUES (?, ?, ?, ?, ?)",
+                (user["username"], f"integration_{action}_outcome_unknown", action, json.dumps({"idempotency_key": key, "error_type": type(error).__name__}), now),
+            )
+        if isinstance(error, IntegrationNotConfigured):
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        if isinstance(error, requests.RequestException):
+            raise HTTPException(status_code=502, detail=f"{action} provider request failed; provider outcome may be unknown.") from error
+        if isinstance(error, ValueError):
+            raise HTTPException(status_code=502, detail=f"{action} provider returned an invalid response; provider outcome may be unknown.") from error
+        raise
+
     resource = str(result.get("provider", "provider"))
-    write_audit(user, f"integration_{action}", resource, f"status:{result.get('status', 'unknown')}")
+    response_json = json.dumps(result, sort_keys=True, separators=(",", ":"))
+    now = datetime.now(timezone.utc).isoformat()
+    with get_db() as db:
+        db.execute(
+            "UPDATE provider_action_requests SET status = 'completed', response_json = ?, updated_at = ? "
+            "WHERE idempotency_key = ? AND status = 'processing'",
+            (response_json, now, key),
+        )
+        db.execute(
+            "INSERT INTO audit_logs (username, action, resource, details, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user["username"], f"integration_{action}", resource, f"status:{result.get('status', 'unknown')}; idempotency_key:{key}", now),
+        )
     return result
 
 
 @app.post("/api/v1/integrations/tickets")
-def create_provider_ticket_route(request: ProviderTicketRequest, user: dict[str, str] = Depends(head_admin_user)):
+def create_provider_ticket_route(request: ProviderTicketRequest, user: dict[str, str] = Depends(head_admin_user), idempotency_key: str = Header(..., alias="Idempotency-Key")):
+    payload = request.model_dump() if hasattr(request, "model_dump") else request.dict()
     return run_production_integration(
         "ticket_create",
-        lambda: create_provider_ticket(request.model_dump() if hasattr(request, "model_dump") else request.dict()),
+        lambda: create_provider_ticket(payload),
         user,
+        idempotency_key,
+        payload,
     )
 
 
 @app.post("/api/v1/integrations/identity/disable")
-def disable_provider_identity_route(request: ProviderIdentityDisableRequest, user: dict[str, str] = Depends(head_admin_user)):
+def disable_provider_identity_route(request: ProviderIdentityDisableRequest, user: dict[str, str] = Depends(head_admin_user), idempotency_key: str = Header(..., alias="Idempotency-Key")):
     if not request.confirmed:
         raise HTTPException(status_code=409, detail="Explicit confirmation is required to disable an identity.")
     identity = request.identity.strip()
     if not identity:
         raise HTTPException(status_code=400, detail="Identity must not be empty.")
-    return run_production_integration("identity_disable", lambda: disable_provider_identity(identity), user)
+    payload = {"identity": identity, "confirmed": request.confirmed}
+    return run_production_integration("identity_disable", lambda: disable_provider_identity(identity), user, idempotency_key, payload)
 
 
 @app.post("/api/v1/integrations/endpoint/isolate")
-def isolate_provider_endpoint_route(request: ProviderEndpointIsolationRequest, user: dict[str, str] = Depends(head_admin_user)):
+def isolate_provider_endpoint_route(request: ProviderEndpointIsolationRequest, user: dict[str, str] = Depends(head_admin_user), idempotency_key: str = Header(..., alias="Idempotency-Key")):
     if not request.confirmed:
         raise HTTPException(status_code=409, detail="Explicit confirmation is required to isolate an endpoint.")
     endpoint_id = request.endpoint_id.strip()
     if not endpoint_id:
         raise HTTPException(status_code=400, detail="Endpoint ID must not be empty.")
-    return run_production_integration("endpoint_isolate", lambda: isolate_provider_endpoint(endpoint_id), user)
+    payload = {"endpoint_id": endpoint_id, "confirmed": request.confirmed}
+    return run_production_integration("endpoint_isolate", lambda: isolate_provider_endpoint(endpoint_id), user, idempotency_key, payload)
 
 
 @app.post("/api/v1/integrations/siem/ingest")

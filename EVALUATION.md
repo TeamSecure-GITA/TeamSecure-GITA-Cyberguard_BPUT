@@ -141,3 +141,35 @@ These results establish reproducible local checks for the tested paths only. The
 - Follow-up local checks: focused backend API tests passed (132 tests), frontend lint passed, and the production frontend build passed with an explicit HTTPS test URL. This URL was only used to verify build configuration and is not a deployment target.
 - Live deployment remains unavailable: no Render backend is currently deployed, so the candidate health hostname returns 404; the previously configured Vercel alias also returns 404. Creating the Render Blueprint and setting Vercel's backend URL still require deployment-account access not available in this workspace.
 - The supplied branch-specific Vercel URL returns an SSO redirect for anonymous requests. It is not a publicly accessible production origin unless its Deployment Protection setting is changed.
+
+## Implementation gap audit follow-up (2026-10-09)
+
+This snapshot checks the 14-item gap register in `CyberGuard_Implementation_Gap_Audit_Report.pdf` against this checkout. “Implemented locally” means there is code and a passing local check; it does not mean a production integration, representative accuracy, or zero defects has been established.
+
+| Gap | Current status in this checkout | Remaining evidence or dependency |
+|---|---|---|
+| G-01 Media weights | **Verified locally.** Git LFS objects pass `git lfs fsck`; `check_models.py` loads and runs image and audio inference. | Model hashes and inference still need checking in each deployment image. |
+| G-02 Deepfake evaluation | **Workflow implemented; evaluation open.** Separate calibration/test roots, per-modality metrics, and invalid-input checks are implemented. | Authorized, labeled real/fake calibration and untouched test media for image, audio, and video were not supplied. |
+| G-03 End-to-end setup | **Local checks pass.** Backend suite, frontend lint/build, model inference, and authenticated browser smoke passed on this Windows checkout. | A clean dependency install on fresh Windows and Linux environments and a deployed browser workflow were not run. |
+| G-04 Phishing benchmark | **Workflow implemented; benchmark open.** The bundled UCI benchmark is SMS-only; QR and email analysis paths exist. | Separate licensed email, URL, QR-derived URL, and hard-negative test corpora were not supplied. |
+| G-05 Identity calibration | **Feature implemented; calibration open.** Profiles require three samples, are account-scoped, and expose insufficient evidence. | A consented, representative genuine/impersonation corpus and language/channel false-positive evaluation were not supplied. |
+| G-06 Response integrations | **Partially implemented.** Jira, ServiceNow, Okta, Microsoft Graph, and EDR adapters are credential-gated; privileged actions require head-admin access, identity/endpoint changes require explicit confirmation, requests have bounded timeouts, and actions use persisted idempotency keys with audit records. Completed duplicates replay the stored response; ambiguous outcomes are blocked for reconciliation. | No provider sandbox credentials were supplied. Provider-specific retry/rollback behavior and live-provider behavior are not established for every adapter. |
+| G-07 ATO and identity provider | **Local telemetry path implemented; external validation open.** Account baselines require three successful low-risk samples and scenario tests cover local behavior. | Authorized production IdP/device integration and measured detection delay/false-positive rates were not supplied. |
+| G-08 Network visibility | **Bounded local path implemented.** PCAP/PCAPNG, Zeek/Suricata normalization, and the authenticated metadata-only sensor have tests. | Live capture on an authorized sensor host, outage/backpressure testing, and protocol visibility beyond flow metadata remain unverified. |
+| G-09 Malware triage | **Bounded signature triage implemented.** EICAR and archive scanning paths are exercised; no-match is reported as no known signature rather than safe. | This is not comprehensive antivirus; broader format coverage and isolated resource-limit testing remain deployment work. |
+| G-10 Dashboard evidence | **Partially verified.** Maps and forecasts use observed or explicitly supplied metadata, with empty-data behavior covered in code/tests. | A complete card-by-card trace against a live empty and seeded deployment, including operator filters/time zones, was not recorded. |
+| G-11 Production security | **Configuration implemented; deployment open.** Production startup validates required secrets/origins and deployment configuration documents HTTPS, RBAC, CORS, Redis, and secret handling. | No live staging deployment, secret-manager rotation, backup restore, or independent security review was performed. |
+| G-12 Load and resilience | **Harness implemented; measurements open.** Locust scenarios are present. | No reproducible load run with hardware, concurrency, latency percentiles, resource use, outage, and restart measurements was recorded. |
+| G-13 Privacy and retention | **Partially implemented.** Contact profiles retain derived features, are account-scoped, and can be explicitly deleted; identifiers are masked in selected dashboard summaries. | A complete retention/deletion policy, encryption-at-rest configuration, tenant isolation review, export controls, and consent/access audit remain unverified. |
+| G-14 Documentation and evidence | **Partially implemented.** This evaluation, the roadmap acceptance matrix, operations runbook, and release verification script document feature boundaries and local checks. | Deployment evidence and status must be regenerated for each actual release/environment. |
+
+### Current verification result
+
+- Backend: `python -m pytest -q` passed **237 tests** with one third-party deprecation warning.
+- Frontend: `npm.cmd run lint` and `npm.cmd run build` passed.
+- Browser: authenticated `npm.cmd run test:smoke` passed against a local API and isolated test database.
+- Media: `python check_models.py` passed image and audio model inference; `git lfs fsck` passed.
+- Async upload handling: image OCR, EML/YARA, PCAP, and media analysis run in worker threads so these CPU/blocking operations do not occupy the API event loop.
+- Static diff check: `git -c core.whitespace=cr-at-eol diff --check` passed.
+
+**Overall report closure: not 100%.** Local code paths and checks are stronger, but the missing labeled datasets, consented study data, provider sandbox/live credentials, clean cross-platform install, load/resilience measurements, and staging evidence cannot be manufactured from this checkout. Do not present these gaps as passed or describe detector scores as calibrated probabilities.

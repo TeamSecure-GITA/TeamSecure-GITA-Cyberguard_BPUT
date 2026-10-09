@@ -4,7 +4,9 @@ import json
 
 import pytest
 import requests
+from fastapi import HTTPException
 
+import main
 import provider_integrations
 import production_integrations
 
@@ -203,6 +205,58 @@ def test_graph_identity_disable_and_edr_isolation_request_contract(monkeypatch):
     assert endpoint["status"] == "isolated"
     assert captured[1]["url"] == "https://edr.example.org/api/endpoints/isolate"
     assert captured[1]["json"]["endpoint_id"] == "device-42"
+
+
+def test_provider_action_idempotency_replays_success_and_rejects_key_reuse(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "provider-idempotency.sqlite")
+    main.initialize_database()
+    user = {"username": "test-head-admin", "role": "head_admin"}
+    payload = {"summary": "Suspicious sign-in", "urgency": 1}
+    calls = []
+
+    def create_ticket():
+        calls.append("created")
+        return {"provider": "jira", "status": "created", "result": {"key": "SOC-17"}}
+
+    first = main.run_production_integration(
+        "ticket_create", create_ticket, user, "smoke-key-0001", payload
+    )
+    replay = main.run_production_integration(
+        "ticket_create", create_ticket, user, "smoke-key-0001", payload
+    )
+
+    assert first == replay
+    assert calls == ["created"]
+
+    with pytest.raises(HTTPException) as conflict:
+        main.run_production_integration(
+            "ticket_create", create_ticket, user, "smoke-key-0001", {"summary": "Different ticket"}
+        )
+    assert conflict.value.status_code == 409
+    assert calls == ["created"]
+
+
+def test_provider_action_ambiguous_failure_cannot_be_retried_with_same_key(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "provider-idempotency-failure.sqlite")
+    main.initialize_database()
+    user = {"username": "test-head-admin", "role": "head_admin"}
+    payload = {"endpoint_id": "device-42", "confirmed": True}
+
+    def timeout():
+        raise requests.Timeout("provider response timed out")
+
+    with pytest.raises(HTTPException) as failure:
+        main.run_production_integration(
+            "endpoint_isolate", timeout, user, "smoke-key-0002", payload
+        )
+    assert failure.value.status_code == 502
+
+    with pytest.raises(HTTPException) as replay:
+        main.run_production_integration(
+            "endpoint_isolate", lambda: pytest.fail("unknown actions must not be replayed"),
+            user, "smoke-key-0002", payload,
+        )
+    assert replay.value.status_code == 409
 
 
 def test_tenant_immunity_publish_pseudonymizes_and_filters_payload(monkeypatch):

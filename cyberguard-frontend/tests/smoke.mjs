@@ -27,7 +27,7 @@ const monitorPage = (target) => {
       return;
     }
 
-    errors.push(message.text());
+    errors.push(`${message.text()} (${message.location().url || 'unknown source'})`);
   });
 
   target.on('pageerror', (error) => errors.push(error.message));

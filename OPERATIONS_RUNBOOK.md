@@ -57,3 +57,5 @@ Terminate TLS at the reverse proxy or managed platform. Set `CYBERGUARD_ENV=prod
 ## Incident response
 
 High-impact prevention actions require a head administrator or SOC lead. Every provider action and database backup is written to the audit log. Provider integrations fail closed with HTTP 503 when required credentials are absent.
+
+The provider ticket, identity-disable, and endpoint-isolation APIs require an `Idempotency-Key` header. Reuse the same key when retrying a request whose response was lost; a completed action returns its stored response without calling the provider again. If the API reports that a previous outcome is unknown, check the provider before issuing a new key. CyberGuard does not automatically retry non-idempotent provider requests because a timeout can occur after the provider applied the action. The dashboard keeps an unresolved key in browser storage until the action returns successfully.

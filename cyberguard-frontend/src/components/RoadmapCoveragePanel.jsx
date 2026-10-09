@@ -104,8 +104,29 @@ export default function RoadmapCoveragePanel({ apiBaseUrl, accessToken, userRole
   const runProviderAction = async (path, payload, label) => {
     setProviderAction(true);
     setIntegrationError(null);
+    const requiresIdempotency = [
+      '/api/v1/integrations/tickets',
+      '/api/v1/integrations/identity/disable',
+      '/api/v1/integrations/endpoint/isolate',
+    ].includes(path);
+    const requestSignature = `${path}:${JSON.stringify(payload)}`;
+    let idempotencyKey;
+    let idempotencyStorageKey;
     try {
-      const response = await axios.post(`${apiBaseUrl}${path}`, payload, { headers });
+      if (requiresIdempotency) {
+        const signatureBytes = new TextEncoder().encode(`${accessToken}:${requestSignature}`);
+        const digest = await crypto.subtle.digest('SHA-256', signatureBytes);
+        const signatureHash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+        idempotencyStorageKey = `cyberguard.provider-action.${signatureHash}`;
+        idempotencyKey = localStorage.getItem(idempotencyStorageKey) || crypto.randomUUID();
+        localStorage.setItem(idempotencyStorageKey, idempotencyKey);
+      }
+      const requestHeaders = {
+        ...headers,
+        ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+      };
+      const response = await axios.post(`${apiBaseUrl}${path}`, payload, { headers: requestHeaders });
+      if (idempotencyStorageKey) localStorage.removeItem(idempotencyStorageKey);
       const count = response.data.published === undefined ? '' : ` (${response.data.published} signatures)`;
       setIntegrationMessage(`${response.data.provider || label}: ${response.data.status}${count}`);
       return response;

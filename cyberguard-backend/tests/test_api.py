@@ -266,21 +266,23 @@ def test_cloudflare_block_rejects_provider_success_false(monkeypatch):
         cloudflare_block_ip("192.0.2.10", "test containment")
 
 
-def test_provider_action_routes_require_confirmation_and_return_provider_status(monkeypatch):
+def test_provider_action_routes_require_confirmation_and_return_provider_status(monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "provider-action-routes.sqlite")
+    initialize_database()
     admin = {"username": "root@example.org", "role": "head_admin"}
     monkeypatch.setattr("main.create_provider_ticket", lambda payload: {"provider": "jira", "status": "created", "result": {"key": "SEC-1"}})
     monkeypatch.setattr("main.disable_provider_identity", lambda identity: {"provider": "okta", "status": "suspended", "identity": identity})
     monkeypatch.setattr("main.isolate_provider_endpoint", lambda endpoint_id: {"provider": "edr", "status": "isolated", "endpoint_id": endpoint_id})
 
-    assert create_provider_ticket_route(ProviderTicketRequest(summary="Investigation"), admin)["status"] == "created"
+    assert create_provider_ticket_route(ProviderTicketRequest(summary="Investigation"), admin, "api-test-key-ticket-1")["status"] == "created"
     with pytest.raises(HTTPException) as identity_error:
         disable_provider_identity_route(ProviderIdentityDisableRequest(identity="user-1"), admin)
     assert identity_error.value.status_code == 409
     with pytest.raises(HTTPException) as endpoint_error:
         isolate_provider_endpoint_route(ProviderEndpointIsolationRequest(endpoint_id="host-1"), admin)
     assert endpoint_error.value.status_code == 409
-    assert disable_provider_identity_route(ProviderIdentityDisableRequest(identity="user-1", confirmed=True), admin)["status"] == "suspended"
-    assert isolate_provider_endpoint_route(ProviderEndpointIsolationRequest(endpoint_id="host-1", confirmed=True), admin)["status"] == "isolated"
+    assert disable_provider_identity_route(ProviderIdentityDisableRequest(identity="user-1", confirmed=True), admin, "api-test-key-identity-1")["status"] == "suspended"
+    assert isolate_provider_endpoint_route(ProviderEndpointIsolationRequest(endpoint_id="host-1", confirmed=True), admin, "api-test-key-endpoint-1")["status"] == "isolated"
 
 
 def test_provider_timeout_returns_gateway_error_without_success_audit(tmp_path, monkeypatch):
@@ -290,7 +292,7 @@ def test_provider_timeout_returns_gateway_error_without_success_audit(tmp_path, 
     admin = {"username": "root@example.org", "role": "head_admin"}
 
     with pytest.raises(HTTPException) as error:
-        create_provider_ticket_route(ProviderTicketRequest(summary="Timeout test"), admin)
+        create_provider_ticket_route(ProviderTicketRequest(summary="Timeout test"), admin, "api-test-key-timeout-1")
 
     assert error.value.status_code == 502
     with get_db() as db:
