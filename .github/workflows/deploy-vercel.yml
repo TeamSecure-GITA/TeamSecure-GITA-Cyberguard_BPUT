@@ -10,11 +10,32 @@ on:
       - '.github/workflows/deploy-vercel.yml'
 
 jobs:
+  check-secrets:
+    name: Check Secrets
+    runs-on: ubuntu-latest
+    outputs:
+      has-token: ${{ steps.check.outputs.has-token }}
+    steps:
+      - name: Check if VERCEL_TOKEN is configured
+        id: check
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          if [ -n "$VERCEL_TOKEN" ]; then
+            echo "has-token=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-token=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::VERCEL_TOKEN is not configured in repository secrets; skipping Vercel deployment."
+          fi
+
   deploy:
     name: Deploy Frontend to Vercel
+    needs: check-secrets
+    if: needs.check-secrets.outputs.has-token == 'true'
     runs-on: ubuntu-latest
-    # Runs only when VERCEL_TOKEN is set in GitHub repository secrets
-    if: ${{ secrets.VERCEL_TOKEN != '' }}
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
