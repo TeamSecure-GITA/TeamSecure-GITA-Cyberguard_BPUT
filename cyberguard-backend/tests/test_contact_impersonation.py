@@ -114,6 +114,7 @@ def test_contact_profiles_are_private_and_used_by_impersonation_analysis(tmp_pat
             "name": "Jane Doe",
             "identifiers": ["jane@bput.ac.in"],
             "sample_messages": SAMPLES,
+            "consent_confirmed": True,
         },
         analyst,
     )
@@ -135,3 +136,36 @@ def test_contact_profiles_are_private_and_used_by_impersonation_analysis(tmp_pat
         main.apply_known_contact_comparison({}, "impersonation", request.payload, request.metadata, lead)
     assert error.value.status_code == 404
     assert main.delete_known_contact(contact["id"], analyst)["status"] == "deleted"
+
+
+def test_known_contact_creation_requires_explicit_consent(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "known-contact-consent.db")
+    main.initialize_database()
+
+    with pytest.raises(HTTPException, match="Explicit consent is required") as error:
+        main.create_known_contact(
+            {"name": "Jane Doe", "identifiers": ["jane@example.test"], "sample_messages": SAMPLES},
+            {"username": "analyst", "role": "analyst"},
+        )
+
+    assert error.value.status_code == 400
+
+
+def test_known_contact_profiles_expire_per_owner_after_retention_window(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "DB_PATH", tmp_path / "known-contact-retention.db")
+    monkeypatch.setattr(main, "KNOWN_CONTACT_RETENTION_DAYS", 90)
+    main.initialize_database()
+    with main.get_db() as db:
+        db.executemany(
+            "INSERT INTO known_contacts (owner_username, name, identifiers, style_profile, created_at) VALUES (?, ?, ?, ?, ?)",
+            [
+                ("analyst", "Expired analyst", "[]", "{}", "2025-01-01T00:00:00+00:00"),
+                ("lead", "Expired lead", "[]", "{}", "2025-01-01T00:00:00+00:00"),
+            ],
+        )
+
+    assert main.list_known_contacts({"username": "analyst", "role": "analyst"})["contacts"] == []
+    with main.get_db() as db:
+        remaining = db.execute("SELECT owner_username FROM known_contacts").fetchall()
+
+    assert [row["owner_username"] for row in remaining] == ["lead"]

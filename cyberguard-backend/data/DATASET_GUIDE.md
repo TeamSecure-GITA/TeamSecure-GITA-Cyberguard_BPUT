@@ -14,6 +14,8 @@ Do not mix external records into the demonstration set without preserving `sourc
 
 The current set is intentionally small and synthetic. It is suitable for a repeatable hackathon demo, not a production performance claim. Use `train_model.py` for the text classifier and report per-category precision, recall, F1, false-positive rate, latency, and drift when the larger licensed corpus is available.
 
+For category-specific evaluation on an authorised corpus, prepare three separate CSV manifests with `text,label,category,source,license,split` columns and `split` values `train`, `calibration`, or `test`. Keep benign and suspicious examples for each category in every split. Run `evaluate_public_datasets.py --train-data data/train.csv --calibration-data data/calibration.csv --test-data data/test.csv --output data/category-results.json`. The evaluator trains one baseline per category, chooses a probability threshold from calibration data under a false-positive-rate ceiling, rejects normalized exact-text duplicates across splits, and reports metrics only on the untouched test split. It records provenance fields but cannot independently verify license terms or detect semantic near-duplicates; review dataset provenance and grouping before relying on the results. The simpler `--data` command remains a seeded exploratory holdout and must not be presented as an untouched final benchmark.
+
 ## UCI SMS Spam Collection snapshot
 
 `download_public_dataset.py` retrieves the UCI SMS Spam Collection from the UCI Machine Learning Repository and normalizes it to `text,label`. The downloaded snapshot contains 5,574 messages. Run:

@@ -13,14 +13,14 @@ def test_probability_calibration_reports_brier_and_reliability_bins():
     assert len(result["reliability_bins"]) == 2
 
 
-def test_media_metrics_report_probability_calibration():
+def test_media_risk_scores_are_not_reported_as_probability_calibration():
     result = calculate_metrics([
         {"label": 0, "score": 20, "modality": "image"},
         {"label": 1, "score": 80, "modality": "image"},
     ])
 
-    assert result["calibration"]["expected_calibration_error"] == pytest.approx(0.2)
-    assert result["calibration"]["brier_score"] == pytest.approx(0.04)
+    assert "calibration" not in result
+    assert "not a probability" in result["score_semantics"]
 
 
 @pytest.mark.parametrize("labels,probabilities", [

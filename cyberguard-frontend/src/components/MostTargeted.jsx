@@ -28,7 +28,7 @@ export default function MostTargeted({ targets = [] }) {
                   <div className="truncate text-xs font-medium text-slate-100" title={target.label}>{target.label}</div>
                   <div className="text-[10px] text-slate-400">{target.type} · {target.incident_count} incidents</div>
                 </div>
-                <span className="shrink-0 text-[10px] text-rose-300">{target.max_risk_score}%</span>
+                <span className="shrink-0 text-[10px] text-rose-300">risk {target.max_risk_score}/99</span>
               </li>
             );
           })}

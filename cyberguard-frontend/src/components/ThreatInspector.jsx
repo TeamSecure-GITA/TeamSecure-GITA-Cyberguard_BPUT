@@ -27,6 +27,7 @@ export default function ThreatInspector({ accessToken, onIncidentCreated }) {
   const [contactName, setContactName] = useState('');
   const [contactIdentifiers, setContactIdentifiers] = useState('');
   const [contactSamples, setContactSamples] = useState('');
+  const [contactConsent, setContactConsent] = useState(false);
   const [contactBusy, setContactBusy] = useState(false);
   const [contactError, setContactError] = useState('');
 
@@ -133,12 +134,14 @@ export default function ThreatInspector({ accessToken, onIncidentCreated }) {
         name: contactName,
         identifiers: contactIdentifiers.split(/[,;\n]/).map((value) => value.trim()).filter(Boolean),
         sample_messages: contactSamples.split(/\r?\n\s*\r?\n/).map((value) => value.trim()).filter(Boolean),
+        consent_confirmed: contactConsent,
       }, { headers: { Authorization: `Bearer ${accessToken}` } });
       setKnownContacts((current) => [...current.filter((contact) => contact.id !== response.data.id), response.data]);
       setSelectedContactId(String(response.data.id));
       setContactName('');
       setContactIdentifiers('');
       setContactSamples('');
+      setContactConsent(false);
     } catch (requestError) {
       setContactError(requestError.response?.data?.detail || 'Could not save the contact profile.');
     } finally {
@@ -316,8 +319,12 @@ export default function ThreatInspector({ accessToken, onIncidentCreated }) {
           <label className="grid gap-1 text-xs text-slate-400">Writing samples
             <textarea rows={3} value={contactSamples} onChange={(event) => setContactSamples(event.target.value)} placeholder="Add at least three messages, separated by blank lines" className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200" />
           </label>
+          <label className="flex items-start gap-2 text-xs text-slate-400">
+            <input type="checkbox" checked={contactConsent} onChange={(event) => setContactConsent(event.target.checked)} className="mt-0.5 accent-cyan-500" />
+            <span>I have permission to create this profile. CyberGuard stores derived style features, not the sample messages, and deletes the profile after its configured retention period or when I delete it.</span>
+          </label>
           <div className="flex flex-wrap items-center gap-3">
-            <button type="button" onClick={saveKnownContact} disabled={contactBusy || !contactName.trim() || !contactIdentifiers.trim() || contactSamples.split(/\r?\n\s*\r?\n/).filter((value) => value.trim()).length < 3} className="rounded-lg border border-cyan-700 px-3 py-2 text-xs font-semibold text-cyan-200 hover:bg-cyan-950 disabled:opacity-40">{contactBusy ? 'Saving...' : 'Save contact profile'}</button>
+            <button type="button" onClick={saveKnownContact} disabled={contactBusy || !contactConsent || !contactName.trim() || !contactIdentifiers.trim() || contactSamples.split(/\r?\n\s*\r?\n/).filter((value) => value.trim()).length < 3} className="rounded-lg border border-cyan-700 px-3 py-2 text-xs font-semibold text-cyan-200 hover:bg-cyan-950 disabled:opacity-40">{contactBusy ? 'Saving...' : 'Save contact profile'}</button>
             {contactError && <span role="alert" className="text-xs text-rose-300">{contactError}</span>}
           </div>
         </section>
@@ -371,7 +378,7 @@ export default function ThreatInspector({ accessToken, onIncidentCreated }) {
               <div className="live-phishing-panel" aria-live="polite">
                 <div className="live-phishing-heading"><span className="live-pulse" /> LIVE PHISHING SIGNAL {liveLoading && <Loader2 size={12} className="animate-spin" />}</div>
                 {liveAssessment ? (
-                  <div className="live-phishing-summary"><strong>{liveAssessment.risk_level} risk · {liveAssessment.risk_score}%</strong><span>{liveAssessment.xai_explanation}</span></div>
+                  <div className="live-phishing-summary"><strong>{liveAssessment.risk_level} risk · {liveAssessment.risk_score}/99</strong><span>{liveAssessment.xai_explanation}</span></div>
                 ) : <span className="text-[10px] text-slate-500">Analyzing email indicators as you type...</span>}
               </div>
             )}
@@ -432,11 +439,11 @@ export default function ThreatInspector({ accessToken, onIncidentCreated }) {
                   : 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
               }`}
             >
-              {analysisResult.risk_level} Risk ({analysisResult.risk_score}%)
+              {analysisResult.risk_level} Risk ({analysisResult.risk_score}/99)
             </span>
           </div>
 
-          <div className="risk-meter"><div className="risk-meter-label"><span>Risk meter</span><strong>{analysisResult.risk_score}/100</strong></div><div className="risk-meter-track"><div className="risk-meter-fill" style={{ width: `${analysisResult.risk_score}%` }} /></div></div>
+          <div className="risk-meter"><div className="risk-meter-label"><span>Heuristic risk score</span><strong>{analysisResult.risk_score}/99</strong></div><div className="risk-meter-track" role="meter" aria-label="Uncalibrated heuristic risk score" aria-valuemin={0} aria-valuemax={99} aria-valuenow={analysisResult.risk_score}><div className="risk-meter-fill" style={{ width: `${(analysisResult.risk_score / 99) * 100}%` }} /></div><p className="text-[10px] text-slate-500">Evidence-based triage score, not a probability of attack.</p></div>
 
           <p className="text-xs text-slate-200 bg-darkBg p-3 rounded-lg border border-slate-800 leading-relaxed font-mono">
             {plainMode ? analysisResult.plain_language_explanation : analysisResult.xai_explanation}

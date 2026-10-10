@@ -105,18 +105,18 @@ export default function TrustScanner({ apiBaseUrl, accessToken }) {
       {result && (
         <div className="mt-4 p-3 rounded-xl border border-slate-800 bg-slate-900/70 text-xs">
           <strong className={result.safe ? 'text-emerald-300' : 'text-rose-300'}>
-            {result.safe ? 'LOW RISK' : 'THREAT SIGNAL DETECTED'} / {result.risk_score}%
+            {result.safe ? 'LOW RISK' : 'THREAT SIGNAL DETECTED'} · risk {result.risk_score}/99
           </strong>
           <p className="text-slate-400 mt-1">Threat genome: {result.genome}</p>
           {result.results.map((item) => (
-            <p key={item.value} className="text-slate-300 mt-1">{item.value} - {item.reputation} ({item.risk_score}%)</p>
+            <p key={item.value} className="text-slate-300 mt-1">{item.value} - {item.reputation} (risk {item.risk_score}/99)</p>
           ))}
         </div>
       )}
       {mediaResult && (
         <div className="mt-4 p-3 rounded-xl border border-slate-800 bg-slate-900/70 text-xs">
           <strong className="text-cyan-300">
-            {mediaResult.media_type.toUpperCase()} DETECTOR RISK: {mediaResult.risk_score}%
+            {mediaResult.media_type.toUpperCase()} DETECTOR RISK: {mediaResult.risk_score}/99
           </strong>
           <p className="text-slate-400 mt-1">Analysis method: {mediaResult.method}</p>
           <p className="text-slate-500 mt-1">{mediaResult.calibration}</p>
@@ -125,8 +125,8 @@ export default function TrustScanner({ apiBaseUrl, accessToken }) {
       )}
       {comparisonResult && (
         <div className="mt-4 p-3 rounded-xl border border-amber-500/20 bg-amber-500/5 text-xs">
-          <strong className="text-amber-200">Cross-modal {comparisonResult.status}: {comparisonResult.authenticity_score}% authenticity</strong>
-          <p className="text-slate-400 mt-1">Consistency {comparisonResult.consistency_score}% across {comparisonResult.media_count} channels</p>
+          <strong className="text-amber-200">Cross-modal {comparisonResult.status}: inverse-risk proxy {comparisonResult.authenticity_score}/100</strong>
+          <p className="text-slate-400 mt-1">Heuristic consistency {comparisonResult.consistency_score}/100 across {comparisonResult.media_count} channels; not a calibrated probability.</p>
         </div>
       )}
     </section>

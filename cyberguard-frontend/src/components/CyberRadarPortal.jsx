@@ -1061,10 +1061,12 @@ export default function CyberRadarPortal({
                     <form onSubmit={handleManualLogin} className="space-y-2.5">
                       <div>
                         <label className="block text-[10px] sm:text-[11px] font-mono text-slate-300 mb-1 flex items-center justify-between">
-                          <span>USERNAME OR EMAIL</span>
+                          <span id="soc-login-username-label">USERNAME OR EMAIL</span>
                         </label>
                         <div className="relative">
                           <input
+                            id="soc-login-username"
+                            aria-labelledby="soc-login-username-label"
                             type="text"
                             value={loginUsername}
                             onChange={(e) => setLoginUsername(e.target.value)}
@@ -1077,9 +1079,10 @@ export default function CyberRadarPortal({
                       </div>
 
                       <div>
-                        <label className="block text-[10px] sm:text-[11px] font-mono text-slate-300 mb-1">PASSWORD</label>
+                        <label className="block text-[10px] sm:text-[11px] font-mono text-slate-300 mb-1" htmlFor="soc-login-password">PASSWORD</label>
                         <div className="relative">
                           <input
+                            id="soc-login-password"
                             type={showPassword ? 'text' : 'password'}
                             value={loginPassword}
                             onChange={(e) => setLoginPassword(e.target.value)}
@@ -1100,7 +1103,7 @@ export default function CyberRadarPortal({
                       </div>
 
                       {authError && (
-                        <div className="p-2 rounded-lg bg-rose-950/40 border border-rose-500/30 text-[11px] text-rose-300 font-mono space-y-1 animate-in fade-in">
+                        <div role="alert" className="p-2 rounded-lg bg-rose-950/40 border border-rose-500/30 text-[11px] text-rose-300 font-mono space-y-1 animate-in fade-in">
                           <div className="flex items-start gap-1.5">
                             <AlertTriangle size={14} className="text-rose-400 mt-0.5 shrink-0" />
                             <span className="leading-snug">{authError}</span>

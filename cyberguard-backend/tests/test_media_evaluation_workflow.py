@@ -38,8 +38,8 @@ def test_threshold_selection_uses_only_separate_calibration_data(tmp_path, monke
     assert result["threshold"] == 60
     assert result["threshold_source"] == "separate_calibration_dataset"
     assert result["confusion_matrix"] == {"tn": 1, "fp": 0, "fn": 0, "tp": 1}
-    assert result["calibration"]["calibration_false_positive_rate"] == 0
-    assert result["calibration"]["calibration_recall"] == 1
+    assert result["threshold_selection"]["calibration_false_positive_rate"] == 0
+    assert result["threshold_selection"]["calibration_recall"] == 1
     assert result["samples"] == 2
     assert "not probabilities" in result["score_interpretation"]
 
@@ -146,6 +146,7 @@ def test_image_and_audio_calibration_are_selected_and_reported_separately(tmp_pa
     assert result["per_modality"]["image"]["threshold"] == 60
     assert result["per_modality"]["audio"]["threshold"] == 90
     assert result["per_modality"]["video"]["threshold"] == 70
+    assert result["per_modality"]["image"]["threshold_selection"]["calibration_recall"] == 1
     assert result["per_modality"]["image"]["confusion_matrix"] == {"tn": 1, "fp": 0, "fn": 0, "tp": 1}
     assert result["per_modality"]["audio"]["confusion_matrix"] == {"tn": 1, "fp": 0, "fn": 0, "tp": 1}
     assert result["per_modality"]["video"]["confusion_matrix"] == {"tn": 1, "fp": 0, "fn": 0, "tp": 1}

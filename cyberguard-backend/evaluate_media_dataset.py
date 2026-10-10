@@ -11,7 +11,6 @@ import time
 from pathlib import Path
 from statistics import median
 from typing import Mapping
-from calibration_metrics import probability_calibration
 
 from media_engine import analyze_media
 
@@ -118,7 +117,7 @@ def calculate_metrics(rows: list[dict], threshold: float | Mapping[str, float] =
         "false_positive_rate": fp / max(negatives, 1),
         "roc_auc": concordant_pairs / max(positives * negatives, 1),
         "pr_auc": average_precision,
-        "calibration": probability_calibration(labels, [score / 100 for score in scores]),
+        "score_semantics": "uncalibrated detector risk score; not a probability",
     }
 
 
@@ -241,7 +240,7 @@ def evaluate(
             ],
             "methods": sorted({row["method"] for row in rows}),
             "pretrained_outputs": sum(row["pretrained"] for row in rows),
-            "calibration": (
+            "threshold_selection": (
                 calibration_by_modality[modality]
                 if calibration_by_modality
                 else None
@@ -252,7 +251,7 @@ def evaluate(
     result.update({
         "dataset": str(root),
         "threshold_source": "separate_calibration_dataset" if calibration_by_modality else "fixed_cutoff",
-        "calibration": (
+        "threshold_selection": (
             next(iter(calibration_by_modality.values()))
             if calibration_by_modality and len(calibration_by_modality) == 1
             else calibration_by_modality

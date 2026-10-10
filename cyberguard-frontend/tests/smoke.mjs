@@ -230,13 +230,8 @@ try {
    * -------------------------------------------------------
    */
 
-  const usernameField = page
-    .locator('input[type="text"]')
-    .first();
-
-  const passwordField = page
-    .locator('input[type="password"]')
-    .first();
+  const usernameField = page.getByLabel('USERNAME OR EMAIL');
+  const passwordField = page.getByLabel('PASSWORD');
 
   await usernameField.fill(
     'not-real@example.com'
@@ -248,17 +243,25 @@ try {
 
   expectingInvalidLogin = true;
 
+  const invalidLoginResponse = page.waitForResponse((response) => (
+    response.url().endsWith('/api/v1/auth/login') &&
+    response.request().method() === 'POST'
+  ));
+
   await page
     .getByRole('button', {
       name: 'Authenticate'
     })
     .click();
 
-  await page
-    .getByText(
-      /Invalid username or password\.?/
-    )
-    .waitFor();
+  const rejectedLogin = await invalidLoginResponse;
+  if (rejectedLogin.status() !== 401) {
+    throw new Error(`Expected invalid credentials to return HTTP 401, received ${rejectedLogin.status()}.`);
+  }
+
+  await page.getByRole('alert').filter({
+    hasText: /Invalid username or password\.?/
+  }).waitFor({ state: 'visible' });
 
   expectingInvalidLogin = false;
 
@@ -296,13 +299,8 @@ try {
     })
     .waitFor();
 
-  const reloadedUsernameField = page
-    .locator('input[type="text"]')
-    .first();
-
-  const reloadedPasswordField = page
-    .locator('input[type="password"]')
-    .first();
+  const reloadedUsernameField = page.getByLabel('USERNAME OR EMAIL');
+  const reloadedPasswordField = page.getByLabel('PASSWORD');
 
   await reloadedUsernameField.fill(
     adminUsername
@@ -312,23 +310,23 @@ try {
     adminPassword
   );
 
+  const validLoginResponse = page.waitForResponse((response) => (
+    response.url().endsWith('/api/v1/auth/login') &&
+    response.request().method() === 'POST'
+  ));
+
   await page
     .getByRole('button', {
       name: 'Authenticate'
     })
     .click();
 
-  await page
-    .getByText(
-      '[ CYBERGUARD WORKSPACE READY ]'
-    )
-    .waitFor();
+  const approvedLogin = await validLoginResponse;
+  if (!approvedLogin.ok()) {
+    throw new Error(`Configured administrator login failed: HTTP ${approvedLogin.status()}.`);
+  }
 
-  await page
-    .getByRole('heading', {
-      name: /Security Command Center/
-    })
-    .waitFor();
+  await page.getByRole('heading', { name: /Security Command Center/ }).waitFor({ state: 'visible' });
 
   /*
    * -------------------------------------------------------
@@ -545,6 +543,8 @@ try {
       'Hello team, I will share the draft today. Please review the notes before lunch.',
       'Hi everyone, I will send the notes tomorrow. Please review the draft before lunch.'
     ].join('\n\n'));
+
+  await page.getByLabel(/I have permission to create this profile/).check();
 
   await page
     .getByRole('button', {

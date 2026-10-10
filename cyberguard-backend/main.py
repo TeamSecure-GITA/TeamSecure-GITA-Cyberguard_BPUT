@@ -131,6 +131,7 @@ CYBERGUARD_ENV = os.getenv("CYBERGUARD_ENV", "development").lower()
 JWT_SECRET = os.getenv("CYBERGUARD_JWT_SECRET", "").strip()
 ALLOW_ANONYMOUS_EVAL = os.getenv("CYBERGUARD_ALLOW_ANONYMOUS_EVAL", "false").lower() in {"true", "1", "yes"}
 SESSION_TTL_MINUTES = max(1, int(os.getenv("CYBERGUARD_SESSION_TTL_MINUTES", "60")))
+KNOWN_CONTACT_RETENTION_DAYS = max(1, int(os.getenv("CYBERGUARD_KNOWN_CONTACT_RETENTION_DAYS", "90")))
 LOGIN_FAILURE_LIMIT = max(3, int(os.getenv("CYBERGUARD_LOGIN_FAILURE_LIMIT", "10")))
 LOGIN_FAILURE_WINDOW_SECONDS = max(60, int(os.getenv("CYBERGUARD_LOGIN_FAILURE_WINDOW_SECONDS", "300")))
 
@@ -2136,11 +2137,23 @@ def me(user: dict[str, str] = Depends(current_user)):
 
 @app.get("/api/v1/known-contacts")
 def list_known_contacts(user: dict[str, str] = Depends(current_user)):
+    retention_cutoff = (datetime.now(timezone.utc) - timedelta(days=KNOWN_CONTACT_RETENTION_DAYS)).isoformat()
     with get_db() as db:
+        expired = db.execute(
+            "SELECT id FROM known_contacts WHERE owner_username = ? AND created_at < ?",
+            (user["username"], retention_cutoff),
+        ).fetchall()
+        if expired:
+            db.execute(
+                "DELETE FROM known_contacts WHERE owner_username = ? AND created_at < ?",
+                (user["username"], retention_cutoff),
+            )
         rows = db.execute(
             "SELECT id, name, identifiers, style_profile, created_at FROM known_contacts WHERE owner_username = ? ORDER BY name",
             (user["username"],),
         ).fetchall()
+    for row in expired:
+        write_audit(user, "known_contact_expire", f"contact:{row['id']}", f"Profile expired under the {KNOWN_CONTACT_RETENTION_DAYS}-day retention policy")
     return {
         "contacts": [
             {
@@ -2157,6 +2170,8 @@ def list_known_contacts(user: dict[str, str] = Depends(current_user)):
 
 @app.post("/api/v1/known-contacts")
 def create_known_contact(payload: dict[str, Any], user: dict[str, str] = Depends(current_user)):
+    if payload.get("consent_confirmed") is not True:
+        raise HTTPException(status_code=400, detail="Explicit consent is required before storing a known-contact profile.")
     name = str(payload.get("name") or "").strip()[:120]
     identifiers = payload.get("identifiers")
     samples = payload.get("sample_messages")
