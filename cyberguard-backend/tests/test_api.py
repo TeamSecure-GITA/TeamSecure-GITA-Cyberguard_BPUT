@@ -1832,7 +1832,7 @@ def test_malware_scanner_reports_yara_matches_and_unavailable_runtime(monkeypatc
         meta = {"risk_score": 91}
 
     class FakeRules:
-        def match(self, data):
+        def match(self, data, timeout=None):
             return [FakeMatch()] if b"test signature" in data else []
 
     class FakeYara:
@@ -1853,6 +1853,28 @@ def test_malware_scanner_reports_yara_matches_and_unavailable_runtime(monkeypatc
     assert unavailable["status"] == "unavailable"
 
 
+def test_malware_scanner_timeout_is_explicit_and_never_reported_clean(monkeypatch):
+    class FakeYara:
+        class TimeoutError(Exception):
+            pass
+
+        class Rules:
+            def match(self, data, timeout=None):
+                assert timeout == malware_scanner.MAX_YARA_MATCH_SECONDS
+                raise FakeYara.TimeoutError("timed out")
+
+        @staticmethod
+        def compile(filepath):
+            return FakeYara.Rules()
+
+    monkeypatch.setattr(malware_scanner, "_load_yara", lambda: FakeYara())
+    result = malware_scanner.scan_artifact(b"slow pattern", "sample.bin")
+
+    assert result["status"] == "timeout"
+    assert result["risk_score"] == 0
+    assert "not considered clean" in result["reasons"][0]
+
+
 def test_bundled_yara_rules_detect_the_eicar_test_string():
     eicar = b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
 
@@ -1870,7 +1892,7 @@ def test_malware_scanner_detects_yara_signatures_inside_zip_without_extracting(m
         meta = {"risk_score": 86}
 
     class FakeRules:
-        def match(self, data):
+        def match(self, data, timeout=None):
             return [FakeMatch()] if b"nested test signature" in data else []
 
     class FakeYara:
@@ -1898,7 +1920,7 @@ def test_malware_scanner_recurses_into_nested_zip_with_full_member_path(monkeypa
         meta = {"risk_score": 89}
 
     class FakeRules:
-        def match(self, data):
+        def match(self, data, timeout=None):
             return [FakeMatch()] if b"nested archive payload" in data else []
 
     class FakeYara:
@@ -1927,7 +1949,7 @@ def test_malware_scanner_recurses_into_nested_zip_with_full_member_path(monkeypa
 
 def test_malware_scanner_reports_nested_archive_depth_limit(monkeypatch):
     class FakeRules:
-        def match(self, data):
+        def match(self, data, timeout=None):
             return []
 
     class FakeYara:
@@ -1955,7 +1977,7 @@ def test_malware_scanner_reports_nested_archive_depth_limit(monkeypatch):
 
 def test_malware_scanner_reports_invalid_zip_named_file(monkeypatch):
     class FakeRules:
-        def match(self, data):
+        def match(self, data, timeout=None):
             return []
 
     class FakeYara:
@@ -1977,7 +1999,7 @@ def test_malware_scanner_reports_invalid_zip_named_file(monkeypatch):
 
 def test_malware_scanner_reports_archive_member_size_limit(monkeypatch):
     class FakeRules:
-        def match(self, data):
+        def match(self, data, timeout=None):
             return []
 
     class FakeYara:
@@ -2003,7 +2025,7 @@ def test_malware_scanner_reports_archive_member_size_limit(monkeypatch):
 
 def test_malware_scanner_enforces_archive_compression_ratio_limit(monkeypatch):
     class FakeRules:
-        def match(self, data):
+        def match(self, data, timeout=None):
             return []
 
     class FakeYara:
@@ -2028,7 +2050,7 @@ def test_malware_scanner_enforces_archive_compression_ratio_limit(monkeypatch):
 
 def test_malware_scanner_enforces_archive_entry_limit(monkeypatch):
     class FakeRules:
-        def match(self, data):
+        def match(self, data, timeout=None):
             return []
 
     class FakeYara:

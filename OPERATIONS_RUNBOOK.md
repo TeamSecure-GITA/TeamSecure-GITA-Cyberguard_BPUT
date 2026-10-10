@@ -59,6 +59,16 @@ Terminate TLS at the reverse proxy or managed platform. Set `CYBERGUARD_ENV=prod
 High-impact prevention actions require a head administrator or SOC lead. Every provider action and database backup is written to the audit log. Provider integrations fail closed with HTTP 503 when required credentials are absent.
 
 The provider ticket, identity-disable, and endpoint-isolation APIs require an `Idempotency-Key` header. Reuse the same key when retrying a request whose response was lost; a completed action returns its stored response without calling the provider again. If the API reports that a previous outcome is unknown, check the provider before issuing a new key. CyberGuard does not automatically retry non-idempotent provider requests because a timeout can occur after the provider applied the action. The dashboard keeps an unresolved key in browser storage until the action returns successfully.
+
+## YARA rule updates
+
+The application does not download or trust unsigned rules. An operator must receive a ZIP containing exactly `manifest.json` and `cyberguard_malware.yar`, provision the corresponding trusted Ed25519 public key outside the application repository, then apply it with:
+
+```powershell
+python cyberguard-backend/update_yara_rules.py C:\path\to\signed-yara-bundle.zip --public-key C:\secure\keys\cyberguard-yara-ed25519-public.pem
+```
+
+The manifest signature covers canonical JSON containing `schema_version` (1), `version`, `file` (`cyberguard_malware.yar`), and the lowercase SHA-256 of the rule file. The updater verifies the signature and checksum and compiles the candidate before replacing the active rule file. Keep the private signing key offline or in an approved signing service; do not store it in `.env`, source control, or the application host. Back up the existing rule file before a production update and verify the updater result, then submit an authorized harmless test sample through the malware-analysis flow after rollout. Key provisioning, rotation, and a production rollback drill remain operator responsibilities.
 # Known contact profile privacy
 
 Creating a known contact profile requires the operator to confirm they have permission to use the contact's writing samples. CyberGuard stores derived style statistics and identifiers; it does not retain the submitted sample messages. Profiles are scoped to their creating account, can be deleted by that account, and expire when that account next lists profiles after the configured retention window. Set `CYBERGUARD_KNOWN_CONTACT_RETENTION_DAYS` to the organization's approved period; the default is 90 days. Expiration and manual deletion are recorded in the audit log without sample text.
